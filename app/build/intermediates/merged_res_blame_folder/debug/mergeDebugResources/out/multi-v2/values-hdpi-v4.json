@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.vanyaliving.invoice.app-mergeDebugResources-29:/values-hdpi-v4/values-hdpi-v4.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\paddu.ITIES-21\\.gradle\\caches\\9.3.0\\transforms\\cfa988b69bffed19c8cf460b2acacf31\\workspace\\transformed\\appcompat-1.7.0\\res\\values-hdpi-v4\\values-hdpi-v4.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endLines": "6",
+                        "endColumns": "13",
+                        "endOffsets": "327"
+                    }
+                }
+            ]
+        }
+    ]
+}
