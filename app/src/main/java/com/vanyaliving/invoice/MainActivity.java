@@ -194,7 +194,7 @@ public class MainActivity extends Activity {
         LinearLayout grid1 = new LinearLayout(this); grid1.setOrientation(LinearLayout.HORIZONTAL);
         invoiceNo = edit("V-0001", false); invoiceNo.setText(nextInvoicePreview());
         invoiceNo.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { String text = invoiceNo.getText().toString().trim(); if (text.length() >= 6) checkAndLoadInvoice(text); }});
-        invoiceDate = edit(null, false); invoiceDate.setText(today()); invoiceDate.setOnClickListener(v -> pickDate(invoiceDate));
+        invoiceDate = edit(null, false); invoiceDate.setOnClickListener(v -> pickDate(invoiceDate));
         paymentSpinner = spinner(PAYMENT);
         grid1.addView(field("Invoice No *", invoiceNo), new LinearLayout.LayoutParams(0, -2, 1));
         grid1.addView(field("Dated *", invoiceDate), new LinearLayout.LayoutParams(0, -2, 1));
@@ -364,18 +364,27 @@ public class MainActivity extends Activity {
         if (invoiceNo.getText().toString().trim().isEmpty()) { Toast.makeText(this, "Invoice No is required", Toast.LENGTH_SHORT).show(); return; }
         try {
             saveFullInvoice(); String invoice = invoiceNo.getText().toString().trim(); PdfDocument pdf = new PdfDocument();
-            int itemsPerPage = 8; List<List<ItemRow>> pages = new ArrayList<>();
+            int itemsPerPage = 6; List<List<ItemRow>> pages = new ArrayList<>();
             for (int i = 0; i < rows.size(); i += itemsPerPage) { int end = Math.min(i + itemsPerPage, rows.size()); pages.add(new ArrayList<>(rows.subList(i, end))); }
             if (pages.isEmpty()) pages.add(new ArrayList<>());
             int totalPages = pages.size();
-            for (int i=0; i<totalPages; i++) { PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(595, 842, i + 1).create()); drawPdfPage(page.getCanvas(), i + 1, totalPages, pages.get(i), i == 0, i == totalPages - 1); pdf.finishPage(page); }
+            for (int i=0; i<totalPages; i++) {
+                PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(595, 842, i + 1).create());
+                drawPdfPage(page.getCanvas(), i + 1, totalPages, pages.get(i), i == 0, i == totalPages - 1);
+                pdf.finishPage(page);
+            }
             String fileName = invoice.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf";
             ContentValues values = new ContentValues(); values.put(MediaStore.Downloads.DISPLAY_NAME, fileName); values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf"); values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Vanya GST Invoices");
             Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-            if (uri != null) { try (OutputStream out = getContentResolver().openOutputStream(uri)) { pdf.writeTo(out); } pdf.close(); prefs.edit().putInt(COUNTER, prefs.getInt(COUNTER, 1) + 1).apply(); logHistory(invoice, parseValue(roundedTotal), parseValue(taxableValue), parseValue(cgstAmount)+parseValue(sgstAmount)+parseValue(igstAmount)); if (shouldShare) sharePdf(uri); else { Toast.makeText(this, "Invoice Saved & PDF Built", Toast.LENGTH_LONG).show(); resetForNewInvoice(); } }
+            if (uri != null) {
+                try (OutputStream out = getContentResolver().openOutputStream(uri)) { pdf.writeTo(out); }
+                pdf.close(); prefs.edit().putInt(COUNTER, prefs.getInt(COUNTER, 1) + 1).apply();
+                logHistory(invoice, parseValue(roundedTotal), parseValue(taxableValue), parseValue(cgstAmount)+parseValue(sgstAmount)+parseValue(igstAmount));
+                if (shouldShare) sharePdf(uri); else { Toast.makeText(this, "Invoice Saved & PDF Built", Toast.LENGTH_LONG).show(); resetForNewInvoice(); }
+            }
         } catch (Exception e) { Toast.makeText(this, "PDF error: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
-
+    
     private void drawPdfPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setTextSize(9.5f); p.setColor(Color.BLACK); p.setTypeface(Typeface.SANS_SERIF);
         final float L=45, R=550, W=R-L; float y = 45; 
@@ -383,37 +392,38 @@ public class MainActivity extends Activity {
             p.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)); p.setTextSize(16); center(c,p,"TAX INVOICE",297.5f,y); y+=18;
             p.setStrokeWidth(1.2f); p.setStyle(Paint.Style.STROKE); c.drawLine(L,y,R,y,p); p.setStyle(Paint.Style.FILL);
             y = 100; p.setTextSize(13f); text(c,p,sellerName.getText().toString(),L,y,true); 
-            p.setTextSize(9f); drawMultiline(c,p,sellerAddress.getText().toString(),L,y+15,250,11); 
-            p.setTextSize(9f); text(c,p,"GSTIN: " + sellerGstin.getText().toString().replace("GSTIN: ",""),L,y+42,true);
-            text(c,p,"PAN : BPVPG2248M",L,y+55,true);
+            p.setTextSize(9.5f); drawMultiline(c,p,sellerAddress.getText().toString(),L,y+15,250,12); 
+            p.setTextSize(9.5f); text(c,p,"GSTIN: " + sellerGstin.getText().toString().replace("GSTIN: ",""),L,y+45,true);
+            text(c,p,"PAN : BPVPG2248M",L,y+58,true);
             p.setTextSize(10.5f); float rightLabelX = R - 120;
             text(c,p,"Invoice No:", rightLabelX, y, true); text(c,p,invoiceNo.getText().toString(), R, y, true, true); y += 15;
             text(c,p,"Date:", rightLabelX, y, true); text(c,p,invoiceDate.getText().toString(), R, y, true, true); y += 15;
-            if (othersCb != null && othersCb.isChecked()) { String rn = referenceNoDate.getText().toString().trim(); if (!rn.isEmpty()) { text(c,p,"Ref No:", rightLabelX, y, false); text(c,p,rn, R, y, false, true); y += 16; } }
+            if (othersCb != null && othersCb.isChecked()) { String rn = referenceNoDate.getText().toString().trim(); if (!rn.isEmpty()) { text(c,p,"Ref No:", rightLabelX, y, false); text(c,p,rn, R, y, false, true); y += 15; } }
             text(c,p,"Payment:", rightLabelX, y, false); text(c,p,paymentSpinner.getSelectedItem().toString(), R, y, false, true);
-            y = 200; box(c,p,L,y,W,100); c.drawLine(L+W/2,y,L+W/2,y+100,p); 
-            p.setTextSize(10f); text(c,p,"BILL TO",L+8,y+15,true); text(c,p,"SHIP TO",L+W/2+8,y+15,true); 
-            float by = y+28; String[] bl = buyerBillTo.getText().toString().split("\n");
-            if (bl.length > 0) { p.setTextSize(10f); text(c,p,bl[0],L+8,by,true); by+=12; p.setTextSize(8.5f); for(int i=1; i<Math.min(bl.length, 3); i++) { text(c,p,bl[i],L+8,by,false); by+=10; } }
-            text(c,p,"State: " + formatState((String)buyerState.getSelectedItem()), L+8, by, false); by+=10;
-            text(c,p,"Place of Supply: " + formatState((String)buyerState.getSelectedItem()), L+8, by, false); by+=10;
-            if (!buyerGstin.getText().toString().isEmpty()) { text(c,p,"GSTIN: " + buyerGstin.getText().toString().toUpperCase(), L+8, by, true); by+=10; }
-            if (!buyerPhone.getText().toString().isEmpty()) { text(c,p,"Phone: " + buyerPhone.getText().toString(), L+8, by, false); by+=10; }
-            float cy = y+28; String[] cl = consignee.getText().toString().split("\n");
-            if (cl.length > 0) { p.setTextSize(10f); text(c,p,cl[0],L+W/2+8,cy,true); cy+=12; p.setTextSize(8.5f); for(int i=1; i<Math.min(cl.length, 3); i++) { text(c,p,cl[i],L+W/2+8,cy,false); cy+=10; } }
-            text(c,p,"State: " + formatState((String)consigneeState.getSelectedItem()), L+W/2+8, cy, false); cy+=10;
-            if (!consigneeGstin.getText().toString().isEmpty()) { text(c,p,"GSTIN: " + consigneeGstin.getText().toString().toUpperCase(), L+W/2+8, cy, true); cy+=10; }
-            if (!consigneePhone.getText().toString().isEmpty()) { text(c,p,"Phone: " + consigneePhone.getText().toString(), L+W/2+8, cy, false); cy+=10; }
-            y = 320; box(c, p, L, y, W, 40); c.drawLine(L+W/3, y, L+W/3, y+40, p); c.drawLine(L+2*W/3, y, L+2*W/3, y+40, p);
-            p.setTextSize(9f); text(c, p, "Destination: " + destination.getText().toString(), L+7, y+24, false);
+            y = 205; box(c,p,L,y,W,105); c.drawLine(L+W/2,y,L+W/2,y+105,p); 
+            p.setTextSize(10.5f); text(c,p,"BILL TO",L+8,y+16,true); text(c,p,"SHIP TO",L+W/2+8,y+16,true); 
+            float by = y+30; String[] bl = buyerBillTo.getText().toString().split("\n");
+            if (bl.length > 0) { p.setTextSize(10.5f); text(c,p,bl[0],L+8,by,true); by+=13; p.setTextSize(9f); for(int i=1; i<Math.min(bl.length, 3); i++) { text(c,p,bl[i],L+8,by,false); by+=11; } }
+            text(c,p,"State: " + formatState((String)buyerState.getSelectedItem()), L+8, by, false); by+=11;
+            text(c,p,"Place of Supply: " + formatState((String)buyerState.getSelectedItem()), L+8, by, false); by+=11;
+            if (!buyerGstin.getText().toString().isEmpty()) { text(c,p,"GSTIN: " + buyerGstin.getText().toString().toUpperCase(), L+8, by, true); by+=11; }
+            if (!buyerPhone.getText().toString().isEmpty()) { text(c,p,"Phone: " + buyerPhone.getText().toString(), L+8, by, false); by+=11; }
+            float cy = y+30; String[] cl = consignee.getText().toString().split("\n");
+            if (cl.length > 0) { p.setTextSize(10.5f); text(c,p,cl[0],L+W/2+8,cy,true); cy+=13; p.setTextSize(9f); for(int i=1; i<Math.min(cl.length, 3); i++) { text(c,p,cl[i],L+W/2+8,cy,false); cy+=11; } }
+            text(c,p,"State: " + formatState((String)consigneeState.getSelectedItem()), L+W/2+8, cy, false); cy+=11;
+            if (!consigneeGstin.getText().toString().isEmpty()) { text(c,p,"GSTIN: " + consigneeGstin.getText().toString().toUpperCase(), L+W/2+8, cy, true); cy+=11; }
+            if (!consigneePhone.getText().toString().isEmpty()) { text(c,p,"Phone: " + consigneePhone.getText().toString(), L+W/2+8, cy, false); cy+=11; }
+            y = 330; box(c, p, L, y, W, 40); c.drawLine(L+W/3, y, L+W/3, y+40, p); c.drawLine(L+2*W/3, y, L+2*W/3, y+40, p);
+            p.setTextSize(9.5f); 
+            text(c, p, "Destination: " + destination.getText().toString(), L+7, y+24, false);
             text(c, p, "Vehicle: " + vehicle.getText().toString(), L+W/3+7, y+24, false);
             text(c, p, "Transporter: " + transporter.getText().toString(), L+2*W/3+7, y+24, false);
-            y = 380;
+            y = 390;
         } else { text(c,p,"Invoice #: " + invoiceNo.getText(),L,y,true); text(c,p,"Date: " + invoiceDate.getText(),R,y,true,true); y+=35; }
-        float[] xs = {L, L+30, L+215, L+265, L+340, L+385, L+440, R};
+        float[] xs = {L, L+25, L+215, L+265, L+340, L+385, L+440, R};
         p.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 25, p); p.setColor(Color.BLACK);
         box(c,p,L,y,W,25); for(int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+25,p); 
-        p.setTextSize(10f); String[] hds={"Sl", "PARTICULARS", "HSN", "GST RATE", "Qty", "Rate", "Amount"}; 
+        p.setTextSize(10f); String[] hds={"Sl","PARTICULARS","HSN","GST RATE","Qty","Rate","Amount"}; 
         for(int j=0;j<hds.length;j++) center(c,p,hds[j],(xs[j]+xs[j+1])/2,y+17, true);
         y+=25; float itemH = 22; 
         for(ItemRow r : items) {
@@ -476,7 +486,6 @@ public class MainActivity extends Activity {
 
     private String nextInvoicePreview() { return String.format(Locale.US, "V-%04d", prefs.getInt(COUNTER, 1)); }
     private String today() { return new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(new Date()); }
-    private String today(Date d) { return new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(d); }
     private void pickDate(EditText target) { Calendar c = Calendar.getInstance(); new DatePickerDialog(this, (v, y, m, d) -> target.setText(String.format(Locale.US, "%02d/%02d/%04d", d, m + 1, y)), c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show(); }
 
     private TextView totalLine(LinearLayout parent, String name) {
@@ -490,7 +499,7 @@ public class MainActivity extends Activity {
     private void renumberRows() { for (int i = 0; i < rows.size(); i++) rows.get(i).slNo.setText(String.valueOf(i + 1)); }
 
     private void resetForNewInvoice() {
-        invoiceNo.setText(nextInvoicePreview()); invoiceDate.setText(today());
+        invoiceNo.setText(nextInvoicePreview()); invoiceDate.setText("");
         if(deliveryNote != null) deliveryNote.setText(""); referenceNoDate.setText(""); if(buyerOrderNo!=null) buyerOrderNo.setText(""); if(buyerOrderDate != null) buyerOrderDate.setText(""); 
         consignee.setText(""); transporter.setText(""); destination.setText(""); 
         if (otherInfo != null) otherInfo.setText(""); if(vehicle!=null) vehicle.setText(""); if(vehicleNumber!=null) vehicleNumber.setText("");
@@ -592,6 +601,7 @@ public class MainActivity extends Activity {
         }).show();
     }
 
+    private String today(Date d) { return new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(d); }
     private void showFinancialYearPicker() {
         int year = Calendar.getInstance().get(Calendar.YEAR); String[] years = { (year-1)+"-"+year, year+"-"+(year+1), (year+1)+"-"+(year+2) };
         new AlertDialog.Builder(this).setTitle("Select FY").setItems(years, (d, w) -> { String from = "01/04/"+years[w].split("-")[0]; String to = "31/03/"+years[w].split("-")[1]; generateReport(from, to); }).show();
@@ -634,7 +644,7 @@ public class MainActivity extends Activity {
             StringBuilder sb = new StringBuilder("Date,Invoice No,Buyer Name,Taxable Value,GST Amount,Net Amount\n");
             for (String[] row : data) { for (int i=0; i<row.length; i++) { String s = row[i] == null ? "" : row[i]; if (s.contains(",")) s = "\"" + s + "\""; sb.append(s).append(i == row.length - 1 ? "" : ","); } sb.append("\n"); }
             String fileName = "Sales_Report_" + from.replace("/","") + "_to_" + to.replace("/","") + ".csv";
-            ContentValues values = new ContentValues(); values.put(MediaStore.Downloads.DISPLAY_NAME, fileName); values.put(MediaStore.Downloads.MIME_TYPE, "text/csv"); values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+            ContentValues values = new ContentValues(); values.put(MediaStore.Downloads.DISPLAY_NAME, fileName); values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf"); values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
             Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
             if (uri != null) { try (OutputStream out = getContentResolver().openOutputStream(uri)) { if (out != null) out.write(sb.toString().getBytes()); } Toast.makeText(this, "Excel saved to Downloads: " + fileName, Toast.LENGTH_LONG).show(); }
         } catch (Exception e) { Toast.makeText(this, "Export failed: " + e.getMessage(), Toast.LENGTH_SHORT).show(); }
