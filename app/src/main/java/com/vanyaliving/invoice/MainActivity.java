@@ -16,6 +16,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.graphics.pdf.PdfDocument;
 import android.net.Uri;
 import android.os.Bundle;
@@ -52,6 +53,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.InputStreamReader;
+import java.io.BufferedReader;
+import java.util.Iterator;
 
 public class MainActivity extends Activity {
     private static final String PREFS = "invoice_prefs";
@@ -75,9 +83,12 @@ public class MainActivity extends Activity {
     static {
         HSN_MAP.put("Sofa", "9401"); HSN_MAP.put("Chair", "9401"); HSN_MAP.put("Bed", "9403");
         HSN_MAP.put("Dining Table", "9403"); HSN_MAP.put("Cupboard", "9403"); HSN_MAP.put("Wardrobe", "9403");
-        HSN_MAP.put("Office Chair", "9401"); HSN_MAP.put("Wooden Table", "9403"); HSN_MAP.put("Mattress", "9404");
-        HSN_MAP.put("Cushion", "9404"); HSN_MAP.put("Cabinet", "9403"); HSN_MAP.put("Center Table", "9403");
-        HSN_MAP.put("Recliner", "9401"); HSN_MAP.put("Stool", "9401"); HSN_MAP.put("Dressing Table", "9403");
+        HSN_MAP.put("Mattress", "9404"); HSN_MAP.put("Live horses", "0101");
+        HSN_MAP.put("Milk", "0401"); HSN_MAP.put("Potatoes", "0701"); HSN_MAP.put("Coffee", "0901");
+        HSN_MAP.put("Tea", "0902"); HSN_MAP.put("Rice", "1006"); HSN_MAP.put("Cement", "2523");
+        HSN_MAP.put("Medicaments", "3004"); HSN_MAP.put("Soap", "3401"); HSN_MAP.put("T-shirts", "6109");
+        HSN_MAP.put("Footwear", "6403"); HSN_MAP.put("Jewelry", "7113"); HSN_MAP.put("Computers", "8471");
+        HSN_MAP.put("Smartphones", "8517"); HSN_MAP.put("Motor cars", "8703");
     }
 
     private LinearLayout root;
@@ -87,8 +98,7 @@ public class MainActivity extends Activity {
     private AutoCompleteTextView buyerBillTo, consignee;
     private Spinner buyerState, consigneeState;
     private TextView sellerName, sellerAddress, sellerGstin;
-    private CheckBox sameAsBilling;
-    private CheckBox othersCb;
+    private CheckBox sameAsBilling, othersCb;
     private Spinner paymentSpinner;
     private LinearLayout itemsContainer;
     private TextView taxableValue, cgstAmount, sgstAmount, igstAmount, grandTotal, roundedTotal, amountWords;
@@ -99,199 +109,121 @@ public class MainActivity extends Activity {
     private int dp(float v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
 
     private void applyBoxBackground(View v) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setShape(GradientDrawable.RECTANGLE);
-        gd.setStroke(dp(1), 0xFFCCCCCC);
-        gd.setColor(Color.WHITE);
-        gd.setCornerRadius(dp(4));
-        v.setBackground(gd);
+        GradientDrawable gd = new GradientDrawable(); gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setStroke(dp(1), 0xFFCCCCCC); gd.setColor(v.isEnabled() ? Color.WHITE : 0xFFEEEEEE); gd.setCornerRadius(dp(4)); v.setBackground(gd);
+    }
+
+    private void styleButton(Button btn, int color) {
+        int pressedColor = adjustColor(color, 0.8f);
+        int strokeColor = adjustColor(color, 0.6f);
+        GradientDrawable normalGd = new GradientDrawable(); normalGd.setShape(GradientDrawable.RECTANGLE);
+        normalGd.setColor(color); normalGd.setCornerRadius(dp(4)); normalGd.setStroke(dp(1.5f), strokeColor);
+        GradientDrawable pressedGd = new GradientDrawable(); pressedGd.setShape(GradientDrawable.RECTANGLE);
+        pressedGd.setColor(pressedColor); pressedGd.setCornerRadius(dp(4)); pressedGd.setStroke(dp(1.5f), strokeColor);
+        StateListDrawable sld = new StateListDrawable();
+        sld.addState(new int[]{android.R.attr.state_pressed}, pressedGd);
+        sld.addState(new int[]{}, normalGd);
+        btn.setBackground(sld); btn.setTextColor(Color.WHITE); btn.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
     }
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!prefs.getBoolean("is_logged_in", false)) {
-            startActivity(new Intent(this, LoginActivity.class));
-            finish();
-            return;
-        }
-        dbHelper = new DatabaseHelper(this);
-        buildUi();
+        if (!prefs.getBoolean("is_logged_in", false)) { startActivity(new Intent(this, LoginActivity.class)); finish(); return; }
+        dbHelper = new DatabaseHelper(this); buildUi();
     }
 
     private TextView label(String text, boolean header) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(header ? 16 : 13);
-        t.setTextColor(Color.BLACK);
-        t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        t.setPadding(dp(2), dp(2), dp(2), dp(1));
-        return t;
+        TextView t = new TextView(this); t.setText(text); t.setTextSize(header ? 16 : 13); t.setTextColor(Color.BLACK);
+        t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); t.setPadding(dp(2), dp(2), dp(2), dp(1)); return t;
     }
 
     private EditText edit(String hint, boolean number) {
-        EditText e = new EditText(this);
-        if (hint != null && !hint.isEmpty()) e.setHint(hint);
-        e.setTextSize(14);
-        e.setSingleLine(false);
-        e.setPadding(dp(8), dp(6), dp(8), dp(6));
+        EditText e = new EditText(this); if (hint != null && !hint.isEmpty()) e.setHint(hint);
+        e.setTextSize(14); e.setSingleLine(false); e.setPadding(dp(8), dp(6), dp(8), dp(6));
         if (number) e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        applyBoxBackground(e);
-        return e;
+        applyBoxBackground(e); return e;
     }
 
     private Spinner spinner(String[] values) {
-        Spinner s = new Spinner(this);
-        ArrayAdapter<String> a = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, values);
-        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        s.setAdapter(a);
-        s.setPadding(dp(3), 0, dp(3), 0);
-        return s;
+        Spinner s = new Spinner(this); ArrayAdapter<String> a = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, values);
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); s.setAdapter(a); s.setPadding(dp(3), 0, dp(3), 0); return s;
     }
 
     private LinearLayout field(String title, View input) {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(5), dp(2), dp(5), dp(2));
-        box.addView(label(title, false));
-        box.addView(input, new LinearLayout.LayoutParams(-1, -2));
-        return box;
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(5), dp(2), dp(5), dp(2));
+        box.addView(label(title, false)); box.addView(input, new LinearLayout.LayoutParams(-1, -2)); return box;
     }
 
     private LinearLayout createSectionContainer(String title) {
-        LinearLayout section = new LinearLayout(this);
-        section.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, dp(12), 0, dp(12));
-        section.setLayoutParams(lp);
-        section.setPadding(dp(12), dp(12), dp(12), dp(12));
-        GradientDrawable gd = new GradientDrawable();
-        gd.setShape(GradientDrawable.RECTANGLE);
-        gd.setStroke(dp(1.5f), Color.DKGRAY);
-        gd.setColor(Color.WHITE);
-        gd.setCornerRadius(dp(6));
-        section.setBackground(gd);
+        int color = 0xFF3F51B5;
         if (title != null) {
-            TextView h = new TextView(this);
-            h.setText(title);
-            h.setTextSize(16);
-            h.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-            h.setPadding(0, 0, 0, dp(8));
-            h.setTextColor(Color.BLACK);
+            if (title.contains("Invoice")) color = 0xFF3F51B5;
+            else if (title.contains("Buyer")) color = 0xFF009688;
+            else if (title.contains("Other")) color = 0xFF673AB7;
+            else if (title.contains("Goods")) color = 0xFFFF5722;
+            else if (title.contains("Totals")) color = 0xFF607D8B;
+        }
+        LinearLayout section = new LinearLayout(this); section.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, dp(12), 0, dp(12));
+        section.setLayoutParams(lp); section.setPadding(dp(12), dp(12), dp(12), dp(12));
+        GradientDrawable gd = new GradientDrawable(); gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setStroke(dp(1.5f), color); gd.setColor(getLightSectionColor(color)); gd.setCornerRadius(dp(8)); section.setBackground(gd);
+        if (title != null) {
+            TextView h = new TextView(this); h.setText(title.toUpperCase()); h.setTextSize(14); h.setTypeface(Typeface.DEFAULT, Typeface.BOLD); h.setPadding(dp(8), dp(4), dp(8), dp(4)); h.setTextColor(Color.WHITE);
+            GradientDrawable hgd = new GradientDrawable(); hgd.setShape(GradientDrawable.RECTANGLE); hgd.setColor(color); hgd.setCornerRadius(dp(4)); h.setBackground(hgd);
+            LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(-1, -2); hLp.setMargins(0, 0, 0, dp(8)); h.setLayoutParams(hLp);
             section.addView(h);
         }
         return section;
     }
 
     private void buildUi() {
-        DrawerLayout drawer = new DrawerLayout(this);
-        drawer.setLayoutParams(new LinearLayout.LayoutParams(-1, -1));
+        DrawerLayout drawer = new DrawerLayout(this); drawer.setLayoutParams(new LinearLayout.LayoutParams(-1, -1));
+        LinearLayout mainLayout = new LinearLayout(this); mainLayout.setOrientation(LinearLayout.VERTICAL); mainLayout.setLayoutParams(new LinearLayout.LayoutParams(-1, -1));
+        LinearLayout toolbar = new LinearLayout(this); toolbar.setOrientation(LinearLayout.HORIZONTAL); toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setPadding(dp(16), dp(40), dp(16), dp(12)); toolbar.setBackgroundColor(0xFF3F51B5);
+        TextView hamburger = new TextView(this); hamburger.setText("☰"); hamburger.setTextSize(28); hamburger.setTextColor(Color.WHITE); hamburger.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        hamburger.setPadding(0, 0, dp(20), 0); hamburger.setOnClickListener(v -> drawer.openDrawer(GravityCompat.START)); toolbar.addView(hamburger);
+        TextView barTitle = new TextView(this); barTitle.setText("VANYA GST INVOICE"); barTitle.setTextSize(20); barTitle.setTextColor(Color.WHITE); barTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD); toolbar.addView(barTitle); mainLayout.addView(toolbar);
+        ScrollView scroll = new ScrollView(this); scroll.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1)); root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(16), dp(8), dp(16), dp(32)); scroll.addView(root); mainLayout.addView(scroll);
+        LinearLayout sidebar = new LinearLayout(this); sidebar.setOrientation(LinearLayout.VERTICAL); sidebar.setBackgroundColor(Color.WHITE); sidebar.setPadding(dp(24), dp(60), dp(24), dp(24));
+        TextView userInfo = new TextView(this); userInfo.setText("Logged in as:\n" + prefs.getString("user_email", "Admin")); userInfo.setTextSize(16); userInfo.setTextColor(Color.DKGRAY); userInfo.setTypeface(Typeface.DEFAULT, Typeface.BOLD); userInfo.setPadding(0, 0, 0, dp(40)); sidebar.addView(userInfo);
+        LinearLayout.LayoutParams sideBtnLp = new LinearLayout.LayoutParams(-1, -2); sideBtnLp.setMargins(0, 0, 0, dp(12));
+        Button sidebarSalesReport = new Button(this); sidebarSalesReport.setText("Sales Report"); styleButton(sidebarSalesReport, 0xFF3F51B5); sidebarSalesReport.setLayoutParams(sideBtnLp); sidebarSalesReport.setOnClickListener(v -> { drawer.closeDrawers(); showSalesReport(); }); sidebar.addView(sidebarSalesReport);
+        Button sidebarContactList = new Button(this); sidebarContactList.setText("Contact List"); styleButton(sidebarContactList, 0xFF3F51B5); sidebarContactList.setLayoutParams(sideBtnLp); sidebarContactList.setOnClickListener(v -> { drawer.closeDrawers(); showContactList(); }); sidebar.addView(sidebarContactList);
+        Button sidebarExportData = new Button(this); sidebarExportData.setText("Export Data"); styleButton(sidebarExportData, 0xFF009688); sidebarExportData.setLayoutParams(sideBtnLp); sidebarExportData.setOnClickListener(v -> { drawer.closeDrawers(); exportData(); }); sidebar.addView(sidebarExportData);
+        Button sidebarImportData = new Button(this); sidebarImportData.setText("Import Data"); styleButton(sidebarImportData, 0xFF009688); sidebarImportData.setLayoutParams(sideBtnLp); sidebarImportData.setOnClickListener(v -> { drawer.closeDrawers(); importData(); }); sidebar.addView(sidebarImportData);
+        DrawerLayout.LayoutParams sidebarParams = new DrawerLayout.LayoutParams(dp(280), -1); sidebarParams.gravity = GravityCompat.START; drawer.addView(mainLayout); drawer.addView(sidebar, sidebarParams); setContentView(drawer);
 
-        LinearLayout mainLayout = new LinearLayout(this);
-        mainLayout.setOrientation(LinearLayout.VERTICAL);
-        mainLayout.setLayoutParams(new LinearLayout.LayoutParams(-1, -1));
-
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(16), dp(40), dp(16), dp(12));
-        toolbar.setBackgroundColor(Color.WHITE);
-
-        TextView hamburger = new TextView(this);
-        hamburger.setText("☰");
-        hamburger.setTextSize(28);
-        hamburger.setTextColor(Color.BLACK);
-        hamburger.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        hamburger.setPadding(0, 0, dp(20), 0);
-        hamburger.setOnClickListener(v -> drawer.openDrawer(GravityCompat.START));
-        toolbar.addView(hamburger);
-
-        TextView barTitle = new TextView(this);
-        barTitle.setText("VANYA GST INVOICE");
-        barTitle.setTextSize(20);
-        barTitle.setTextColor(Color.BLACK);
-        barTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        toolbar.addView(barTitle);
-        mainLayout.addView(toolbar);
-
-        ScrollView scroll = new ScrollView(this);
-        scroll.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1));
-        root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(8), dp(16), dp(32));
-        scroll.addView(root);
-        mainLayout.addView(scroll);
-
-        // Sidebar
-        LinearLayout sidebar = new LinearLayout(this);
-        sidebar.setOrientation(LinearLayout.VERTICAL);
-        sidebar.setBackgroundColor(Color.WHITE);
-        sidebar.setPadding(dp(24), dp(60), dp(24), dp(24));
-        TextView userInfo = new TextView(this);
-        userInfo.setText("Logged in as:\n" + prefs.getString("user_email", "Admin"));
-        userInfo.setTextSize(16);
-        userInfo.setTextColor(Color.DKGRAY);
-        userInfo.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        userInfo.setPadding(0, 0, 0, dp(40));
-        sidebar.addView(userInfo);
-        Button sidebarSalesReport = new Button(this);
-        sidebarSalesReport.setText("Sales Report");
-        sidebarSalesReport.setOnClickListener(v -> { drawer.closeDrawers(); showSalesReport(); });
-        sidebar.addView(sidebarSalesReport);
-        Button sidebarContactList = new Button(this);
-        sidebarContactList.setText("Contact List");
-        sidebarContactList.setOnClickListener(v -> { drawer.closeDrawers(); showContactList(); });
-        sidebar.addView(sidebarContactList);
-        DrawerLayout.LayoutParams sidebarParams = new DrawerLayout.LayoutParams(dp(280), -1);
-        sidebarParams.gravity = GravityCompat.START;
-        drawer.addView(mainLayout);
-        drawer.addView(sidebar, sidebarParams);
-        setContentView(drawer);
-
-        LinearLayout sBox = createSectionContainer(null);
-        sBox.setBackgroundColor(0xFFF5F5F5);
-        sellerName = new TextView(this);
-        sellerName.setText("Vanya Living Furniture");
-        sellerName.setTextSize(18);
-        sellerName.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        sellerAddress = new TextView(this);
-        sellerAddress.setText("176, BLOCK B-08, 100 FEET ROAD, ENIKEPADU, Vijayawada, NTR, Andhra Pradesh, 520007");
-        sellerGstin = new TextView(this);
-        sellerGstin.setText("GSTIN: 37BPVPG2248M1Z8");
-        sellerGstin.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        TextView sellerPan = new TextView(this);
-        sellerPan.setText("PAN : BPVPG2248M");
-        sellerPan.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        sBox.addView(sellerName); sBox.addView(sellerAddress); sBox.addView(sellerGstin); sBox.addView(sellerPan);
-        root.addView(sBox);
+        LinearLayout sBox = new LinearLayout(this); sBox.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(-1, -2); sLp.setMargins(0, dp(12), 0, dp(12));
+        sBox.setLayoutParams(sLp); sBox.setPadding(dp(12), dp(12), dp(12), dp(12));
+        GradientDrawable sgd = new GradientDrawable(); sgd.setShape(GradientDrawable.RECTANGLE); sgd.setColor(0xFFF5F5F5); sgd.setCornerRadius(dp(8)); sgd.setStroke(dp(1.5f), 0xFF3F51B5); sBox.setBackground(sgd);
+        sellerName = new TextView(this); sellerName.setText("Vanya Living Furniture"); sellerName.setTextSize(18); sellerName.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        sellerAddress = new TextView(this); sellerAddress.setText("176, BLOCK B-08, 100 FEET ROAD, ENIKEPADU, Vijayawada, NTR, Andhra Pradesh, 520007");
+        sellerGstin = new TextView(this); sellerGstin.setText("GSTIN: 37BPVPG2248M1Z8"); sellerGstin.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView sellerPan = new TextView(this); sellerPan.setText("PAN : BPVPG2248M"); sellerPan.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        sBox.addView(sellerName); sBox.addView(sellerAddress); sBox.addView(sellerGstin); sBox.addView(sellerPan); root.addView(sBox);
 
         LinearLayout invSection = createSectionContainer("Invoice Details");
         LinearLayout grid1 = new LinearLayout(this); grid1.setOrientation(LinearLayout.HORIZONTAL);
         invoiceNo = edit("V-0001", false); invoiceNo.setText(nextInvoicePreview());
-        invoiceNo.addTextChangedListener(new SimpleTextWatcher() {
-            @Override public void changed() { 
-                String text = invoiceNo.getText().toString().trim();
-                if (text.length() >= 6) checkAndLoadInvoice(text);
-            }
-        });
-        invoiceDate = edit(null, false); invoiceDate.setOnClickListener(v -> pickDate(invoiceDate));
+        invoiceNo.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { String text = invoiceNo.getText().toString().trim(); if (text.length() >= 6) checkAndLoadInvoice(text); }});
+        invoiceDate = edit(null, false); invoiceDate.setFocusable(false); invoiceDate.setFocusableInTouchMode(false); invoiceDate.setOnClickListener(v -> pickDate(invoiceDate));
         paymentSpinner = spinner(PAYMENT);
         grid1.addView(field("Invoice No *", invoiceNo), new LinearLayout.LayoutParams(0, -2, 1));
         grid1.addView(field("Dated *", invoiceDate), new LinearLayout.LayoutParams(0, -2, 1));
         grid1.addView(field("Mode of Payment", paymentSpinner), new LinearLayout.LayoutParams(0, -2, 1));
-        invSection.addView(grid1);
-        root.addView(invSection);
+        invSection.addView(grid1); root.addView(invSection);
 
         LinearLayout buyerSection = createSectionContainer("Buyer & Shipping Details");
-        LinearLayout contactActions = new LinearLayout(this);
-        contactActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button loadBtn = new Button(this); loadBtn.setText("Load Contact"); loadBtn.setOnClickListener(v -> loadContact());
-        Button histBtn = new Button(this); histBtn.setText("History"); histBtn.setOnClickListener(v -> showHistory());
-        contactActions.addView(loadBtn); contactActions.addView(histBtn);
-        buyerSection.addView(contactActions);
-        buyerBillTo = new AutoCompleteTextView(this);
-        buyerBillTo.setThreshold(1); buyerBillTo.setLines(3); buyerBillTo.setGravity(Gravity.TOP);
-        applyBoxBackground(buyerBillTo); setupAutoComplete(buyerBillTo);
+        LinearLayout contactActions = new LinearLayout(this); contactActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button loadBtn = new Button(this); loadBtn.setText("Load Contact"); styleButton(loadBtn, 0xFF3F51B5);
+        Button histBtn = new Button(this); histBtn.setText("History"); styleButton(histBtn, 0xFF3F51B5);
+        LinearLayout.LayoutParams contactBtnLp = new LinearLayout.LayoutParams(-2, -2); contactBtnLp.setMargins(0, 0, dp(8), 0);
+        contactActions.addView(loadBtn, contactBtnLp); contactActions.addView(histBtn, contactBtnLp); buyerSection.addView(contactActions);
+        buyerBillTo = new AutoCompleteTextView(this); buyerBillTo.setThreshold(1); buyerBillTo.setLines(3); buyerBillTo.setGravity(Gravity.TOP); applyBoxBackground(buyerBillTo); setupAutoComplete(buyerBillTo);
         buyerSection.addView(field("Buyer (Bill To)", buyerBillTo));
         buyerPhone = edit("", true); buyerGstin = edit("", false); buyerState = spinner(STATES);
         buyerState.setOnItemSelectedListener(new SimpleSpinnerListener() { @Override public void changed() { recalc(); syncConsignee(); }});
@@ -302,13 +234,10 @@ public class MainActivity extends Activity {
         buyerGrid.addView(field("Buyer GSTN", buyerGstin), new LinearLayout.LayoutParams(0, -2, 1));
         buyerGrid.addView(field("Buyer State", buyerState), new LinearLayout.LayoutParams(0, -2, 1));
         buyerSection.addView(buyerGrid);
-        LinearLayout shipHeader = new LinearLayout(this);
-        shipHeader.setOrientation(LinearLayout.HORIZONTAL); shipHeader.setGravity(Gravity.CENTER_VERTICAL);
-        shipHeader.addView(label("Consignee (Ship to)", true));
-        sameAsBilling = new CheckBox(this); sameAsBilling.setText("Same as Billing"); shipHeader.addView(sameAsBilling);
+        LinearLayout shipHeader = new LinearLayout(this); shipHeader.setOrientation(LinearLayout.HORIZONTAL); shipHeader.setGravity(Gravity.CENTER_VERTICAL);
+        shipHeader.addView(label("Consignee (Ship to)", true)); sameAsBilling = new CheckBox(this); sameAsBilling.setText("Same as Billing"); shipHeader.addView(sameAsBilling);
         buyerSection.addView(shipHeader);
-        consignee = new AutoCompleteTextView(this); consignee.setThreshold(1); consignee.setLines(3); consignee.setGravity(Gravity.TOP);
-        applyBoxBackground(consignee); setupAutoComplete(consignee);
+        consignee = new AutoCompleteTextView(this); consignee.setThreshold(1); consignee.setLines(3); consignee.setGravity(Gravity.TOP); applyBoxBackground(consignee); setupAutoComplete(consignee);
         buyerSection.addView(consignee);
         consigneePhone = edit("", true); consigneeGstin = edit("", false); consigneeState = spinner(STATES);
         LinearLayout consigneeGrid = new LinearLayout(this); consigneeGrid.setOrientation(LinearLayout.HORIZONTAL);
@@ -316,9 +245,9 @@ public class MainActivity extends Activity {
         consigneeGrid.addView(field("Consignee GSTN", consigneeGstin), new LinearLayout.LayoutParams(0, -2, 1));
         consigneeGrid.addView(field("Consignee State", consigneeState), new LinearLayout.LayoutParams(0, -2, 1));
         buyerSection.addView(consigneeGrid);
-        Button saveBtn = new Button(this); saveBtn.setText("Save Contact"); saveBtn.setOnClickListener(v -> saveContact());
-        buyerSection.addView(saveBtn);
-        root.addView(buyerSection);
+        Button saveBtn = new Button(this); saveBtn.setText("Save Contact"); styleButton(saveBtn, 0xFF009688);
+        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(-1, -2); saveLp.setMargins(0, dp(8), 0, dp(4));
+        buyerSection.addView(saveBtn, saveLp); root.addView(buyerSection);
 
         LinearLayout otherSection = createSectionContainer("Other Details");
         destination = edit("", false); vehicle = edit("", false);
@@ -333,8 +262,7 @@ public class MainActivity extends Activity {
         grid2.addView(field("Transporter Name", transporter), new LinearLayout.LayoutParams(0, -2, 1));
         grid2.addView(field("Vehicle Number", vehicleNumber), new LinearLayout.LayoutParams(0, -2, 1));
         othersFieldsContainer.addView(grid2);
-        deliveryNote = edit("", false); buyerOrderDate = edit("", false);
-        buyerOrderDate.setOnClickListener(v -> pickDate(buyerOrderDate));
+        deliveryNote = edit("", false); buyerOrderDate = edit("", false); buyerOrderDate.setFocusable(false); buyerOrderDate.setFocusableInTouchMode(false); buyerOrderDate.setOnClickListener(v -> pickDate(buyerOrderDate));
         LinearLayout grid3 = new LinearLayout(this); grid3.setOrientation(LinearLayout.HORIZONTAL);
         grid3.addView(field("Delivery Challan", deliveryNote), new LinearLayout.LayoutParams(0, -2, 1));
         grid3.addView(field("Order Date", buyerOrderDate), new LinearLayout.LayoutParams(0, -2, 1));
@@ -343,69 +271,57 @@ public class MainActivity extends Activity {
         LinearLayout grid4 = new LinearLayout(this); grid4.setOrientation(LinearLayout.HORIZONTAL);
         grid4.addView(field("Ref No", referenceNoDate), new LinearLayout.LayoutParams(0, -2, 1));
         grid4.addView(field("Buyer Order No", buyerOrderNo), new LinearLayout.LayoutParams(0, -2, 1));
-        othersFieldsContainer.addView(grid4);
-        othersFieldsContainer.addView(field("Additional Info", otherInfo));
-        otherSection.addView(othersFieldsContainer);
-        othersFieldsContainer.setVisibility(View.GONE);
+        othersFieldsContainer.addView(grid4); othersFieldsContainer.addView(field("Additional Info", otherInfo));
+        otherSection.addView(othersFieldsContainer); othersFieldsContainer.setVisibility(View.GONE);
         othersCb.setOnCheckedChangeListener((cb, isChecked) -> othersFieldsContainer.setVisibility(isChecked ? View.VISIBLE : View.GONE));
         root.addView(otherSection);
 
         LinearLayout goodsSection = createSectionContainer("Goods / Services");
-        HorizontalScrollView hsv = new HorizontalScrollView(this);
-        itemsContainer = new LinearLayout(this); itemsContainer.setOrientation(LinearLayout.VERTICAL);
-        addItemsHeader();
-        hsv.addView(itemsContainer);
-        goodsSection.addView(hsv, new LinearLayout.LayoutParams(-1, dp(250)));
-        Button add = new Button(this); add.setText("+ Add Item"); add.setOnClickListener(v -> addItemRow());
-        goodsSection.addView(add);
-        root.addView(goodsSection);
+        HorizontalScrollView hsv = new HorizontalScrollView(this); itemsContainer = new LinearLayout(this); itemsContainer.setOrientation(LinearLayout.VERTICAL);
+        addItemsHeader(); hsv.addView(itemsContainer); goodsSection.addView(hsv, new LinearLayout.LayoutParams(-1, dp(250)));
+        Button add = new Button(this); add.setText("+ Add Item"); styleButton(add, 0xFFFF5722);
+        LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(-1, -2); addLp.setMargins(0, dp(8), 0, 0);
+        goodsSection.addView(add, addLp); root.addView(goodsSection);
 
         LinearLayout totalsSection = createSectionContainer("Totals Summary");
         LinearLayout totalsBox = new LinearLayout(this); totalsBox.setOrientation(LinearLayout.VERTICAL); totalsBox.setPadding(dp(12), dp(8), dp(12), dp(8)); totalsBox.setBackgroundColor(0xFFF0F0F0);
         taxableValue = totalLine(totalsBox, "Taxable Value");
         cgstAmount = totalLine(totalsBox, "CGST Amount"); sgstAmount = totalLine(totalsBox, "SGST Amount"); igstAmount = totalLine(totalsBox, "IGST Amount");
-        grandTotal = totalLine(totalsBox, "Grand Total");
-        amountWords = totalLine(totalsBox, "Amount in Words");
-        roundedTotal = totalLine(totalsBox, "Rounding Total");
-        totalsSection.addView(totalsBox);
-        root.addView(totalsSection);
+        grandTotal = totalLine(totalsBox, "Grand Total"); amountWords = totalLine(totalsBox, "Amount in Words"); roundedTotal = totalLine(totalsBox, "Rounding Total");
+        totalsSection.addView(totalsBox); root.addView(totalsSection);
 
         LinearLayout btnLayout = new LinearLayout(this); btnLayout.setOrientation(LinearLayout.HORIZONTAL);
-        Button saveBtnPdf = new Button(this); saveBtnPdf.setText("SAVE PDF"); saveBtnPdf.setTextSize(16); saveBtnPdf.setOnClickListener(v -> createInvoicePdf(false));
-        btnLayout.addView(saveBtnPdf, new LinearLayout.LayoutParams(0, dp(60), 1));
-        Button printBtnPdf = new Button(this); printBtnPdf.setText("PRINT PDF"); printBtnPdf.setTextSize(16); printBtnPdf.setOnClickListener(v -> createInvoicePdf(true));
-        btnLayout.addView(printBtnPdf, new LinearLayout.LayoutParams(0, dp(60), 1));
+        Button saveBtnPdf = new Button(this); saveBtnPdf.setText("SAVE PDF"); saveBtnPdf.setTextSize(16); styleButton(saveBtnPdf, 0xFF4CAF50);
+        Button printBtnPdf = new Button(this); printBtnPdf.setText("PRINT PDF"); printBtnPdf.setTextSize(16); styleButton(printBtnPdf, 0xFF009688);
+        LinearLayout.LayoutParams pdfLp1 = new LinearLayout.LayoutParams(0, dp(50), 1); pdfLp1.setMargins(0, 0, dp(8), 0);
+        LinearLayout.LayoutParams pdfLp2 = new LinearLayout.LayoutParams(0, dp(50), 1);
+        btnLayout.addView(saveBtnPdf, pdfLp1); btnLayout.addView(printBtnPdf, pdfLp2);
         root.addView(btnLayout);
-        
+
         LinearLayout actionLayout = new LinearLayout(this); actionLayout.setOrientation(LinearLayout.HORIZONTAL);
-        Button newInvoiceBtn = new Button(this); newInvoiceBtn.setText("NEW INVOICE"); newInvoiceBtn.setOnClickListener(v -> resetForNewInvoice());
-        Button deleteInvoiceBtn = new Button(this); deleteInvoiceBtn.setText("DELETE INVOICE"); deleteInvoiceBtn.setOnClickListener(v -> confirmDeleteInvoice());
-        actionLayout.addView(newInvoiceBtn, new LinearLayout.LayoutParams(0, -2, 1));
-        actionLayout.addView(deleteInvoiceBtn, new LinearLayout.LayoutParams(0, -2, 1));
+        Button newInvoiceBtn = new Button(this); newInvoiceBtn.setText("NEW INVOICE"); styleButton(newInvoiceBtn, 0xFF2196F3);
+        Button deleteInvoiceBtn = new Button(this); deleteInvoiceBtn.setText("DELETE INVOICE"); styleButton(deleteInvoiceBtn, 0xFFF44336);
+        LinearLayout.LayoutParams actLp1 = new LinearLayout.LayoutParams(0, -2, 1); actLp1.setMargins(0, dp(12), dp(8), 0);
+        LinearLayout.LayoutParams actLp2 = new LinearLayout.LayoutParams(0, -2, 1); actLp2.setMargins(0, dp(12), 0, 0);
+        actionLayout.addView(newInvoiceBtn, actLp1); actionLayout.addView(deleteInvoiceBtn, actLp2);
         root.addView(actionLayout);
 
         Button logoutBtnFinal = new Button(this);
-        logoutBtnFinal.setText("LOGOUT");
-        logoutBtnFinal.setOnClickListener(v -> { prefs.edit().putBoolean("is_logged_in", false).apply(); startActivity(new Intent(this, LoginActivity.class)); finish(); });
+        logoutBtnFinal.setText("LOGOUT"); styleButton(logoutBtnFinal, 0xFF795548);
         LinearLayout.LayoutParams lpLogout = new LinearLayout.LayoutParams(-1, -2); lpLogout.setMargins(0, dp(32), 0, 0); root.addView(logoutBtnFinal, lpLogout);
-        
+
         addItemRow(); recalc();
-        sameAsBilling.setOnCheckedChangeListener((v, checked) -> {
-            boolean enabled = !checked; consignee.setEnabled(enabled); consigneePhone.setEnabled(enabled); consigneeGstin.setEnabled(enabled); consigneeState.setEnabled(enabled);
-            if (checked) syncConsignee(); else applyBoxBackground(consignee);
-        });
+        sameAsBilling.setOnCheckedChangeListener((v, checked) -> { boolean enabled = !checked; consignee.setEnabled(enabled); consigneePhone.setEnabled(enabled); consigneeGstin.setEnabled(enabled); consigneeState.setEnabled(enabled); if (checked) syncConsignee(); else applyBoxBackground(consignee); });
     }
 
     private void addItemsHeader() {
         LinearLayout headerRow = new LinearLayout(this); headerRow.setOrientation(LinearLayout.HORIZONTAL); headerRow.setPadding(dp(2), dp(4), dp(2), dp(4)); headerRow.setBackgroundColor(0xFFEAEAEA);
-        headerRow.addView(tableHeaderLabel("Sl"), new LinearLayout.LayoutParams(dp(30), -2));
-        headerRow.addView(tableHeaderLabel("Particulars"), new LinearLayout.LayoutParams(dp(180), -2));
-        headerRow.addView(tableHeaderLabel("HSN"), new LinearLayout.LayoutParams(dp(65), -2));
-        headerRow.addView(tableHeaderLabel("GST Rate"), new LinearLayout.LayoutParams(dp(70), -2));
-        headerRow.addView(tableHeaderLabel("Qty"), new LinearLayout.LayoutParams(dp(60), -2));
-        headerRow.addView(tableHeaderLabel("Rate"), new LinearLayout.LayoutParams(dp(85), -2));
-        headerRow.addView(tableHeaderLabel("UQC"), new LinearLayout.LayoutParams(dp(60), -2));
-        headerRow.addView(tableHeaderLabel("Amount"), new LinearLayout.LayoutParams(dp(100), -2));
+        headerRow.addView(tableHeaderLabel("Sl"), new LinearLayout.LayoutParams(dp(30), -2)); headerRow.addView(tableHeaderLabel("Particulars"), new LinearLayout.LayoutParams(dp(150), -2));
+        headerRow.addView(tableHeaderLabel("HSN/SAC"), new LinearLayout.LayoutParams(dp(75), -2)); headerRow.addView(tableHeaderLabel("GST %"), new LinearLayout.LayoutParams(dp(60), -2));
+        headerRow.addView(tableHeaderLabel("Inc?"), new LinearLayout.LayoutParams(dp(45), -2));
+        headerRow.addView(tableHeaderLabel("Qty"), new LinearLayout.LayoutParams(dp(55), -2)); headerRow.addView(tableHeaderLabel("Rate"), new LinearLayout.LayoutParams(dp(80), -2));
+        headerRow.addView(tableHeaderLabel("UQC"), new LinearLayout.LayoutParams(dp(55), -2)); headerRow.addView(tableHeaderLabel("Taxable Amt"), new LinearLayout.LayoutParams(dp(95), -2));
+        headerRow.addView(tableHeaderLabel("Total (Incl GST)"), new LinearLayout.LayoutParams(dp(110), -2));
         headerRow.addView(tableHeaderLabel(""), new LinearLayout.LayoutParams(dp(40), -2));
         itemsContainer.addView(headerRow);
     }
@@ -416,164 +332,102 @@ public class MainActivity extends Activity {
 
     private void syncConsignee() {
         if (sameAsBilling != null && sameAsBilling.isChecked()) {
-            consignee.setText(buyerBillTo.getText()); consigneePhone.setText(buyerPhone.getText()); consigneeGstin.setText(buyerGstin.getText()); consigneeState.setSelection(buyerState.getSelectedItemPosition());
-            GradientDrawable gd = new GradientDrawable(); gd.setShape(GradientDrawable.RECTANGLE); gd.setStroke(dp(1), 0xFFCCCCCC); gd.setColor(0xFFEEEEEE); gd.setCornerRadius(dp(4));
-            consignee.setBackground(gd);
+            consignee.setText(buyerBillTo.getText()); consigneePhone.setText(buyerPhone.getText()); consigneeGstin.setText(buyerGstin.getText());
+            int bPos = buyerState.getSelectedItemPosition();
+            if (bPos >= 0 && bPos < STATES.length) consigneeState.setSelection(bPos);
+            applyBoxBackground(consignee);
         }
     }
 
     private void checkAndLoadInvoice(String no) {
-        SQLiteDatabase db = dbHelper.getReadableDatabase();
-        Cursor c = db.query("invoices", null, "invoice_no=?", new String[]{no}, null, null, null);
+        SQLiteDatabase db = dbHelper.getReadableDatabase(); Cursor c = db.query("invoices", null, "invoice_no=?", new String[]{no}, null, null, null);
         if (c.moveToFirst()) {
-            invoiceDate.setText(c.getString(c.getColumnIndex("date")));
-            String mode = c.getString(c.getColumnIndex("payment_mode"));
+            invoiceDate.setText(c.getString(c.getColumnIndex("date"))); String mode = c.getString(c.getColumnIndex("payment_mode"));
             for (int i=0; i<PAYMENT.length; i++) if(PAYMENT[i].equals(mode)) { paymentSpinner.setSelection(i); break; }
-            buyerBillTo.setText(c.getString(c.getColumnIndex("buyer_name_addr")));
-            buyerPhone.setText(c.getString(c.getColumnIndex("buyer_phone")));
-            buyerGstin.setText(c.getString(c.getColumnIndex("buyer_gstin")));
-            String bState = c.getString(c.getColumnIndex("buyer_state"));
-            for (int i=0; i<STATES.length; i++) if(STATES[i].equals(bState)) { buyerState.setSelection(i); break; }
+            buyerBillTo.setText(c.getString(c.getColumnIndex("buyer_name_addr"))); buyerPhone.setText(c.getString(c.getColumnIndex("buyer_phone"))); buyerGstin.setText(c.getString(c.getColumnIndex("buyer_gstin")));
+            String bState = c.getString(c.getColumnIndex("buyer_state")); for (int j=0; j<STATES.length; j++) if(STATES[j].equals(bState)) { buyerState.setSelection(j); break; }
             sameAsBilling.setChecked(c.getInt(c.getColumnIndex("same_as_billing")) == 1);
-            if (!sameAsBilling.isChecked()) {
-                consignee.setText(c.getString(c.getColumnIndex("consignee_name_addr")));
-                consigneePhone.setText(c.getString(c.getColumnIndex("consignee_phone")));
-                consigneeGstin.setText(c.getString(c.getColumnIndex("consignee_gstin")));
-                String cState = c.getString(c.getColumnIndex("consignee_state"));
-                for (int i=0; i<STATES.length; i++) if(STATES[i].equals(cState)) { consigneeState.setSelection(i); break; }
-            }
-            destination.setText(c.getString(c.getColumnIndex("destination")));
-            vehicle.setText(c.getString(c.getColumnIndex("vehicle")));
-            boolean others = c.getInt(c.getColumnIndex("others_checked")) == 1;
-            othersCb.setChecked(others);
-            if (others) {
-                transporter.setText(c.getString(c.getColumnIndex("transporter")));
-                vehicleNumber.setText(c.getString(c.getColumnIndex("vehicle_number")));
-                deliveryNote.setText(c.getString(c.getColumnIndex("delivery_challan")));
-                buyerOrderDate.setText(c.getString(c.getColumnIndex("order_date")));
-                referenceNoDate.setText(c.getString(c.getColumnIndex("ref_no")));
-                otherInfo.setText(c.getString(c.getColumnIndex("additional_info")));
-            }
-            long invId = c.getLong(c.getColumnIndex("id")); c.close();
-            rows.clear(); itemsContainer.removeAllViews(); addItemsHeader();
+            if (!sameAsBilling.isChecked()) { consignee.setText(c.getString(c.getColumnIndex("consignee_name_addr"))); consigneePhone.setText(c.getString(c.getColumnIndex("consignee_phone"))); consigneeGstin.setText(c.getString(c.getColumnIndex("consignee_gstin"))); String cState = c.getString(c.getColumnIndex("consignee_state")); for (int k=0; k<STATES.length; k++) if(STATES[k].equals(cState)) { consigneeState.setSelection(k); break; } }
+            destination.setText(c.getString(c.getColumnIndex("destination"))); vehicle.setText(c.getString(c.getColumnIndex("vehicle")));
+            boolean others = c.getInt(c.getColumnIndex("others_checked")) == 1; othersCb.setChecked(others);
+            if (others) { transporter.setText(c.getString(c.getColumnIndex("transporter"))); vehicleNumber.setText(c.getString(c.getColumnIndex("vehicle_number"))); deliveryNote.setText(c.getString(c.getColumnIndex("delivery_challan"))); buyerOrderDate.setText(c.getString(c.getColumnIndex("order_date"))); referenceNoDate.setText(c.getString(c.getColumnIndex("ref_no"))); otherInfo.setText(c.getString(c.getColumnIndex("additional_info"))); }
+            long invId = c.getLong(c.getColumnIndex("id")); c.close(); rows.clear(); itemsContainer.removeAllViews(); addItemsHeader();
             Cursor ic = db.query("invoice_items", null, "invoice_id=?", new String[]{String.valueOf(invId)}, null, null, "sl_no ASC");
             while (ic.moveToNext()) {
-                ItemRow r = new ItemRow(this, ic.getInt(ic.getColumnIndex("sl_no")));
-                r.desc.setText(ic.getString(ic.getColumnIndex("particulars")));
-                r.hsn.setText(ic.getString(ic.getColumnIndex("hsn")));
-                String gr = ic.getString(ic.getColumnIndex("gst_rate"));
-                for(int i=0; i<GST_RATES.length; i++) if(GST_RATES[i].equals(gr)) { r.gst.setSelection(i); break; }
+                ItemRow r = new ItemRow(this, ic.getInt(ic.getColumnIndex("sl_no"))); r.desc.setText(ic.getString(ic.getColumnIndex("particulars"))); r.hsnSac.setText(ic.getString(ic.getColumnIndex("hsn")));
+                String gr = ic.getString(ic.getColumnIndex("gst_rate")); for(int l=0; l<GST_RATES.length; l++) if(GST_RATES[l].equals(gr)) { r.gst.setSelection(l); break; }
                 r.qty.setText(String.format(Locale.US, "%.2f", ic.getDouble(ic.getColumnIndex("qty"))));
-                String uqcValue = ic.getString(ic.getColumnIndex("uqc"));
-                for(int i=0; i<UQC_CODES.length; i++) if(UQC_CODES[i].equals(uqcValue)) { r.uqc.setSelection(i); break; }
-                r.rate.setText(String.format(Locale.US, "%.2f", ic.getDouble(ic.getColumnIndex("rate"))));
-                r.amount.setText(String.format(Locale.US, "%.2f", ic.getDouble(ic.getColumnIndex("amount"))));
+                String uqcVal = ic.getString(ic.getColumnIndex("uqc")); for(int m=0; m<UQC_CODES.length; m++) if(UQC_CODES[m].equals(uqcVal)) { r.uqc.setSelection(m); break; }
+                r.rate.setText(String.format(Locale.US, "%.2f", ic.getDouble(ic.getColumnIndex("rate")))); r.amount.setText(String.format(Locale.US, "%.2f", ic.getDouble(ic.getColumnIndex("amount"))));
+                r.updateAmounts();
                 rows.add(r); itemsContainer.addView(r.view);
-            }
-            ic.close(); recalc();
+            } ic.close(); recalc();
         } else c.close();
     }
 
-    private void confirmDeleteInvoice() {
-        String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return;
-        new AlertDialog.Builder(this).setTitle("Delete Invoice").setMessage("Are you sure?").setPositiveButton("Yes", (d, w) -> deleteInvoice(no)).setNegativeButton("No", null).show();
-    }
-
-    private void deleteInvoice(String no) {
-        SQLiteDatabase db = dbHelper.getWritableDatabase();
-        Cursor c = db.query("invoices", new String[]{"id"}, "invoice_no=?", new String[]{no}, null, null, null);
-        if (c.moveToFirst()) {
-            long id = c.getLong(0);
-            db.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(id)});
-            db.delete("invoices", "id=?", new String[]{String.valueOf(id)});
-            db.delete("history", "invoice_no=?", new String[]{no});
-            Toast.makeText(this, "Invoice Deleted", Toast.LENGTH_SHORT).show();
-            resetForNewInvoice();
-        }
-        c.close();
-    }
+    private void confirmDeleteInvoice() { String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return; new AlertDialog.Builder(this).setTitle("Delete Invoice").setMessage("Are you sure?").setPositiveButton("Yes", (d, w) -> deleteInvoice(no)).setNegativeButton("No", null).show(); }
+    private void deleteInvoice(String no) { SQLiteDatabase db = dbHelper.getWritableDatabase(); Cursor c = db.query("invoices", new String[]{"id"}, "invoice_no=?", new String[]{no}, null, null, null); if (c.moveToFirst()) { long id = c.getLong(0); db.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(id)}); db.delete("invoices", "id=?", new String[]{String.valueOf(id)}); db.delete("history", "invoice_no=?", new String[]{no}); Toast.makeText(this, "Invoice Deleted", Toast.LENGTH_SHORT).show(); resetForNewInvoice(); } c.close(); }
 
     private void saveFullInvoice() {
         String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return;
         SQLiteDatabase db = dbHelper.getWritableDatabase(); db.delete("invoices", "invoice_no=?", new String[]{no});
-        ContentValues cv = new ContentValues();
-        cv.put("invoice_no", no); cv.put("date", invoiceDate.getText().toString());
-        cv.put("payment_mode", paymentSpinner.getSelectedItem().toString());
-        cv.put("buyer_name_addr", buyerBillTo.getText().toString());
-        cv.put("buyer_phone", buyerPhone.getText().toString());
-        cv.put("buyer_gstin", buyerGstin.getText().toString());
-        cv.put("buyer_state", buyerState.getSelectedItem().toString());
-        cv.put("same_as_billing", sameAsBilling.isChecked() ? 1 : 0);
-        cv.put("consignee_name_addr", consignee.getText().toString());
-        cv.put("consignee_phone", consigneePhone.getText().toString());
-        cv.put("consignee_gstin", consigneeGstin.getText().toString());
-        cv.put("consignee_state", consigneeState.getSelectedItem().toString());
-        cv.put("destination", destination.getText().toString());
-        cv.put("vehicle", vehicle.getText().toString());
-        cv.put("others_checked", othersCb.isChecked() ? 1 : 0);
-        cv.put("transporter", transporter.getText().toString());
-        cv.put("vehicle_number", vehicleNumber.getText().toString());
-        cv.put("delivery_challan", deliveryNote.getText().toString());
-        cv.put("order_date", buyerOrderDate.getText().toString());
-        cv.put("ref_no", referenceNoDate.getText().toString());
-        cv.put("additional_info", otherInfo.getText().toString());
-        cv.put("taxable_value", parseValue(taxableValue));
-        cv.put("cgst", parseValue(cgstAmount)); cv.put("sgst", parseValue(sgstAmount)); cv.put("igst", parseValue(igstAmount));
+        ContentValues cv = new ContentValues(); cv.put("invoice_no", no); cv.put("date", invoiceDate.getText().toString()); cv.put("payment_mode", paymentSpinner.getSelectedItem().toString());
+        cv.put("buyer_name_addr", buyerBillTo.getText().toString()); cv.put("buyer_phone", buyerPhone.getText().toString()); cv.put("buyer_gstin", buyerGstin.getText().toString()); cv.put("buyer_state", buyerState.getSelectedItem().toString());
+        cv.put("same_as_billing", sameAsBilling.isChecked() ? 1 : 0); cv.put("consignee_name_addr", consignee.getText().toString());
+        cv.put("consignee_phone", consigneePhone.getText().toString()); cv.put("consignee_gstin", consigneeGstin.getText().toString()); cv.put("consignee_state", consigneeState.getSelectedItem().toString());
+        cv.put("destination", destination.getText().toString()); cv.put("vehicle", vehicle.getText().toString()); cv.put("others_checked", othersCb.isChecked() ? 1 : 0);
+        cv.put("transporter", transporter.getText().toString()); cv.put("vehicle_number", vehicleNumber.getText().toString());
+        cv.put("delivery_challan", deliveryNote.getText().toString()); cv.put("order_date", buyerOrderDate.getText().toString());
+        cv.put("ref_no", referenceNoDate.getText().toString()); cv.put("additional_info", otherInfo.getText().toString());
+        cv.put("taxable_value", parseValue(taxableValue)); cv.put("cgst", parseValue(cgstAmount)); cv.put("sgst", parseValue(sgstAmount)); cv.put("igst", parseValue(igstAmount));
         cv.put("grand_total", parseValue(grandTotal)); cv.put("rounded_total", parseValue(roundedTotal));
         cv.put("amount_words", amountWords.getText().toString());
         long id = db.insert("invoices", null, cv);
-        for (ItemRow r : rows) {
-            ContentValues iv = new ContentValues(); iv.put("invoice_id", id); iv.put("sl_no", Integer.parseInt(r.slNo.getText().toString()));
-            iv.put("particulars", r.desc.getText().toString()); iv.put("hsn", r.hsn.getText().toString()); iv.put("gst_rate", r.gst.getSelectedItem().toString());
-            iv.put("qty", r.qtyVal()); iv.put("uqc", r.uqc.getSelectedItem().toString()); iv.put("rate", r.rateVal()); iv.put("amount", r.amountVal());
-            db.insert("invoice_items", null, iv);
-        }
+        for (ItemRow r : rows) { ContentValues iv = new ContentValues(); iv.put("invoice_id", id); iv.put("sl_no", Integer.parseInt(r.slNo.getText().toString())); iv.put("particulars", r.desc.getText().toString()); iv.put("hsn", r.hsnSac.getText().toString()); iv.put("gst_rate", r.gst.getSelectedItem().toString()); iv.put("qty", r.qtyVal()); iv.put("uqc", r.uqc.getSelectedItem().toString()); iv.put("rate", r.rateVal()); iv.put("amount", r.amountVal()); db.insert("invoice_items", null, iv); }
     }
 
     private void createInvoicePdf(boolean shouldShare) {
         if (!validateFieldsBool()) return;
+        double totalAmt = parseValue(roundedTotal);
+        if (totalAmt > 50000) {
+            new AlertDialog.Builder(this).setTitle("E-Way Bill Required").setMessage("The total invoice value exceeds ₹50,000. Please generate an E-Way Bill.").setPositiveButton("Proceed", (dialog, which) -> generatePdfFinal(shouldShare)).setNegativeButton("Cancel", null).show();
+        } else { generatePdfFinal(shouldShare); }
+    }
+
+    private void generatePdfFinal(boolean shouldShare) {
         try {
             saveFullInvoice(); String invoice = invoiceNo.getText().toString().trim(); PdfDocument pdf = new PdfDocument();
             int itemsPerPage = 6; List<List<ItemRow>> pages = new ArrayList<>();
             for (int i = 0; i < rows.size(); i += itemsPerPage) { int end = Math.min(i + itemsPerPage, rows.size()); pages.add(new ArrayList<>(rows.subList(i, end))); }
             if (pages.isEmpty()) pages.add(new ArrayList<>());
             int totalPages = pages.size();
-            for (int i=0; i<totalPages; i++) {
-                PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(595, 842, i + 1).create());
-                drawPdfPage(page.getCanvas(), i + 1, totalPages, pages.get(i), i == 0, i == totalPages - 1);
-                pdf.finishPage(page);
-            }
+            for (int i=0; i<totalPages; i++) { PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(595, 842, i + 1).create()); drawPdfPage(page.getCanvas(), i + 1, totalPages, pages.get(i), i == 0, i == totalPages - 1); pdf.finishPage(page); }
             String fileName = invoice.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf";
             ContentValues values = new ContentValues(); values.put(MediaStore.Downloads.DISPLAY_NAME, fileName); values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf"); values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Vanya GST Invoices");
             Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-            if (uri != null) {
-                try (OutputStream out = getContentResolver().openOutputStream(uri)) { pdf.writeTo(out); }
-                pdf.close(); prefs.edit().putInt(COUNTER, prefs.getInt(COUNTER, 1) + 1).apply();
-                logHistory(invoice, parseValue(roundedTotal), parseValue(taxableValue), parseValue(cgstAmount)+parseValue(sgstAmount)+parseValue(igstAmount));
-                if (shouldShare) sharePdf(uri); else { Toast.makeText(this, "Invoice Saved & PDF Built", Toast.LENGTH_LONG).show(); resetForNewInvoice(); }
-            }
+            if (uri != null) { try (OutputStream out = getContentResolver().openOutputStream(uri)) { pdf.writeTo(out); } pdf.close(); prefs.edit().putInt(COUNTER, prefs.getInt(COUNTER, 1) + 1).apply(); logHistory(invoice, parseValue(roundedTotal), parseValue(taxableValue), parseValue(cgstAmount)+parseValue(sgstAmount)+parseValue(igstAmount)); if (shouldShare) sharePdf(uri); else { Toast.makeText(this, "Invoice Saved & PDF Built", Toast.LENGTH_LONG).show(); resetForNewInvoice(); } }
         } catch (Exception e) { Toast.makeText(this, "PDF error: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
     
     private void drawPdfPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setTextSize(9.5f); p.setColor(Color.BLACK); p.setTypeface(Typeface.SANS_SERIF);
-        final float L=45, R=550, W=R-L; float y = 45; 
+        final float L=45, R=550, W=R-L; float y = 45;
         if (isFirst) {
-            p.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)); p.setTextSize(16); center(c,p,"TAX INVOICE",297.5f,y, true); y+=18;
+            p.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)); p.setTextSize(16); p.setUnderlineText(true); center(c,p,"TAX INVOICE",297.5f,y, true); p.setUnderlineText(false); y+=18;
             p.setStrokeWidth(1.2f); p.setStyle(Paint.Style.STROKE); c.drawLine(L,y,R,y,p); p.setStyle(Paint.Style.FILL);
-            y = 100; p.setTextSize(13f); text(c,p,sellerName.getText().toString(),L,y,true); 
-            p.setTextSize(9.5f); drawMultiline(c,p,sellerAddress.getText().toString(),L,y+15,250,12); 
+            y = 100; p.setTextSize(13f); text(c,p,sellerName.getText().toString(),L,y,true);
+            p.setTextSize(9.5f); drawMultiline(c,p,sellerAddress.getText().toString(),L,y+15,250,12);
             p.setTextSize(9.5f); text(c,p,"GSTIN: " + sellerGstin.getText().toString().replace("GSTIN: ",""),L,y+45,true);
             text(c,p,"PAN : BPVPG2248M",L,y+58,true);
             p.setTextSize(10.5f); float rightLabelX = R - 120;
-            text(c,p,"Invoice No:", rightLabelX, y, true); text(c,p,invoiceNo.getText().toString(), R, y, true, true); y += 15;
-            text(c,p,"Date:", rightLabelX, y, true); text(c,p,invoiceDate.getText().toString(), R, y, true, true); y += 15;
-            if (othersCb != null && othersCb.isChecked()) { String rn = referenceNoDate.getText().toString().trim(); if (!rn.isEmpty()) { text(c,p,"Ref No:", rightLabelX, y, true); text(c,p,rn, R, y, false, true); y += 15; } }
-            text(c,p,"Payment:", rightLabelX, y, true); text(c,p,paymentSpinner.getSelectedItem().toString(), R, y, false, true);
-            y = 205; box(c,p,L,y,W,105); c.drawLine(L+W/2,y,L+W/2,y+105,p); 
-            p.setTextSize(10.5f); 
-            text(c,p,"BILL TO",L+8,y+16,true); c.drawLine(L+8, y+17, L+8+p.measureText("BILL TO"), y+17, p);
-            text(c,p,"SHIP TO",L+W/2+8,y+16,true); c.drawLine(L+W/2+8, y+17, L+W/2+8+p.measureText("SHIP TO"), y+17, p);
+            text(c,p,"Invoice No:", rightLabelX, y, true); text(c,p,invoiceNo.getText().toString(), R, y, true, true, false); y += 15;
+            text(c,p,"Date:", rightLabelX, y, true); text(c,p,invoiceDate.getText().toString(), R, y, true, true, false); y += 15;
+            if (othersCb != null && othersCb.isChecked()) { String rn = referenceNoDate.getText().toString().trim(); if (!rn.isEmpty()) { text(c,p,"Ref No:", rightLabelX, y, true); text(c,p,rn, R, y, false, true, false); y += 15; } }
+            text(c,p,"Payment:", rightLabelX, y, true); text(c,p,paymentSpinner.getSelectedItem().toString(), R, y, false, true, false);
+            y = 205; box(c,p,L,y,W,105); c.drawLine(L+W/2,y,L+W/2,y+105,p);
+            p.setTextSize(10.5f);
+            text(c,p,"BILL TO",L+8,y+16,true, false, true);
+            text(c,p,"SHIP TO",L+W/2+8,y+16,true, false, true);
             float by = y+30; String[] bl = buyerBillTo.getText().toString().split("\n");
             if (bl.length > 0) { p.setTextSize(10.5f); text(c,p,bl[0],L+8,by,true); by+=13; p.setTextSize(9f); for(int i=1; i<Math.min(bl.length, 3); i++) { text(c,p,bl[i],L+8,by,false); by+=11; } }
             text(c,p,"State: " + formatState((String)buyerState.getSelectedItem()), L+8, by, false); by+=11;
@@ -586,32 +440,32 @@ public class MainActivity extends Activity {
             if (!consigneeGstin.getText().toString().isEmpty()) { text(c,p,"GSTIN: " + consigneeGstin.getText().toString().toUpperCase(), L+W/2+8, cy, true); cy+=11; }
             if (!consigneePhone.getText().toString().isEmpty()) { text(c,p,"Phone: " + consigneePhone.getText().toString(), L+W/2+8, cy, false); cy+=11; }
             y = 330; box(c, p, L, y, W, 40); c.drawLine(L+W/3, y, L+W/3, y+40, p); c.drawLine(L+2*W/3, y, L+2*W/3, y+40, p);
-            p.setTextSize(9.5f); 
+            p.setTextSize(9.5f);
             text(c, p, "Destination: ", L+7, y+24, true); text(c, p, destination.getText().toString(), L+7+p.measureText("Destination: "), y+24, false);
             text(c, p, "Vehicle: ", L+W/3+7, y+24, true); text(c, p, vehicle.getText().toString(), L+W/3+7+p.measureText("Vehicle: "), y+24, false);
             text(c, p, "Transporter: ", L+2*W/3+7, y+24, true); text(c, p, transporter.getText().toString(), L+2*W/3+7+p.measureText("Transporter: "), y+24, false);
             y = 390;
-        } else { text(c,p,"Invoice #: " + invoiceNo.getText(),L,y,true); text(c,p,"Date: " + invoiceDate.getText(),R,y,true,true); y+=35; }
-        float[] xs = {L, L+25, L+215, L+265, L+340, L+385, L+440, R};
+        } else { text(c,p,"Invoice #: " + invoiceNo.getText().toString(),L,y,true); text(c,p,"Date: " + invoiceDate.getText().toString(),R,y,true,true, false); y+=35; }
+        float[] xs = {L, L+25, L+215, L+275, L+340, L+385, L+440, R};
         p.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 25, p); p.setColor(Color.BLACK);
-        box(c,p,L,y,W,25); for(int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+25,p); 
-        p.setTextSize(10f); String[] hds={"Sl","PARTICULARS","HSN","GST RATE","Qty","Rate","Amount"}; 
+        box(c,p,L,y,W,25); for(int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+25,p);
+        p.setTextSize(10f); String[] hds={"Sl", "PARTICULARS", "HSN/SAC", "GST RATE", "Qty", "Rate", "Amount"};
         for(int j=0;j<hds.length;j++) center(c,p,hds[j],(xs[j]+xs[j+1])/2,y+17, true);
-        y+=25; float itemH = 22; 
+        y+=25; float itemH = 22;
         for(ItemRow r : items) {
-            box(c,p,L,y,W,itemH); for(int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+itemH,p); 
-            center(c,p,r.slNo.getText().toString(),(xs[0]+xs[1])/2,y+15); drawMultiline(c,p,r.desc.getText().toString(),xs[1]+4,y+15,xs[2]-xs[1]-8,9); 
-            center(c,p,r.hsn.getText().toString(),(xs[2]+xs[3])/2,y+15); center(c,p,r.gst.getSelectedItem().toString()+"%",(xs[3]+xs[4])/2,y+15); 
-            center(c,p,r.qty.getText().toString(),(xs[4]+xs[5])/2,y+15); center(c,p,r.rate.getText().toString(),(xs[5]+xs[6])/2,y+15); 
-            center(c,p,r.amountText(),(xs[6]+xs[7])/2,y+15); y+=itemH;
+            box(c,p,L,y,W,itemH); for(int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+itemH,p);
+            center(c,p,r.slNo.getText().toString(),(xs[0]+xs[1])/2,y+15, false); drawMultiline(c,p,r.desc.getText().toString(),xs[1]+4,y+15,xs[2]-xs[1]-8,9);
+            center(c,p,r.hsnSac.getText().toString(),(xs[2]+xs[3])/2,y+15, false); center(c,p,r.gst.getSelectedItem().toString()+"%",(xs[3]+xs[4])/2,y+15, false);
+            center(c,p,r.qty.getText().toString(),(xs[4]+xs[5])/2,y+15, false); center(c,p,r.rate.getText().toString(),(xs[5]+xs[6])/2,y+15, false);
+            center(c,p,r.amountText(),(xs[6]+xs[7])/2,y+15, false); y+=itemH;
         }
-        if (!isLast) { p.setTextSize(10); text(c, p, "Page " + pageNum + " of " + totalPages + " ... Continued", R, 820, false, true); }
+        if (!isLast) { p.setTextSize(10); text(c, p, "Page " + pageNum + " of " + totalPages + " ... Continued", R, 820, false, true, false); }
         if (isLast) {
             y+=20; boolean intra = buyerState.getSelectedItem().toString().contains("(37)"); float lX = 410, vX = R; p.setTextSize(10.5f);
-            text(c,p,"Taxable Value:",lX,y,true); text(c,p,money(parseValue(taxableValue)),vX,y,true,true); y+=14; 
-            if(intra){ text(c,p,"CGST Amount:",lX,y,true); text(c,p,money(parseValue(cgstAmount)),vX,y,false,true); y+=12; text(c,p,"SGST Amount:",lX,y,true); text(c,p,money(parseValue(sgstAmount)),vX,y,false,true); y+=12; }
-            else { text(c,p,"IGST Amount:",lX,y,true); text(c,p,money(parseValue(igstAmount)),vX,y,false,true); y+=12; }
-            c.drawLine(lX-5,y+2,R,y+2,p); y+=14; text(c,p,"Grand Total:",lX,y,true); text(c,p,money(parseValue(grandTotal)),vX,y,true,true); y+=14; text(c,p,"Rounding:",lX,y,true); text(c,p,money(parseValue(roundedTotal)),vX,y,true,true); 
+            text(c,p,"Taxable Value:",lX,y,true); text(c,p,money(parseValue(taxableValue)),vX,y,true,true, false); y+=14;
+            if(intra){ text(c,p,"CGST Amount:",lX,y,true); text(c,p,money(parseValue(cgstAmount)),vX,y,false,true, false); y+=12; text(c,p,"SGST Amount:",lX,y,true); text(c,p,money(parseValue(sgstAmount)),vX,y,false,true, false); y+=12; }
+            else { text(c,p,"IGST Amount:",lX,y,true); text(c,p,money(parseValue(igstAmount)),vX,y,false,true, false); y+=12; }
+            c.drawLine(lX-5,y+2,R,y+2,p); y+=14; text(c,p,"Grand Total:",lX,y,true); text(c,p,money(parseValue(grandTotal)),vX,y,true,true, false); y+=14; text(c,p,"Rounding:",lX,y,true); text(c,p,money(parseValue(roundedTotal)),vX,y,true,true, false);
             y+=25; p.setTextSize(9f); text(c,p,"GST Breakdown:",L,y,true); y+=12;
             Map<String, Double> breakdown = new TreeMap<>();
             for(ItemRow r : rows) { double a = r.amountVal(); if(a>0) { String rt = r.gst.getSelectedItem().toString(); Double current = breakdown.get(rt); breakdown.put(rt, (current != null ? current : 0.0) + a); } }
@@ -625,39 +479,32 @@ public class MainActivity extends Activity {
             for(Map.Entry<String, Double> e : breakdown.entrySet()) {
                 double rt = Double.parseDouble(e.getKey()), tx = e.getValue();
                 box(c,p,L,y,W,16); for(int j=1;j<sxs.length-1;j++) c.drawLine(sxs[j],y,sxs[j],y+16,p);
-                center(c,p,e.getKey()+"%",(sxs[0]+sxs[1])/2,y+12); center(c,p,money(tx).replace("₹ ",""),(sxs[1]+sxs[2])/2,y+12);
-                if(intra) { 
+                center(c,p,e.getKey()+"%",(sxs[0]+sxs[1])/2,y+12, false); center(c,p,money(tx).replace("₹ ",""),(sxs[1]+sxs[2])/2,y+12, false);
+                if(intra) {
                     double t = tx * (rt/2.0)/100.0;
-                    center(c,p,String.format(Locale.US, "%.1f%%",rt/2.0),(sxs[2]+sxs[3])/2,y+12); center(c,p,money(t).replace("₹ ",""),(sxs[3]+sxs[4])/2,y+12);
-                    center(c,p,String.format(Locale.US, "%.1f%%",rt/2.0),(sxs[4]+sxs[5])/2,y+12); center(c,p,money(t).replace("₹ ",""),(sxs[5]+sxs[6])/2,y+12);
-                    center(c,p,money(t*2).replace("₹ ",""),(sxs[6]+sxs[7])/2,y+12);
-                } else { double t = tx * rt/100.0; center(c,p,String.format(Locale.US, "%.1f%%",rt),(sxs[2]+sxs[3])/2,y+13); center(c,p,money(t).replace("₹ ",""),(sxs[3]+sxs[4])/2,y+13); center(c,p,money(t).replace("₹ ",""),(sxs[4]+sxs[5])/2,y+13); }
+                    center(c,p,String.format(Locale.US, "%.1f%%",rt/2.0),(sxs[2]+sxs[3])/2,y+12, false); center(c,p,money(t).replace("₹ ",""),(sxs[3]+sxs[4])/2,y+12, false);
+                    center(c,p,String.format(Locale.US, "%.1f%%",rt/2.0),(sxs[4]+sxs[5])/2,y+12, false); center(c,p,money(t).replace("₹ ",""),(sxs[5]+sxs[6])/2,y+12, false);
+                    center(c,p,money(t*2).replace("₹ ",""),(sxs[6]+sxs[7])/2,y+12, false);
+                } else { double t = tx * rt/100.0; center(c,p,String.format(Locale.US, "%.1f%%",rt),(sxs[2]+sxs[3])/2,y+13, false); center(c,p,money(t).replace("₹ ",""),(sxs[3]+sxs[4])/2,y+13, false); center(c,p,money(t).replace("₹ ",""),(sxs[4]+sxs[5])/2,y+13, false); }
                 y+=16;
             }
-            y+=25; p.setTextSize(9.5f); text(c,p,"Amount in Words: "+amountWords.getText(),L,y,true); 
-            if (othersCb != null && othersCb.isChecked()) { String oi = otherInfo.getText().toString().trim(); if (!oi.isEmpty()) { text(c,p,"Other Info: " + oi,L,y+13,false); y+=15; } }
-            y+=15; box(c,p,L,y,W,85); p.setTextSize(10f); text(c,p,"BANK DETAILS", L+8, y+14, true); 
+            y+=25; p.setTextSize(9.5f); text(c,p,"Amount in Words: "+amountWords.getText(),L,y,true);
+            if (othersCb != null && othersCb.isChecked()) { String oi = otherInfo.getText().toString().trim(); if (!oi.isEmpty()) { text(c,p,"Other Info: " + oi,L,y+13,false); y+=20; } }
+            y+=15; box(c,p,L,y,W,85); p.setTextSize(10f);
+            text(c,p,"BANK DETAILS", L+8, y+14, true, false, true);
             p.setTextSize(9f);
             text(c,p,"Account Name: Vanya Living Furniture",L+8,y+28,true); text(c,p,"Account Number: 50200123667011",L+8,y+40,true);
             text(c,p,"Bank Name: HDFC BANK",L+8,y+54,true); text(c,p,"IFSC Code: HDFC0003975",L+8,y+66,true); text(c,p,"Branch Name: ENIKEPADU",L+8,y+78,true);
-            float signY = y + 85 + 25; p.setTextSize(10.5f); text(c,p,"For " + sellerName.getText().toString(),R,signY,true,true); 
+            float signY = y + 85 + 25; p.setTextSize(10.5f); text(c,p,"For " + sellerName.getText().toString(),R,signY,true,true, false);
             try { InputStream is = getAssets().open("signature.png"); Bitmap bitmap = BitmapFactory.decodeStream(is);
                 if (bitmap != null) { Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, 90, 40, true); c.drawBitmap(scaledBitmap, R - 100, signY + 5, p); } is.close();
             } catch (Exception e) {}
-            p.setTextSize(10.5f); p.setColor(Color.BLACK); text(c,p,"Authorised Signatory",R,signY+45,false,true); 
+            p.setTextSize(10.5f); p.setColor(Color.BLACK); text(c,p,"Authorised Signatory",R,signY+45,false,true, false);
         }
-        p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, R, 825, false, true); text(c,p,"Computer-generated document. No signature required.",L, 825, false);
+        p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, R, 825, false, true, false); text(c,p,"Computer-generated document. No signature required.",L, 825, false);
     }
 
     private String formatState(String s) { return s.replace(" (", " - ").replace(")", ""); }
-    private void box(Canvas c, Paint p, float x,float y,float w,float h){ p.setStyle(Paint.Style.STROKE); c.drawRect(x,y,x+w,y+h,p); p.setStyle(Paint.Style.FILL); }
-    private void text(Canvas c, Paint p, String s, float x,float y, boolean bold){ text(c,p,s,x,y,bold,false); }
-    private void text(Canvas c, Paint p, String s, float x,float y, boolean bold, boolean right){ p.setTypeface(bold?Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD):Typeface.SANS_SERIF); if(right) c.drawText(s,x-p.measureText(s),y,p); else c.drawText(s,x,y,p); }
-    private void center(Canvas c, Paint p, String s,float x,float y){ center(c,p,s,x,y,false); }
-    private void center(Canvas c, Paint p, String s,float x,float y,boolean bold){ p.setTypeface(bold?Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD):Typeface.SANS_SERIF); c.drawText(s,x-p.measureText(s)/2,y,p); }
-    private void drawMultiline(Canvas c, Paint p, String s,float x,float y,float maxW,float leading){ String[] words=s.replace("\n"," ").split(" "); String line=""; float yy=y; for(String word:words){ if(word.isEmpty())continue; String test=line.isEmpty()?word:line+" "+word; if(p.measureText(test)>maxW){c.drawText(line,x,yy,p);yy+=leading;line=word;} else line=test;} if(!line.isEmpty())c.drawText(line,x,yy,p); }
-
-    private String nextInvoicePreview() { return String.format(Locale.US, "V-%04d", prefs.getInt(COUNTER, 1)); }
     private String today() { return new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(new Date()); }
     private void pickDate(EditText target) { Calendar c = Calendar.getInstance(); new DatePickerDialog(this, (v, y, m, d) -> target.setText(String.format(Locale.US, "%02d/%02d/%04d", d, m + 1, y)), c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show(); }
 
@@ -723,11 +570,9 @@ public class MainActivity extends Activity {
     private void saveContact() {
         String full = buyerBillTo.getText().toString().trim(); if (full.isEmpty()) { Toast.makeText(this, "Enter name and address", Toast.LENGTH_SHORT).show(); return; }
         String[] lines = full.split("\n", 2); String name = lines[0].trim(), addr = lines.length > 1 ? lines[1].trim() : "";
-        
         String gstin = buyerGstin.getText().toString().trim().toUpperCase();
         String gstinPattern = "^[0-9]{2}[A-Z]{3}[PCHFATLJG][A-Z][0-9]{4}[A-Z][A-Z0-9]{3}$";
         if (!gstin.isEmpty() && !gstin.matches(gstinPattern)) { Toast.makeText(this, "Invalid GSTIN format (6th char status error)", Toast.LENGTH_LONG).show(); return; }
-
         SQLiteDatabase db = dbHelper.getWritableDatabase(); ContentValues cv = new ContentValues();
         cv.put("name", name); cv.put("address", addr); cv.put("phone", buyerPhone.getText().toString());
         cv.put("gstin", gstin); cv.put("state", (String) buyerState.getSelectedItem());
@@ -739,8 +584,7 @@ public class MainActivity extends Activity {
         SQLiteDatabase db = dbHelper.getReadableDatabase(); Cursor cursor = db.query("contacts", null, null, null, null, null, "name ASC");
         List<String> names = new ArrayList<>(); List<Integer> ids = new ArrayList<>();
         while (cursor.moveToNext()) { ids.add(cursor.getInt(0)); names.add(cursor.getString(1) + " (" + cursor.getString(3) + ")"); }
-        cursor.close();
-        if (names.isEmpty()) { Toast.makeText(this, "No saved contacts", Toast.LENGTH_SHORT).show(); return; }
+        cursor.close(); if (names.isEmpty()) { Toast.makeText(this, "No saved contacts", Toast.LENGTH_SHORT).show(); return; }
         new AlertDialog.Builder(this).setTitle("Select Contact").setItems(names.toArray(new String[0]), (dialog, which) -> fillContact(ids.get(which))).show();
     }
 
@@ -787,6 +631,8 @@ public class MainActivity extends Activity {
     private void showCustomRangePicker() {
         LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); l.setPadding(dp(20),dp(20),dp(20),dp(20));
         Button fBtn = new Button(this); fBtn.setText("From: Select Date"); Button tBtn = new Button(this); tBtn.setText("To: Select Date");
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(-1, -2); btnLp.setMargins(0, dp(8), 0, dp(8));
+        fBtn.setLayoutParams(btnLp); tBtn.setLayoutParams(btnLp); styleButton(fBtn, 0xFF3F51B5); styleButton(tBtn, 0xFF3F51B5);
         l.addView(fBtn); l.addView(tBtn); final String[] dts = {"", ""};
         fBtn.setOnClickListener(v -> { Calendar c=Calendar.getInstance(); new DatePickerDialog(this,(v1,y,m,d)->{dts[0]=String.format(Locale.US,"%02d/%02d/%04d",d,m+1,y);fBtn.setText("From: "+dts[0]);},c.get(Calendar.YEAR),c.get(Calendar.MONTH),c.get(Calendar.DAY_OF_MONTH)).show(); });
         tBtn.setOnClickListener(v -> { Calendar c=Calendar.getInstance(); new DatePickerDialog(this,(v1,y,m,d)->{dts[1]=String.format(Locale.US,"%02d/%02d/%04d",d,m+1,y);tBtn.setText("To: "+dts[1]);},c.get(Calendar.YEAR),c.get(Calendar.MONTH),c.get(Calendar.DAY_OF_MONTH)).show(); });
@@ -803,7 +649,7 @@ public class MainActivity extends Activity {
         int iT = c.getColumnIndex("taxable"), iG = c.getColumnIndex("gst"), iA = c.getColumnIndex("amount"), iD = c.getColumnIndex("date"), iI = c.getColumnIndex("invoice_no"), iN = c.getColumnIndex("name");
         while(c.moveToNext()){
             double t = iT >= 0 ? c.getDouble(iT) : 0, g = iG >= 0 ? c.getDouble(iG) : 0, a = iA >= 0 ? c.getDouble(iA) : 0;
-            String date = iD >= 0 ? c.getString(iD) : "", inv = iI >= 0 ? c.getString(iI) : "", name = (iN >= 0 && c.getString(iN) != null) ? c.getString(iN) : "Unsaved Contact";
+            String date = iD >= 0 ? c.getString(iD) : ""; String inv = iI >= 0 ? c.getString(iI) : ""; String name = (iN >= 0 && c.getString(iN) != null) ? c.getString(iN) : "Unsaved Contact";
             tT+=t; tG+=g; nS+=a; sb.append(date).append(" | ").append(inv).append(" | ").append(name).append(" | ").append(money(a)).append("\n");
             csvData.add(new String[]{date, inv, name, String.format(Locale.US, "%.2f",t), String.format(Locale.US, "%.2f",g), String.format(Locale.US, "%.2f",a)});
         }
@@ -851,16 +697,14 @@ public class MainActivity extends Activity {
     private boolean validateFieldsBool() {
         if (invoiceNo.getText().toString().trim().isEmpty()) { Toast.makeText(this, "Invoice No is required", Toast.LENGTH_SHORT).show(); return false; }
         if (invoiceDate.getText().toString().trim().isEmpty()) { Toast.makeText(this, "Invoice Date is mandatory", Toast.LENGTH_SHORT).show(); return false; }
-        
         String gstinPattern = "^[0-9]{2}[A-Z]{3}[PCHFATLJG][A-Z][0-9]{4}[A-Z][A-Z0-9]{3}$";
-        String bg = buyerGstin.getText().toString().trim().toUpperCase(); if (!bg.isEmpty() && !bg.matches(gstinPattern)) { Toast.makeText(this, "Invalid Buyer GSTIN format (6th char status error)", Toast.LENGTH_SHORT).show(); return false; }
-        String cg = consigneeGstin.getText().toString().trim().toUpperCase(); if (!cg.isEmpty() && !cg.matches(gstinPattern)) { Toast.makeText(this, "Invalid Consignee GSTIN format (6th char status error)", Toast.LENGTH_SHORT).show(); return false; }
-        
+        String bg = buyerGstin.getText().toString().trim().toUpperCase(); if (!bg.isEmpty() && !bg.matches(gstinPattern)) { Toast.makeText(this, "Invalid Buyer GSTIN (6th char error)", Toast.LENGTH_LONG).show(); return false; }
+        String cg = consigneeGstin.getText().toString().trim().toUpperCase(); if (!cg.isEmpty() && !cg.matches(gstinPattern)) { Toast.makeText(this, "Invalid Consignee GSTIN (6th char error)", Toast.LENGTH_LONG).show(); return false; }
         return true;
     }
 
-    private String toIndianWords(long n) {
-        if(n==0) return "INR Zero only."; String s="INR "; if(n>=10000000){s+=twoDigits(n/10000000)+" Crore "; n%=10000000;} if(n>=100000){s+=twoDigits(n/100000)+" Lakh "; n%=100000;} if(n>=1000){s+=twoDigits(n/1000)+" Thousand "; n%=1000;} if(n>=100){s+=ones(n/100)+" Hundred "; n%=100;} if(n>0){ if(!s.equals("INR "))s+="And "; s+=twoDigits(n)+" "; } return s+"only.";
+    private String toIndianWords(long val) {
+        if(val==0) return "INR Zero only."; String s="INR "; long n = val; if(n>=10000000){s+=twoDigits(n/10000000)+" Crore "; n%=10000000;} if(n>=100000){s+=twoDigits(n/100000)+" Lakh "; n%=100000;} if(n>=1000){s+=twoDigits(n/1000)+" Thousand "; n%=1000;} if(n>=100){s+=ones(n/100)+" Hundred "; n%=100;} if(n>0){ if(!s.equals("INR "))s+="And "; s+=twoDigits(n)+" "; } return s+"only.";
     }
     private String twoDigits(long n){String[] teens={"Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"}; String[] tens={"", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"}; if(n<20)return teens[(int)n]; return tens[(int)(n/10)]+(n%10>0?" "+teens[(int)(n%10)]:"");}
     private String ones(long n){return new String[]{"Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"}[(int)n];}
@@ -869,28 +713,68 @@ public class MainActivity extends Activity {
     private abstract static class SimpleTextWatcher implements TextWatcher { @Override public void beforeTextChanged(CharSequence s, int a, int b, int d) {} @Override public void onTextChanged(CharSequence s, int a, int b, int d) {} @Override public void afterTextChanged(Editable s) { changed(); } public abstract void changed(); }
 
     private class ItemRow {
-        LinearLayout view; AutoCompleteTextView desc; EditText slNo,hsn,qty,rate,amount; Spinner gst, uqc; boolean isUpdating = false;
-        ItemRow(Context ctx,int no){
-            view=new LinearLayout(ctx); view.setOrientation(LinearLayout.HORIZONTAL); view.setPadding(2,2,2,2);
-            slNo=edit("",false); slNo.setText(String.valueOf(no)); 
-            desc=new AutoCompleteTextView(ctx); desc.setHint("Item Name"); desc.setTextSize(14); desc.setPadding(dp(8), dp(6), dp(8), dp(6)); applyBoxBackground(desc);
+        LinearLayout view; AutoCompleteTextView desc; EditText slNo, hsnSac, qty, rate, amount, totalInclGst; Spinner gst, uqc; CheckBox incToggle; boolean isUpdating = false;
+        ItemRow(Context ctx, int no) {
+            view = new LinearLayout(ctx); view.setOrientation(LinearLayout.HORIZONTAL); view.setPadding(2, 2, 2, 2);
+            slNo = edit("", false); slNo.setText(String.valueOf(no)); slNo.setEnabled(false); applyBoxBackground(slNo);
+            desc = new AutoCompleteTextView(ctx); desc.setHint("Item Name"); desc.setTextSize(14); desc.setPadding(dp(8), dp(6), dp(8), dp(6)); applyBoxBackground(desc);
             setupItemAutoComplete();
-            hsn=edit("HSN",true); gst=spinner(GST_RATES); qty=edit("Qty",true); rate=edit("Rate",true); uqc=spinner(UQC_CODES); amount=edit("",true);
-            Button del = new Button(ctx); del.setText("X"); del.setOnClickListener(v -> { if(rows.size()>1){ rows.remove(this); itemsContainer.removeView(view); renumberRows(); recalc(); }});
-            view.addView(slNo,lp(30)); view.addView(desc,lp(180)); view.addView(hsn,lp(65)); view.addView(gst,lp(70)); view.addView(qty,lp(60)); view.addView(rate,lp(85)); view.addView(uqc,lp(60)); view.addView(amount,lp(100)); view.addView(del,lp(40));
-            qty.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { updateAmount(); recalc(); }});
-            rate.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { updateAmount(); recalc(); }});
-            amount.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { updateRate(); recalc(); }});
-            gst.setOnItemSelectedListener(new SimpleSpinnerListener() { @Override public void changed() { recalc(); }});
+            hsnSac = edit("", false); applyBoxBackground(hsnSac);
+            gst = spinner(GST_RATES);
+            incToggle = new CheckBox(ctx); incToggle.setText("");
+            qty = edit("Qty", true); applyBoxBackground(qty);
+            rate = edit("Rate", true); applyBoxBackground(rate);
+            uqc = spinner(UQC_CODES);
+            amount = edit("Amount", true); amount.setEnabled(false); applyBoxBackground(amount);
+            totalInclGst = edit("Total", true); totalInclGst.setEnabled(false); applyBoxBackground(totalInclGst);
+
+            Button del = new Button(ctx); del.setText("X"); styleButton(del, 0xFFF44336);
+            del.setOnClickListener(v -> { if(rows.size() > 1){ rows.remove(this); itemsContainer.removeView(view); renumberRows(); recalc(); }});
+
+            view.addView(slNo, lp(30)); view.addView(desc, lp(150)); view.addView(hsnSac, lp(75)); view.addView(gst, lp(60));
+            view.addView(incToggle, lp(45)); view.addView(qty, lp(55)); view.addView(rate, lp(80)); view.addView(uqc, lp(55));
+            view.addView(amount, lp(95)); view.addView(totalInclGst, lp(110)); view.addView(del, lp(40));
+
+            qty.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { updateAmounts(); recalc(); }});
+            rate.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { if (rate.hasFocus()) { updateAmounts(); } recalc(); }});
+            totalInclGst.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { if (totalInclGst.hasFocus()) { updateAmounts(); } recalc(); }});
+            gst.setOnItemSelectedListener(new SimpleSpinnerListener() { @Override public void changed() { updateAmounts(); recalc(); }});
+            incToggle.setOnCheckedChangeListener((buttonView, isChecked) -> { updateAmounts(); recalc(); });
+            updateAmounts();
         }
+
         private void setupItemAutoComplete() {
             String[] items = HSN_MAP.keySet().toArray(new String[0]);
             ArrayAdapter<String> adapter = new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_dropdown_item_1line, items);
             desc.setAdapter(adapter); desc.setThreshold(1);
-            desc.setOnItemClickListener((p, v, pos, id) -> { String item = (String) p.getItemAtPosition(pos); hsn.setText(HSN_MAP.get(item)); });
+            desc.setOnItemClickListener((p, v, pos, id) -> { String item = (String) p.getItemAtPosition(pos); hsnSac.setText(HSN_MAP.get(item)); });
+            desc.addTextChangedListener(new SimpleTextWatcher() {
+                @Override public void changed() { String item = desc.getText().toString().trim(); if (HSN_MAP.containsKey(item)) hsnSac.setText(HSN_MAP.get(item)); }
+            });
+            desc.setOnFocusChangeListener((v, hasFocus) -> { if (!hasFocus) { String item = desc.getText().toString().trim(); if (HSN_MAP.containsKey(item)) hsnSac.setText(HSN_MAP.get(item)); } });
         }
-        private void updateAmount() { if (isUpdating) return; isUpdating = true; String qS = qty.getText().toString(), rS = rate.getText().toString(); if(qS.isEmpty() || rS.isEmpty()) amount.setText(""); else try { amount.setText(String.format(Locale.US, "%.2f", Double.parseDouble(qS)*Double.parseDouble(rS))); } catch(Exception e){ amount.setText(""); } isUpdating = false; }
-        private void updateRate() { if (isUpdating) return; isUpdating = true; String qS = qty.getText().toString(), aS = amount.getText().toString(); if(!qS.isEmpty() && !aS.isEmpty()) try { double q = Double.parseDouble(qS); if(q>0) rate.setText(String.format(Locale.US, "%.2f", Double.parseDouble(aS)/q)); } catch(Exception e){} isUpdating = false; }
+
+        private void updateAmounts() {
+            if (isUpdating) return; isUpdating = true;
+            try {
+                double q = 0; try { q = Double.parseDouble(qty.getText().toString()); } catch(Exception e){}
+                double gRate = 0; try { gRate = Double.parseDouble(gst.getSelectedItem().toString()); } catch(Exception e){}
+                if (!incToggle.isChecked()) {
+                    rate.setEnabled(true); totalInclGst.setEnabled(false);
+                    applyBoxBackground(rate); applyBoxBackground(totalInclGst);
+                    double r = 0; try { r = Double.parseDouble(rate.getText().toString()); } catch(Exception e){}
+                    double taxable = q * r; double total = taxable * (1 + gRate / 100.0);
+                    amount.setText(String.format(Locale.US, "%.2f", taxable)); totalInclGst.setText(String.format(Locale.US, "%.2f", total));
+                } else {
+                    rate.setEnabled(false); totalInclGst.setEnabled(true);
+                    applyBoxBackground(rate); applyBoxBackground(totalInclGst);
+                    double total = 0; try { total = Double.parseDouble(totalInclGst.getText().toString()); } catch(Exception e){}
+                    double taxable = total / (1 + gRate / 100.0); double r = q > 0 ? taxable / q : 0;
+                    amount.setText(String.format(Locale.US, "%.2f", taxable)); rate.setText(String.format(Locale.US, "%.2f", r));
+                }
+            } catch (Exception e){}
+            isUpdating = false;
+        }
         LinearLayout.LayoutParams lp(int w){return new LinearLayout.LayoutParams(dp(w),dp(42));}
         double amountVal(){try{return Double.parseDouble(amount.getText().toString());}catch(Exception e){return 0;}}
         double qtyVal(){try{return Double.parseDouble(qty.getText().toString());}catch(Exception e){return 0;}}
@@ -918,4 +802,110 @@ public class MainActivity extends Activity {
 
     private void sharePdf(Uri uri) { Intent i = new Intent(Intent.ACTION_SEND); i.setType("application/pdf"); i.putExtra(Intent.EXTRA_STREAM, uri); i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); startActivity(Intent.createChooser(i, "Share invoice PDF")); }
     private double parseValue(TextView tv) { try { return Double.parseDouble(tv.getText().toString().replace("₹ ", "").replace(",", "").trim()); } catch (Exception e) { return 0; } }
+    
+    private void box(Canvas c, Paint p, float x,float y,float w,float h){ p.setStyle(Paint.Style.STROKE); c.drawRect(x,y,x+w,y+h,p); p.setStyle(Paint.Style.FILL); }
+    private void text(Canvas c, Paint p, String s, float x,float y, boolean bold){ text(c,p,s,x,y,bold,false,false); }
+    private void text(Canvas c, Paint p, String s, float x,float y, boolean bold, boolean right, boolean underline){ p.setTypeface(bold?Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD):Typeface.SANS_SERIF); p.setUnderlineText(underline); if(right) c.drawText(s,x-p.measureText(s),y,p); else c.drawText(s,x,y,p); p.setUnderlineText(false); }
+    private void center(Canvas c, Paint p, String s,float x,float y, boolean bold){ p.setTypeface(bold?Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD):Typeface.SANS_SERIF); c.drawText(s,x-p.measureText(s)/2,y,p); }
+    private void drawMultiline(Canvas c, Paint p, String s,float x,float y,float maxW,float leading){ String[] words=s.replace("\n"," ").split(" "); String line=""; float yy=y; for(String word:words){ if(word.isEmpty())continue; String test=line.isEmpty()?word:line+" "+word; if(p.measureText(test)>maxW){c.drawText(line,x,yy,p);yy+=leading;line=word;} else line=test;} if(!line.isEmpty())c.drawText(line,x,yy,p); }
+
+    private void exportData() {
+        try {
+            SQLiteDatabase db = dbHelper.getReadableDatabase();
+            JSONObject backupJson = new JSONObject();
+            String[] tables = {"contacts", "history", "users", "invoices", "invoice_items"};
+            for (String table : tables) { backupJson.put(table, tableToJson(db, table)); }
+            String dateStr = new SimpleDateFormat("dd-MM-yyyy", Locale.US).format(new Date());
+            String fileName = "Vanya_Backup_" + dateStr + ".json";
+            File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (!downloadsDir.exists()) downloadsDir.mkdirs();
+            File backupFile = new File(downloadsDir, fileName);
+            FileWriter writer = new FileWriter(backupFile); writer.write(backupJson.toString(4)); writer.flush(); writer.close();
+            Toast.makeText(this, "Backup saved to: " + backupFile.getAbsolutePath(), Toast.LENGTH_LONG).show();
+        } catch (Exception e) { e.printStackTrace(); Toast.makeText(this, "Export failed: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
+    private JSONArray tableToJson(SQLiteDatabase db, String tableName) {
+        JSONArray jsonArray = new JSONArray(); Cursor cursor = db.query(tableName, null, null, null, null, null, null);
+        if (cursor != null) {
+            String[] cols = cursor.getColumnNames();
+            while (cursor.moveToNext()) {
+                JSONObject row = new JSONObject();
+                for (String col : cols) {
+                    try {
+                        int idx = cursor.getColumnIndex(col);
+                        switch (cursor.getType(idx)) {
+                            case Cursor.FIELD_TYPE_NULL: row.put(col, JSONObject.NULL); break;
+                            case Cursor.FIELD_TYPE_INTEGER: row.put(col, cursor.getLong(idx)); break;
+                            case Cursor.FIELD_TYPE_FLOAT: row.put(col, cursor.getDouble(idx)); break;
+                            case Cursor.FIELD_TYPE_STRING: row.put(col, cursor.getString(idx)); break;
+                        }
+                    } catch (Exception e) {}
+                }
+                jsonArray.put(row);
+            }
+            cursor.close();
+        }
+        return jsonArray;
+    }
+
+    private void importData() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT); intent.setType("*/*"); intent.addCategory(Intent.CATEGORY_OPENABLE);
+        try { startActivityForResult(Intent.createChooser(intent, "Select Backup File"), 1234); } catch (Exception e) { Toast.makeText(this, "No file manager found", Toast.LENGTH_SHORT).show(); }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 1234 && resultCode == RESULT_OK && data != null && data.getData() != null) { restoreFromUri(data.getData()); }
+    }
+
+    private void restoreFromUri(Uri uri) {
+        try {
+            InputStream is = getContentResolver().openInputStream(uri);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+            StringBuilder sb = new StringBuilder(); String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+            is.close();
+            JSONObject backupJson = new JSONObject(sb.toString());
+            SQLiteDatabase db = dbHelper.getWritableDatabase();
+            db.beginTransaction();
+            try {
+                db.delete("contacts", null, null); db.delete("history", null, null); db.delete("users", null, null); db.delete("invoices", null, null); db.delete("invoice_items", null, null);
+                String[] tables = {"contacts", "history", "users", "invoices", "invoice_items"};
+                for (String table : tables) {
+                    if (backupJson.has(table)) {
+                        JSONArray array = backupJson.getJSONArray(table);
+                        for (int i = 0; i < array.length(); i++) {
+                            JSONObject row = array.getJSONObject(i); ContentValues cv = new ContentValues(); Iterator<String> keys = row.keys();
+                            while (keys.hasNext()) {
+                                String key = keys.next(); Object val = row.get(key);
+                                if (val == JSONObject.NULL) cv.putNull(key);
+                                else if (val instanceof Integer || val instanceof Long) cv.put(key, ((Number) val).longValue());
+                                else if (val instanceof Double || val instanceof Float) cv.put(key, ((Number) val).doubleValue());
+                                else if (val instanceof Boolean) cv.put(key, (Boolean) val ? 1 : 0);
+                                else cv.put(key, val.toString());
+                            }
+                            db.insert(table, null, cv);
+                        }
+                    }
+                }
+                db.setTransactionSuccessful();
+                Toast.makeText(this, "Data restored successfully!", Toast.LENGTH_SHORT).show();
+                setupAutoComplete(buyerBillTo); setupAutoComplete(consignee); resetForNewInvoice();
+            } finally { db.endTransaction(); }
+        } catch (Exception e) { e.printStackTrace(); Toast.makeText(this, "Failed to restore data: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
+    private String nextInvoicePreview() { return String.format(Locale.US, "V-%04d", prefs.getInt(COUNTER, 1)); }
+
+    private int adjustColor(int color, float factor) {
+        float[] hsv = new float[3]; Color.colorToHSV(color, hsv); hsv[2] *= factor;
+        return Color.HSVToColor(Color.alpha(color), hsv);
+    }
+
+    private int getLightSectionColor(int color) {
+        float[] hsv = new float[3]; Color.colorToHSV(color, hsv); hsv[1] = 0.04f; hsv[2] = 0.99f;
+        return Color.HSVToColor(hsv);
+    }
 }
