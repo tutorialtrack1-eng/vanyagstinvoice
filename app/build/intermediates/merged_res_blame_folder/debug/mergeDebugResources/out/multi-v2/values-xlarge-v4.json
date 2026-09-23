@@ -4,7 +4,7 @@
             "outputFile": "com.vanyaliving.invoice.app-mergeDebugResources-29:/values-xlarge-v4/values-xlarge-v4.xml",
             "map": [
                 {
-                    "source": "C:\\Users\\paddu.ITIES-21\\.gradle\\caches\\9.3.0\\transforms\\cfa988b69bffed19c8cf460b2acacf31\\workspace\\transformed\\appcompat-1.7.0\\res\\values-xlarge-v4\\values-xlarge-v4.xml",
+                    "source": "C:\\Users\\paddu.ITIES-21\\.gradle\\caches\\9.6.0\\transforms\\f8a6b250deae546ca697272c24cac969\\transformed\\appcompat-1.7.0\\res\\values-xlarge-v4\\values-xlarge-v4.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7",
                         "startColumns": "4,4,4,4,4,4",

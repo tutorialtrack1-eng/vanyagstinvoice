@@ -5,7 +5,7 @@
     <color name="border">#B8B8B8</color>
     <color name="header">#EDEDED</color>
     <color name="white">#FFFFFF</color>
-    <string name="app_name">Vanya GST Invoice</string>
+    <string name="app_name">GST Billbook</string>
     <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:colorAccent">#1E5AA8</item>

@@ -1,4 +1,7 @@
-#Fri Sep 04 00:25:57 IST 2026
+#Wed Sep 23 20:58:10 IST 2026
 base.0=D\:\\Appium\\VanyaGSTInvoice_Android_Project\\VanyaGSTInvoice\\app\\build\\intermediates\\dex\\debugAndroidTest\\mergeProjectDexDebugAndroidTest\\0\\classes.dex
+base.1=D\:\\Appium\\VanyaGSTInvoice_Android_Project\\VanyaGSTInvoice\\app\\build\\intermediates\\global_synthetics_dex\\debugAndroidTest\\generateDebugAndroidTestGlobalSynthetics\\classes.dex
 path.0=0/classes.dex
+path.1=classes.dex
 renamed.0=classes.dex
+renamed.1=classes2.dex
