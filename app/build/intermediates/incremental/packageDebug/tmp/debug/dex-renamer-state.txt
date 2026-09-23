@@ -1,4 +1,4 @@
-#Thu Sep 24 00:47:13 IST 2026
+#Thu Sep 24 01:32:08 IST 2026
 base.0=D\:\\Appium\\VanyaGSTInvoice_Android_Project\\VanyaGSTInvoice\\app\\build\\intermediates\\dex\\debug\\mergeExtDexDebug\\classes.dex
 base.1=D\:\\Appium\\VanyaGSTInvoice_Android_Project\\VanyaGSTInvoice\\app\\build\\intermediates\\dex\\debug\\mergeProjectDexDebug\\0\\classes.dex
 base.2=D\:\\Appium\\VanyaGSTInvoice_Android_Project\\VanyaGSTInvoice\\app\\build\\intermediates\\dex\\debug\\mergeProjectDexDebug\\4\\classes.dex

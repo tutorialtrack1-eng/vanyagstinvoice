@@ -27,6 +27,7 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Patterns;
 import android.view.Gravity;
@@ -226,9 +227,11 @@ public class MainActivity extends Activity {
 
     private LinearLayout field(String title, View input) {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(4), dp(2), dp(4), dp(2));
-        TextView t = new TextView(this); t.setText(title); t.setTextSize(12); t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView t = new TextView(this); t.setText(title); t.setTextSize(11.5f); t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         t.setTextColor(0xFF37474F);
-        t.setPadding(dp(2), 0, 0, dp(2));
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.END);
+        t.setPadding(dp(2), 0, dp(2), dp(2));
         box.addView(t); LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(-1, -2); inputLp.weight = 0; box.addView(input, inputLp); return box;
     }
 
@@ -399,7 +402,7 @@ public class MainActivity extends Activity {
         buyerBillTo = new AutoCompleteTextView(this);
         buyerBillTo.setHint("Buyer Name & Address");
         buyerBillTo.setTextSize(13);
-        buyerBillTo.setMinHeight(dp(48));
+        buyerBillTo.setMinHeight(dp(64));
         buyerBillTo.setSingleLine(false);
         buyerBillTo.setMaxLines(3);
         buyerBillTo.setHorizontallyScrolling(false);
@@ -410,10 +413,8 @@ public class MainActivity extends Activity {
 
         buyerPhone = edit("Phone Number", false);
         buyerPhone.setInputType(InputType.TYPE_CLASS_PHONE);
-        buyerPhone.setMinHeight(dp(56));
         buyerEmail = edit("Email Address", false);
         buyerEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        buyerEmail.setMinHeight(dp(56));
         buyerGstin = edit("GSTIN Number", false);
         buyerState = spinner(STATES);
         buyerState.setOnItemSelectedListener(new SimpleSpinnerListener() {
@@ -421,8 +422,11 @@ public class MainActivity extends Activity {
         });
 
         buyerSec.addView(field("Buyer (Bill To) *", buyerBillTo));
-        buyerSec.addView(field("Phone", buyerPhone));
-        buyerSec.addView(field("Email", buyerEmail));
+
+        LinearLayout g2 = row();
+        g2.addView(field("Phone", buyerPhone), weightLp());
+        g2.addView(field("Email", buyerEmail), weightLp());
+        buyerSec.addView(g2);
 
         LinearLayout g2b = row();
         g2b.addView(field("GSTIN", buyerGstin), weightLp());
@@ -435,10 +439,13 @@ public class MainActivity extends Activity {
         sameAsBilling.setPadding(dp(4), dp(4), dp(4), dp(4));
         buyerSec.addView(sameAsBilling);
 
+        LinearLayout consigneeContainer = new LinearLayout(this);
+        consigneeContainer.setOrientation(LinearLayout.VERTICAL);
+
         consignee = new AutoCompleteTextView(this);
         consignee.setHint("Consignee Name & Address");
         consignee.setTextSize(13);
-        consignee.setMinHeight(dp(48));
+        consignee.setMinHeight(dp(64));
         consignee.setSingleLine(false);
         consignee.setMaxLines(3);
         consignee.setHorizontallyScrolling(false);
@@ -449,22 +456,25 @@ public class MainActivity extends Activity {
 
         consigneePhone = edit("Phone Number", false);
         consigneePhone.setInputType(InputType.TYPE_CLASS_PHONE);
-        consigneePhone.setMinHeight(dp(56));
         consigneeEmail = edit("Email Address", false);
         consigneeEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        consigneeEmail.setMinHeight(dp(56));
         consigneeGstin = edit("GSTIN Number", false);
         consigneeState = spinner(STATES);
 
-        buyerSec.addView(field("Consignee (Ship To)", consignee));
-        buyerSec.addView(field("Phone", consigneePhone));
-        buyerSec.addView(field("Email", consigneeEmail));
+        consigneeContainer.addView(field("Consignee (Ship To)", consignee));
+
+        LinearLayout g3 = row();
+        g3.addView(field("Phone", consigneePhone), weightLp());
+        g3.addView(field("Email", consigneeEmail), weightLp());
+        consigneeContainer.addView(g3);
 
         LinearLayout g3b = row();
         g3b.addView(field("GSTIN", consigneeGstin), weightLp());
         g3b.addView(field("State", consigneeState), weightLp());
-        buyerSec.addView(g3b);
-        addStateSeparator(buyerSec);
+        consigneeContainer.addView(g3b);
+        addStateSeparator(consigneeContainer);
+
+        buyerSec.addView(consigneeContainer);
         root.addView(buyerSec);
 
         SimpleTextWatcher syncWatcher = new SimpleTextWatcher() {
@@ -576,19 +586,10 @@ public class MainActivity extends Activity {
         recalc();
 
         sameAsBilling.setOnCheckedChangeListener((v, c) -> {
-            boolean e = !c;
-            consignee.setEnabled(e);
-            consigneePhone.setEnabled(e);
-            consigneeEmail.setEnabled(e);
-            consigneeGstin.setEnabled(e);
-            consigneeState.setEnabled(e);
+            consigneeContainer.setVisibility(c ? View.GONE : View.VISIBLE);
             if (c) syncConsignee();
-            applyBoxBackground(consignee);
-            applyBoxBackground(consigneePhone);
-            applyBoxBackground(consigneeEmail);
-            applyBoxBackground(consigneeGstin);
-            applyBoxBackground(consigneeState);
         });
+        sameAsBilling.setChecked(true);
     }
 
     private void addStateSeparator(LinearLayout parent) {
@@ -945,12 +946,40 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void clearInvoiceForm() {
+        invoiceDate.setText(today());
+        buyerBillTo.setText("");
+        buyerPhone.setText("");
+        buyerEmail.setText("");
+        buyerGstin.setText("");
+        sameAsBilling.setChecked(true);
+        consignee.setText("");
+        consigneePhone.setText("");
+        consigneeEmail.setText("");
+        consigneeGstin.setText("");
+        destination.setText("");
+        vehicle.setText("");
+        transporter.setText("");
+        vehicleNumber.setText("");
+        deliveryNote.setText("");
+        buyerOrderNo.setText("");
+        buyerOrderDate.setText("");
+        referenceNoDate.setText("");
+        otherInfo.setText("");
+        rows.clear();
+        itemsContainer.removeAllViews();
+        addItemsHeader();
+        addItemRow();
+        recalc();
+    }
+
     private void loadInvoiceByNumber(String no) {
         if (no.isEmpty()) return;
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         Cursor c = db.query("invoices", null, "invoice_no=?", new String[]{no}, null, null, null);
         if (!c.moveToFirst()) {
             c.close();
+            clearInvoiceForm();
             return;
         }
         loadingInvoice = true;
@@ -1177,15 +1206,15 @@ public class MainActivity extends Activity {
             if (!cg.isEmpty()) { text(c,p,"GSTIN: " + cg, L+175+6, cy, true); cy+=10; }
             if (!consigneeEmail.getText().toString().trim().isEmpty()) text(c,p,"Email: " + consigneeEmail.getText().toString().trim().toLowerCase(Locale.ROOT), L+175+6, cy, false);
 
-            float oy = y+28; p.setTextSize(8.5f);
-            if (!destination.getText().toString().trim().isEmpty()) { text(c, p, "Dest: " + titleCase(destination.getText().toString()), L+356, oy, false); oy += 10; }
-            if (!vehicleNumber.getText().toString().trim().isEmpty()) { text(c, p, "Veh No: " + vehicleNumber.getText().toString().trim().toUpperCase(Locale.ROOT), L+356, oy, false); oy += 10; }
-            if (!transporter.getText().toString().trim().isEmpty()) { text(c, p, "Trnsp: " + titleCase(transporter.getText().toString()), L+356, oy, false); oy += 10; }
-            if (!deliveryNote.getText().toString().trim().isEmpty()) { text(c, p, "Challan: " + deliveryNote.getText().toString().trim(), L+356, oy, false); oy += 10; }
-            if (!buyerOrderNo.getText().toString().trim().isEmpty()) { text(c, p, "Ord No: " + buyerOrderNo.getText().toString().trim(), L+356, oy, false); oy += 10; }
-            if (!buyerOrderDate.getText().toString().trim().isEmpty()) { text(c, p, "Ord Date: " + buyerOrderDate.getText().toString().trim(), L+356, oy, false); oy += 10; }
-            if (!referenceNoDate.getText().toString().trim().isEmpty()) { text(c, p, "Ref: " + referenceNoDate.getText().toString().trim(), L+356, oy, false); oy += 10; }
-            if (!otherInfo.getText().toString().trim().isEmpty()) { text(c, p, "Info: " + titleCase(otherInfo.getText().toString()), L+356, oy, false); }
+            float oy = y+28; p.setTextSize(8.5f); float vOff = 42;
+            if (!destination.getText().toString().trim().isEmpty()) { text(c, p, "Dest:", L+356, oy, true); text(c, p, titleCase(destination.getText().toString()), L+356+vOff, oy, false); oy += 10; }
+            if (!vehicleNumber.getText().toString().trim().isEmpty()) { text(c, p, "Veh No:", L+356, oy, true); text(c, p, vehicleNumber.getText().toString().trim().toUpperCase(Locale.ROOT), L+356+vOff, oy, false); oy += 10; }
+            if (!transporter.getText().toString().trim().isEmpty()) { text(c, p, "Trnsp:", L+356, oy, true); text(c, p, titleCase(transporter.getText().toString()), L+356+vOff, oy, false); oy += 10; }
+            if (!deliveryNote.getText().toString().trim().isEmpty()) { text(c, p, "Challan:", L+356, oy, true); text(c, p, deliveryNote.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
+            if (!buyerOrderNo.getText().toString().trim().isEmpty()) { text(c, p, "Ord No:", L+356, oy, true); text(c, p, buyerOrderNo.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
+            if (!buyerOrderDate.getText().toString().trim().isEmpty()) { text(c, p, "Ord Dt:", L+356, oy, true); text(c, p, buyerOrderDate.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
+            if (!referenceNoDate.getText().toString().trim().isEmpty()) { text(c, p, "Ref:", L+356, oy, true); text(c, p, referenceNoDate.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
+            if (!otherInfo.getText().toString().trim().isEmpty()) { text(c, p, "Info:", L+356, oy, true); text(c, p, titleCase(otherInfo.getText().toString()), L+356+vOff, oy, false); }
 
             y = 238;
         } else { text(c,p,"Invoice #: " + invoiceNo.getText().toString(),L,y,true); text(c,p,"Date: " + invoiceDate.getText().toString(),R,y,true,true, false); y+=35; }
@@ -1232,7 +1261,6 @@ public class MainActivity extends Activity {
                 y+=16;
             }
             y+=25; p.setTextSize(9.5f); text(c,p,"Amount in Words: "+amountWords.getText(),L,y,true);
-            if (othersCb != null && othersCb.isChecked()) { String oi = otherInfo.getText().toString().trim(); if (!oi.isEmpty()) { text(c,p,"Other Info: " + titleCase(oi),L,y+13,false); y+=20; } }
             y+=15; box(c,p,L,y,W,85); p.setTextSize(10f); p.setUnderlineText(true); text(c,p,"BANK DETAILS", L+8, y+14, true); p.setUnderlineText(false);
             p.setTextSize(9f);
             text(c,p,"Account Name: Vanya Living Furniture",L+8,y+28,true); text(c,p,"Account Number: 50200123667011",L+8,y+40,true);
