@@ -336,14 +336,44 @@ public class MainActivity extends Activity {
         root.addView(sBox);
 
         LinearLayout invSec = createSectionContainer("Invoice Details", BLUE);
+        LinearLayout invNoContainer = new LinearLayout(this);
+        invNoContainer.setOrientation(LinearLayout.HORIZONTAL);
+        invNoContainer.setGravity(Gravity.CENTER_VERTICAL);
+
         HorizontalScrollView invoiceNoScroll = new HorizontalScrollView(this);
         invoiceNoScroll.setFillViewport(true);
         invoiceNoScroll.setHorizontalScrollBarEnabled(false);
         invoiceNo = edit(null, false);
         invoiceNo.setSingleLine(true);
         invoiceNo.setHorizontallyScrolling(true);
+        invoiceNo.setMinHeight(dp(56));
         invoiceNo.setText(nextInvoicePreview());
         invoiceNoScroll.addView(invoiceNo, new LinearLayout.LayoutParams(-1, -1));
+        invNoContainer.addView(invoiceNoScroll, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        LinearLayout btnCol = new LinearLayout(this);
+        btnCol.setOrientation(LinearLayout.VERTICAL);
+        btnCol.setPadding(dp(2), 0, 0, 0);
+
+        Button upBtn = new Button(this);
+        upBtn.setText("▲");
+        styleButton(upBtn, BLUE);
+        upBtn.setTextSize(10);
+        upBtn.setPadding(0, 0, 0, 0);
+        upBtn.setOnClickListener(v -> stepInvoiceNumber(1));
+
+        Button downBtn = new Button(this);
+        downBtn.setText("▼");
+        styleButton(downBtn, BLUE);
+        downBtn.setTextSize(10);
+        downBtn.setPadding(0, 0, 0, 0);
+        downBtn.setOnClickListener(v -> stepInvoiceNumber(-1));
+
+        btnCol.addView(upBtn, new LinearLayout.LayoutParams(dp(30), dp(26)));
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(dp(30), dp(26));
+        dLp.setMargins(0, dp(2), 0, 0);
+        btnCol.addView(downBtn, dLp);
+        invNoContainer.addView(btnCol);
 
         invoiceDate = edit("Date", false);
         invoiceDate.setFocusable(false);
@@ -352,7 +382,7 @@ public class MainActivity extends Activity {
         paymentSpinner = spinner(PAYMENT);
 
         LinearLayout g1 = row();
-        g1.addView(field("Invoice No *", invoiceNoScroll), weightLp());
+        g1.addView(field("Invoice No *", invNoContainer), weightLp());
         g1.addView(field("Dated *", invoiceDate), weightLp());
         g1.addView(field("Payment Mode", paymentSpinner), weightLp());
         invSec.addView(g1);
@@ -380,8 +410,10 @@ public class MainActivity extends Activity {
 
         buyerPhone = edit("Phone Number", false);
         buyerPhone.setInputType(InputType.TYPE_CLASS_PHONE);
+        buyerPhone.setMinHeight(dp(56));
         buyerEmail = edit("Email Address", false);
         buyerEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        buyerEmail.setMinHeight(dp(56));
         buyerGstin = edit("GSTIN Number", false);
         buyerState = spinner(STATES);
         buyerState.setOnItemSelectedListener(new SimpleSpinnerListener() {
@@ -417,8 +449,10 @@ public class MainActivity extends Activity {
 
         consigneePhone = edit("Phone Number", false);
         consigneePhone.setInputType(InputType.TYPE_CLASS_PHONE);
+        consigneePhone.setMinHeight(dp(56));
         consigneeEmail = edit("Email Address", false);
         consigneeEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        consigneeEmail.setMinHeight(dp(56));
         consigneeGstin = edit("GSTIN Number", false);
         consigneeState = spinner(STATES);
 
@@ -1100,32 +1134,60 @@ public class MainActivity extends Activity {
 
     private void drawPdfPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setTextSize(9.5f); p.setColor(Color.BLACK); p.setTypeface(pdfTypeface(false));
-        final float L=45, R=550, W=R-L; float y = 45;
+        final float L=45, R=550, W=R-L; float y = 35;
         if (isFirst) {
-            p.setTypeface(pdfTypeface(true)); p.setTextSize(16); p.setUnderlineText(true); center(c,p,"TAX INVOICE",297.5f,y, true); p.setUnderlineText(false); y+=18;
+            p.setTypeface(pdfTypeface(true)); p.setTextSize(15); p.setUnderlineText(true); center(c,p,"TAX INVOICE",297.5f,y, true); p.setUnderlineText(false); y+=14;
             p.setStrokeWidth(1.2f); p.setStyle(Paint.Style.STROKE); c.drawLine(L,y,R,y,p); p.setStyle(Paint.Style.FILL);
-            y = 100; p.setTextSize(13f); text(c,p,sellerName.getText().toString(),L,y,true);
-            p.setTextSize(9.5f); drawMultiline(c,p,sellerAddress.getText().toString(),L,y+15,250,12);
-            p.setTextSize(9.5f); text(c,p,"GSTIN: " + sellerGstin.getText().toString().replace("GSTIN: ",""),L,y+45,true); text(c,p,"Phone: " + SELLER_PHONE + " | Email: " + SELLER_EMAIL,L,y+58,false);
-            p.setTextSize(10.5f); float rlX = R - 120;
-            text(c,p,"Invoice No:", rlX, y, true); text(c,p,invoiceNo.getText().toString(), R, y, true, true, false); y += 15;
-            text(c,p,"Date:", rlX, y, true); text(c,p,invoiceDate.getText().toString(), R, y, true, true, false); y += 15;
-            text(c,p,"Payment:", rlX, y, true); text(c,p,paymentSpinner.getSelectedItem().toString(), R, y, false, true, false);
-            y = 205; box(c,p,L,y,W,105); c.drawLine(L+W/2,y,L+W/2,y+105,p);
-            p.setTextSize(10.5f); p.setUnderlineText(true); text(c,p,"BILL TO",L+8,y+16,true); text(c,p,"SHIP TO",L+W/2+8,y+16,true); p.setUnderlineText(false);
-            float by = y+30; String[] bl = buyerBillTo.getText().toString().toUpperCase(Locale.ROOT).split("\n");
-            if (bl.length > 0) { p.setTextSize(10.5f); text(c,p,bl[0],L+8,by,true); by+=13; p.setTextSize(9f); for(int i=1; i<Math.min(bl.length, 3); i++) { text(c,p,bl[i],L+8,by,false); by+=11; } }
-            text(c,p,"State: " + formatState((String)buyerState.getSelectedItem()), L+8, by, false); by+=11;
-            text(c,p,"GSTIN: " + buyerGstin.getText().toString().toUpperCase(), L+8, by, true); by+=11;
-            if (!buyerEmail.getText().toString().trim().isEmpty()) text(c,p,"Email: " + buyerEmail.getText().toString().trim().toLowerCase(Locale.ROOT), L+8, by, false);
-            float cy = y+30; String[] cl = consignee.getText().toString().toUpperCase(Locale.ROOT).split("\n");
-            if (cl.length > 0) { p.setTextSize(10.5f); text(c,p,cl[0],L+W/2+8,cy,true); cy+=13; p.setTextSize(9f); for(int i=1; i<Math.min(cl.length, 3); i++) { text(c,p,cl[i],L+W/2+8,cy,false); cy+=11; } }
-            text(c,p,"State: " + formatState((String)consigneeState.getSelectedItem()), L+W/2+8, cy, false); cy+=11;
-            text(c,p,"GSTIN: " + consigneeGstin.getText().toString().toUpperCase(), L+W/2+8, cy, true); cy+=11;
-            if (!consigneeEmail.getText().toString().trim().isEmpty()) text(c,p,"Email: " + consigneeEmail.getText().toString().trim().toLowerCase(Locale.ROOT), L+W/2+8, cy, false);
-            y = 330; box(c, p, L, y, W, 40); c.drawLine(L+W/3, y, L+W/3, y+40, p); c.drawLine(L+2*W/3, y, L+2*W/3, y+40, p);
-            text(c, p, "Destination: " + titleCase(destination.getText().toString()), L+7, y+24, true); text(c, p, "Vehicle Type: " + titleCase(vehicle.getText().toString()), L+W/3+7, y+24, true); text(c, p, "Vehicle No: " + titleCase(vehicleNumber.getText().toString()), L+2*W/3+7, y+24, true);
-            y = 390;
+
+            float sy = 62;
+            p.setTextSize(12f); text(c,p,sellerName.getText().toString(),L,sy,true);
+            p.setTextSize(8.5f); drawMultiline(c,p,sellerAddress.getText().toString(),L,sy+13,240,10);
+            p.setTextSize(8.5f); text(c,p,"GSTIN: " + sellerGstin.getText().toString().replace("GSTIN: ",""),L,sy+38,true);
+            text(c,p,"Phone: " + SELLER_PHONE + " | Email: " + SELLER_EMAIL,L,sy+49,false);
+
+            p.setTextSize(9.5f); float rlX = R - 120; float metaY = 62;
+            text(c,p,"Invoice No:", rlX, metaY, true); text(c,p,invoiceNo.getText().toString(), R, metaY, true, true, false); metaY += 13;
+            text(c,p,"Date:", rlX, metaY, true); text(c,p,invoiceDate.getText().toString(), R, metaY, true, true, false); metaY += 13;
+            text(c,p,"Payment:", rlX, metaY, true); text(c,p,paymentSpinner.getSelectedItem().toString(), R, metaY, false, true, false);
+
+            y = 125; float boxH = 100;
+            box(c,p,L,y,W,boxH);
+            c.drawLine(L+175,y,L+175,y+boxH,p);
+            c.drawLine(L+350,y,L+350,y+boxH,p);
+
+            p.setTextSize(10f); p.setUnderlineText(true);
+            text(c,p,"BILL TO",L+6,y+15,true);
+            text(c,p,"SHIP TO",L+175+6,y+15,true);
+            text(c,p,"OTHER DETAILS",L+350+6,y+15,true);
+            p.setUnderlineText(false);
+
+            float by = y+28; String[] bl = buyerBillTo.getText().toString().toUpperCase(Locale.ROOT).split("\n");
+            if (bl.length > 0) { p.setTextSize(9.5f); text(c,p,bl[0],L+6,by,true); by+=12; p.setTextSize(8.5f); for(int i=1; i<Math.min(bl.length, 3); i++) { text(c,p,bl[i],L+6,by,false); by+=10; } }
+            p.setTextSize(8.5f);
+            text(c,p,"State: " + formatState((String)buyerState.getSelectedItem()), L+6, by, false); by+=10;
+            String bg = buyerGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
+            if (!bg.isEmpty()) { text(c,p,"GSTIN: " + bg, L+6, by, true); by+=10; }
+            if (!buyerEmail.getText().toString().trim().isEmpty()) text(c,p,"Email: " + buyerEmail.getText().toString().trim().toLowerCase(Locale.ROOT), L+6, by, false);
+
+            float cy = y+28; String[] cl = consignee.getText().toString().toUpperCase(Locale.ROOT).split("\n");
+            if (cl.length > 0) { p.setTextSize(9.5f); text(c,p,cl[0],L+175+6,cy,true); cy+=12; p.setTextSize(8.5f); for(int i=1; i<Math.min(cl.length, 3); i++) { text(c,p,cl[i],L+175+6,cy,false); cy+=10; } }
+            p.setTextSize(8.5f);
+            text(c,p,"State: " + formatState((String)consigneeState.getSelectedItem()), L+175+6, cy, false); cy+=10;
+            String cg = consigneeGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
+            if (!cg.isEmpty()) { text(c,p,"GSTIN: " + cg, L+175+6, cy, true); cy+=10; }
+            if (!consigneeEmail.getText().toString().trim().isEmpty()) text(c,p,"Email: " + consigneeEmail.getText().toString().trim().toLowerCase(Locale.ROOT), L+175+6, cy, false);
+
+            float oy = y+28; p.setTextSize(8.5f);
+            if (!destination.getText().toString().trim().isEmpty()) { text(c, p, "Dest: " + titleCase(destination.getText().toString()), L+356, oy, false); oy += 10; }
+            if (!vehicleNumber.getText().toString().trim().isEmpty()) { text(c, p, "Veh No: " + vehicleNumber.getText().toString().trim().toUpperCase(Locale.ROOT), L+356, oy, false); oy += 10; }
+            if (!transporter.getText().toString().trim().isEmpty()) { text(c, p, "Trnsp: " + titleCase(transporter.getText().toString()), L+356, oy, false); oy += 10; }
+            if (!deliveryNote.getText().toString().trim().isEmpty()) { text(c, p, "Challan: " + deliveryNote.getText().toString().trim(), L+356, oy, false); oy += 10; }
+            if (!buyerOrderNo.getText().toString().trim().isEmpty()) { text(c, p, "Ord No: " + buyerOrderNo.getText().toString().trim(), L+356, oy, false); oy += 10; }
+            if (!buyerOrderDate.getText().toString().trim().isEmpty()) { text(c, p, "Ord Date: " + buyerOrderDate.getText().toString().trim(), L+356, oy, false); oy += 10; }
+            if (!referenceNoDate.getText().toString().trim().isEmpty()) { text(c, p, "Ref: " + referenceNoDate.getText().toString().trim(), L+356, oy, false); oy += 10; }
+            if (!otherInfo.getText().toString().trim().isEmpty()) { text(c, p, "Info: " + titleCase(otherInfo.getText().toString()), L+356, oy, false); }
+
+            y = 238;
         } else { text(c,p,"Invoice #: " + invoiceNo.getText().toString(),L,y,true); text(c,p,"Date: " + invoiceDate.getText().toString(),R,y,true,true, false); y+=35; }
         float[] xs = {L, L+25, L+215, L+275, L+340, L+385, L+440, R};
         p.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 25, p); p.setColor(Color.BLACK);
@@ -1199,21 +1261,101 @@ public class MainActivity extends Activity {
     }
 
     private void showContactList() {
-        SQLiteDatabase db = dbHelper.getReadableDatabase(); Cursor c = db.query("contacts", null, null, null, null, null, "name ASC");
-        LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); l.setPadding(dp(10),dp(10),dp(10),dp(10));
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        Cursor c = db.query("contacts", null, null, null, null, null, "name ASC");
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        l.setPadding(dp(12), dp(12), dp(12), dp(12));
         int nameIdx = c.getColumnIndex("name");
         int phoneIdx = c.getColumnIndex("phone");
         int gstinIdx = c.getColumnIndex("gstin");
         int stateIdx = c.getColumnIndex("state");
-        while(c.moveToNext()){
-            String name = nameIdx >= 0 ? c.getString(nameIdx) : "";
-            String phone = phoneIdx >= 0 ? c.getString(phoneIdx) : "";
-            String gstin = gstinIdx >= 0 ? c.getString(gstinIdx) : "";
-            String state = stateIdx >= 0 ? c.getString(stateIdx) : "";
-            TextView tv = new TextView(this); tv.setText(String.format("%s\nPh: %s | GST: %s\nState: %s", name, phone, gstin, state));
-            tv.setPadding(0,dp(8),0,dp(8)); l.addView(tv); View dv = new View(this); dv.setBackgroundColor(0xFFCCCCCC); l.addView(dv, new LinearLayout.LayoutParams(-1,dp(1)));
+
+        if (!c.moveToFirst()) {
+            c.close();
+            TextView emptyTv = new TextView(this);
+            emptyTv.setText("No saved contacts found.");
+            emptyTv.setTextSize(14);
+            emptyTv.setPadding(dp(8), dp(16), dp(8), dp(16));
+            l.addView(emptyTv);
+        } else {
+            do {
+                String name = nameIdx >= 0 ? c.getString(nameIdx) : "";
+                String phone = phoneIdx >= 0 ? c.getString(phoneIdx) : "";
+                String gstin = gstinIdx >= 0 ? c.getString(gstinIdx) : "";
+                String state = stateIdx >= 0 ? c.getString(stateIdx) : "";
+
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(0, dp(8), 0, dp(8));
+
+                TextView tv = new TextView(this);
+                tv.setText(String.format(Locale.US, "%s\nPh: %s | GST: %s\nState: %s", name, phone, gstin, state));
+                tv.setTextSize(13);
+                row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                Button delBtn = new Button(this);
+                delBtn.setText("Delete");
+                styleButton(delBtn, RED);
+                delBtn.setTextSize(12);
+                delBtn.setPadding(dp(8), 0, dp(8), 0);
+                delBtn.setOnClickListener(v -> confirmDeleteContact(name));
+                row.addView(delBtn, new LinearLayout.LayoutParams(-2, dp(38)));
+
+                l.addView(row);
+                View dv = new View(this);
+                dv.setBackgroundColor(0xFFE0E0E0);
+                l.addView(dv, new LinearLayout.LayoutParams(-1, dp(1)));
+            } while (c.moveToNext());
+            c.close();
         }
-        c.close(); ScrollView sc = new ScrollView(this); sc.addView(l); new AlertDialog.Builder(this).setTitle("Contact List").setView(sc).setPositiveButton("Close",null).show();
+
+        ScrollView sc = new ScrollView(this);
+        sc.addView(l);
+        new AlertDialog.Builder(this)
+                .setTitle("Contact List")
+                .setView(sc)
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private void confirmDeleteContact(String contactName) {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete Contact")
+                .setMessage("Are you sure you want to delete contact \"" + contactName + "\"?")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (d, w) -> {
+                    SQLiteDatabase writable = dbHelper.getWritableDatabase();
+                    writable.delete("contacts", "name=?", new String[]{contactName});
+                    Toast.makeText(this, "Contact \"" + contactName + "\" deleted", Toast.LENGTH_SHORT).show();
+                    setupAutoComplete(buyerBillTo);
+                    setupAutoComplete(consignee);
+                    showContactList();
+                })
+                .show();
+    }
+
+    private void stepInvoiceNumber(int delta) {
+        String s = invoiceNo.getText().toString().trim();
+        if (s.isEmpty()) return;
+        int idx = s.length() - 1;
+        while (idx >= 0 && Character.isDigit(s.charAt(idx))) {
+            idx--;
+        }
+        idx++;
+        if (idx < s.length()) {
+            String prefix = s.substring(0, idx);
+            String numStr = s.substring(idx);
+            int len = numStr.length();
+            try {
+                long val = Long.parseLong(numStr) + delta;
+                if (val < 0) val = 0;
+                String formatStr = "%0" + len + "d";
+                String nextNum = String.format(Locale.US, formatStr, val);
+                invoiceNo.setText(prefix + nextNum);
+            } catch (Exception ignored) {}
+        }
     }
 
     private String today(Date d) { return new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(d); }
@@ -1386,12 +1528,12 @@ public class MainActivity extends Activity {
             summary.setPadding(dp(4), dp(4), dp(4), dp(12));
             box.addView(summary);
 
-            ScrollView sc = new ScrollView(this);
+            ScrollView vScroll = new ScrollView(this);
+            HorizontalScrollView hScroll = new HorizontalScrollView(this);
             TableLayout table = new TableLayout(this);
-            table.setStretchAllColumns(true);
 
             TableRow head = new TableRow(this);
-            String[] headers = {"Invoice", "Date", "Buyer", "Taxable", "GST", "Grand Total"};
+            String[] headers = {"Invoice No", "Date", "Buyer Name", "Taxable Value", "GST Amount", "Grand Total"};
             for (String h : headers) head.addView(reportCell(h, true));
             table.addView(head);
 
@@ -1405,8 +1547,9 @@ public class MainActivity extends Activity {
                 tr.addView(reportCell(money(r.grand), false));
                 table.addView(tr);
             }
-            sc.addView(table);
-            box.addView(sc, new LinearLayout.LayoutParams(-1, dp(360)));
+            hScroll.addView(table);
+            vScroll.addView(hScroll);
+            box.addView(vScroll, new LinearLayout.LayoutParams(-1, dp(360)));
 
             AlertDialog dialog = new AlertDialog.Builder(this)
                     .setTitle("Sales Report - Invoice Wise")
@@ -1426,9 +1569,9 @@ public class MainActivity extends Activity {
     private TextView reportCell(String value, boolean header) {
         TextView t = new TextView(this);
         t.setText(value);
-        t.setTextSize(header ? 11 : 10);
+        t.setTextSize(header ? 12 : 11);
         t.setTypeface(Typeface.DEFAULT, header ? Typeface.BOLD : Typeface.NORMAL);
-        t.setPadding(dp(5), dp(7), dp(5), dp(7));
+        t.setPadding(dp(10), dp(8), dp(10), dp(8));
         t.setGravity(Gravity.CENTER_VERTICAL);
         t.setBackgroundColor(header ? 0xFFE7EBEF : Color.WHITE);
         return t;
