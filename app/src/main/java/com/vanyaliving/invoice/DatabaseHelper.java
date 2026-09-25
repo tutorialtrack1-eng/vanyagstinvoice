@@ -30,7 +30,8 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 "order_date TEXT, ref_no TEXT, additional_info TEXT, " +
                 "taxable_value REAL, cgst REAL, sgst REAL, igst REAL, grand_total REAL, rounded_total REAL, amount_words TEXT)");
         db.execSQL("CREATE TABLE invoice_items (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_id INTEGER, sl_no INTEGER, " +
-                "particulars TEXT, hsn TEXT, gst_rate TEXT, qty REAL, uqc TEXT, rate REAL, amount REAL)");
+                "particulars TEXT, hsn TEXT, gst_rate TEXT, qty REAL, uqc TEXT, rate REAL, amount REAL, " +
+                "sub_serial_no TEXT, sub_description TEXT, sub_other_info TEXT)");
     }
 
     @Override
