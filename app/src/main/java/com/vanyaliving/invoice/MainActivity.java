@@ -108,6 +108,17 @@ public class MainActivity extends Activity {
     private DatabaseHelper dbHelper;
     private boolean loadingInvoice = false;
 
+    private String sellerNameStr = "Vanya Living Furniture";
+    private String sellerGstinStr = "37BPVPG2248M1Z8";
+    private String sellerAddressStr = "176, BLOCK B-08, 100 FEET ROAD, ENIKEPADU, VIJAYAWADA, ANDHRA PRADESH, 520007";
+    private String sellerPhoneStr = "8074386833";
+    private String sellerEmailStr = "vanyaliving.contact@gmail.com";
+    private String bankNameStr = "HDFC BANK";
+    private String bankAccountNoStr = "50200123667011";
+    private String bankIfscStr = "HDFC0003975";
+    private String bankBranchStr = "ENIKEPADU";
+    private TextView sellerContact;
+
     // Classic, business-style colours
     private int NAVY = 0xFF607D8B;
     private int BLUE = 0xFF78909C;
@@ -142,7 +153,16 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         if (!prefs.getBoolean("is_logged_in", false)) { startActivity(new Intent(this, LoginActivity.class)); finish(); return; }
-        dbHelper = new DatabaseHelper(this); ensureInvoiceColumns(); loadHsnMapFromAsset(); applyRandomPastelTheme(); buildUi();
+        dbHelper = new DatabaseHelper(this); ensureInvoiceColumns(); loadHsnMapFromAsset(); applyRandomPastelTheme(); buildUi(); loadCompanyMaster();
+
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        Cursor c = db.query("company_master", null, null, null, null, null, null);
+        if (!c.moveToFirst()) {
+            c.close();
+            showCompanyMasterDialog();
+        } else {
+            c.close();
+        }
     }
 
     private void applyRandomPastelTheme() {
@@ -275,7 +295,7 @@ public class MainActivity extends Activity {
         side.setBackgroundColor(Color.WHITE);
         side.setPadding(dp(16), dp(55), dp(16), dp(20));
 
-        String[] menu = {"Sales Report", "Contact List", "Export Data", "Import Data"};
+        String[] menu = {"Company Profile", "Item Master", "Sales Report", "Contact List", "Export Data", "Import Data"};
         for (String m : menu) {
             Button b = new Button(this);
             b.setText(m);
@@ -285,7 +305,9 @@ public class MainActivity extends Activity {
             b.setMinHeight(dp(48));
             b.setOnClickListener(v -> {
                 drawer.closeDrawers();
-                if (m.equals("Sales Report")) showSalesReport();
+                if (m.equals("Company Profile")) showCompanyMasterDialog();
+                else if (m.equals("Item Master")) showItemMasterDialog();
+                else if (m.equals("Sales Report")) showSalesReport();
                 else if (m.equals("Contact List")) showContactList();
                 else if (m.equals("Export Data")) exportData();
                 else if (m.equals("Import Data")) importData();
@@ -331,8 +353,8 @@ public class MainActivity extends Activity {
         sBox.addView(sellerName);
         sBox.addView(sellerAddress);
         sBox.addView(sellerGstin);
-        TextView sellerContact = new TextView(this);
-        sellerContact.setText("Phone: " + SELLER_PHONE + "   |   Email: " + SELLER_EMAIL);
+        sellerContact = new TextView(this);
+        sellerContact.setText("Phone: " + sellerPhoneStr + "   |   Email: " + sellerEmailStr);
         sellerContact.setTextSize(13);
         sellerContact.setTextColor(0xFF37474F);
         sellerContact.setPadding(0, dp(4), 0, 0);
@@ -538,12 +560,14 @@ public class MainActivity extends Activity {
         root.addView(otherSec);
 
         LinearLayout goodsSec = createSectionContainer("Goods / Services", NAVY);
+        ScrollView vScroll = new ScrollView(this);
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         itemsContainer = new LinearLayout(this);
         itemsContainer.setOrientation(LinearLayout.VERTICAL);
         addItemsHeader();
         hsv.addView(itemsContainer);
-        goodsSec.addView(hsv, new LinearLayout.LayoutParams(-1, dp(300)));
+        vScroll.addView(hsv, new ViewGroup.LayoutParams(-1, -2));
+        goodsSec.addView(vScroll, new LinearLayout.LayoutParams(-1, dp(320)));
 
         Button addBtn = new Button(this);
         addBtn.setText("+ Add Item");
@@ -780,8 +804,42 @@ public class MainActivity extends Activity {
                     .show();
         }
         private void setupItemAutoComplete() {
-            desc.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_dropdown_item_1line, new ArrayList<>(HSN_MAP.keySet())));
-            desc.setOnItemClickListener((p, v, pos, id) -> autoFillHsnFromItem());
+            List<String> suggestions = new ArrayList<>();
+            try {
+                SQLiteDatabase db = dbHelper.getReadableDatabase();
+                Cursor c = db.query("items_master", new String[]{"item_name"}, null, null, null, null, "item_name ASC");
+                while (c.moveToNext()) {
+                    String name = c.getString(0);
+                    if (name != null && !name.trim().isEmpty() && !suggestions.contains(name)) {
+                        suggestions.add(name);
+                    }
+                }
+                c.close();
+            } catch (Exception ignored) {}
+            for (String k : HSN_MAP.keySet()) {
+                if (!suggestions.contains(k)) suggestions.add(k);
+            }
+            desc.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_dropdown_item_1line, suggestions));
+            desc.setOnItemClickListener((p, v, pos, id) -> autoFillItemDetails((String) p.getItemAtPosition(pos)));
+        }
+
+        private void autoFillItemDetails(String itemName) {
+            try {
+                SQLiteDatabase db = dbHelper.getReadableDatabase();
+                Cursor c = db.query("items_master", null, "item_name=?", new String[]{itemName}, null, null, null);
+                if (c.moveToFirst()) {
+                    int hsnCol = c.getColumnIndex("hsn");
+                    int gstCol = c.getColumnIndex("gst_rate");
+                    if (hsnCol >= 0) hsnSac.setText(c.getString(hsnCol));
+                    if (gstCol >= 0) selectSpinner(gst, c.getString(gstCol));
+                    c.close();
+                    updateAmounts();
+                    recalc();
+                    return;
+                }
+                c.close();
+            } catch (Exception ignored) {}
+            autoFillHsnFromItem();
         }
         private void autoFillHsnFromItem() {
             String typed = desc.getText().toString().trim();
@@ -929,6 +987,8 @@ public class MainActivity extends Activity {
         addColumnIfMissing(db, "invoice_items", "sub_serial_no", "TEXT");
         addColumnIfMissing(db, "invoice_items", "sub_description", "TEXT");
         addColumnIfMissing(db, "invoice_items", "sub_other_info", "TEXT");
+        db.execSQL("CREATE TABLE IF NOT EXISTS company_master (id INTEGER PRIMARY KEY AUTOINCREMENT, company_name TEXT, gstin TEXT, address TEXT, phone TEXT, email TEXT, bank_name TEXT, account_no TEXT, ifsc_code TEXT, branch_name TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS items_master (id INTEGER PRIMARY KEY AUTOINCREMENT, item_name TEXT UNIQUE, hsn TEXT, gst_rate TEXT)");
     }
 
     private void addColumnIfMissing(SQLiteDatabase db, String table, String column, String type) {
@@ -1215,6 +1275,14 @@ public class MainActivity extends Activity {
         cv.put("grand_total", parseValue(grandTotal)); cv.put("rounded_total", parseValue(roundedTotal)); cv.put("amount_words", amountWords.getText().toString());
         long id = db.insert("invoices", null, cv);
         for (ItemRow r : rows) {
+            String itemText = r.desc.getText().toString().trim();
+            if (!itemText.isEmpty()) {
+                ContentValues masterIv = new ContentValues();
+                masterIv.put("item_name", itemText);
+                masterIv.put("hsn", r.hsnSac.getText().toString().trim());
+                masterIv.put("gst_rate", r.gst.getSelectedItem().toString());
+                db.insertWithOnConflict("items_master", null, masterIv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
             ContentValues iv = new ContentValues(); iv.put("invoice_id", id); iv.put("sl_no", Integer.parseInt(r.slNo.getText().toString()));
             iv.put("particulars", r.desc.getText().toString()); iv.put("hsn", r.hsnSac.getText().toString()); iv.put("gst_rate", r.gst.getSelectedItem().toString());
             iv.put("qty", r.qtyVal()); iv.put("uqc", r.uqc.getSelectedItem().toString()); iv.put("rate", r.rateVal()); iv.put("amount", r.amountVal());
@@ -1288,10 +1356,10 @@ public class MainActivity extends Activity {
             p.setStrokeWidth(1.2f); p.setStyle(Paint.Style.STROKE); c.drawLine(L,y,R,y,p); p.setStyle(Paint.Style.FILL);
 
             float sy = 62;
-            p.setTextSize(12f); text(c,p,sellerName.getText().toString(),L,sy,true);
-            p.setTextSize(8.5f); drawMultiline(c,p,sellerAddress.getText().toString(),L,sy+13,240,10);
-            p.setTextSize(8.5f); text(c,p,"GSTIN: " + sellerGstin.getText().toString().replace("GSTIN: ",""),L,sy+38,true);
-            text(c,p,"Phone: " + SELLER_PHONE + " | Email: " + SELLER_EMAIL,L,sy+49,true);
+            p.setTextSize(12f); text(c,p,sellerNameStr,L,sy,true);
+            p.setTextSize(8.5f); drawMultiline(c,p,sellerAddressStr,L,sy+13,240,10);
+            p.setTextSize(8.5f); text(c,p,"GSTIN: " + sellerGstinStr,L,sy+38,true);
+            text(c,p,"Phone: " + sellerPhoneStr + " | Email: " + sellerEmailStr,L,sy+49,true);
 
             p.setTextSize(9.5f); float rlX = R - 120; float metaY = 62;
             text(c,p,"Invoice No:", rlX, metaY, true); text(c,p,invoiceNo.getText().toString(), R, metaY, true, true, false); metaY += 13;
@@ -1431,9 +1499,9 @@ public class MainActivity extends Activity {
             if (othersCb != null && othersCb.isChecked()) { String oi = otherInfo.getText().toString().trim(); if (!oi.isEmpty()) { text(c,p,"Other Info: " + titleCase(oi),L,y+13,false); y+=20; } }
             y+=15; box(c,p,L,y,W,85); p.setTextSize(10f); p.setUnderlineText(true); text(c,p,"BANK DETAILS", L+8, y+14, true); p.setUnderlineText(false);
             p.setTextSize(9f);
-            text(c,p,"Account Name: Vanya Living Furniture",L+8,y+28,true); text(c,p,"Account Number: 50200123667011",L+8,y+40,true);
-            text(c,p,"Bank Name: HDFC BANK",L+8,y+54,true); text(c,p,"IFSC Code: HDFC0003975",L+8,y+66,true); text(c,p,"Branch Name: ENIKEPADU",L+8,y+78,true);
-            float signY = y + 85 + 25; p.setTextSize(10.5f); text(c,p,"For " + sellerName.getText().toString(),R,signY,true,true, false);
+            text(c,p,"Account Name: " + sellerNameStr,L+8,y+28,true); text(c,p,"Account Number: " + bankAccountNoStr,L+8,y+40,true);
+            text(c,p,"Bank Name: " + bankNameStr,L+8,y+54,true); text(c,p,"IFSC Code: " + bankIfscStr,L+8,y+66,true); text(c,p,"Branch Name: " + bankBranchStr,L+8,y+78,true);
+            float signY = y + 85 + 25; p.setTextSize(10.5f); text(c,p,"For " + sellerNameStr,R,signY,true,true, false);
             try { InputStream is = getAssets().open("signature.png"); Bitmap bitmap = BitmapFactory.decodeStream(is);
                 if (bitmap != null) { Bitmap scB = Bitmap.createScaledBitmap(bitmap, 90, 40, true); c.drawBitmap(scB, R - 100, signY + 5, p); }
             } catch (Exception e) {}
@@ -1566,6 +1634,219 @@ public class MainActivity extends Activity {
                     setupAutoComplete(consignee);
                     showContactList();
                 })
+                .show();
+    }
+
+    private void loadCompanyMaster() {
+        try {
+            SQLiteDatabase db = dbHelper.getReadableDatabase();
+            Cursor c = db.query("company_master", null, null, null, null, null, "id DESC");
+            if (c.moveToFirst()) {
+                sellerNameStr = getString(c, "company_name");
+                sellerGstinStr = getString(c, "gstin");
+                sellerAddressStr = getString(c, "address");
+                sellerPhoneStr = getString(c, "phone");
+                sellerEmailStr = getString(c, "email");
+                bankNameStr = getString(c, "bank_name");
+                bankAccountNoStr = getString(c, "account_no");
+                bankIfscStr = getString(c, "ifsc_code");
+                bankBranchStr = getString(c, "branch_name");
+            }
+            c.close();
+            if (sellerName != null) sellerName.setText(sellerNameStr);
+            if (sellerAddress != null) sellerAddress.setText(sellerAddressStr);
+            if (sellerGstin != null) sellerGstin.setText("GSTIN: " + sellerGstinStr);
+            if (sellerContact != null) sellerContact.setText("Phone: " + sellerPhoneStr + "   |   Email: " + sellerEmailStr);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void showCompanyMasterDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+        EditText eName = edit("Company Name *", false); eName.setText(sellerNameStr);
+        EditText eGstin = edit("GSTIN Number *", false); eGstin.setText(sellerGstinStr);
+        EditText eAddress = edit("Company Address *", false); eAddress.setText(sellerAddressStr);
+        EditText ePhone = edit("Phone Number (10 digits) *", false); ePhone.setInputType(InputType.TYPE_CLASS_PHONE); ePhone.setText(sellerPhoneStr);
+        EditText eEmail = edit("Email Address *", false); eEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS); eEmail.setText(sellerEmailStr);
+        EditText eBank = edit("Bank Name", false); eBank.setText(bankNameStr);
+        EditText eAcc = edit("Account Number", false); eAcc.setText(bankAccountNoStr);
+        EditText eIfsc = edit("IFSC Code", false); eIfsc.setText(bankIfscStr);
+        EditText eBranch = edit("Branch Name", false); eBranch.setText(bankBranchStr);
+
+        box.addView(field("Company Name *", eName));
+        box.addView(field("GSTIN *", eGstin));
+        box.addView(field("Address *", eAddress));
+        box.addView(field("Phone *", ePhone));
+        box.addView(field("Email *", eEmail));
+        box.addView(field("Bank Name", eBank));
+        box.addView(field("Account Number", eAcc));
+        box.addView(field("IFSC Code", eIfsc));
+        box.addView(field("Branch Name", eBranch));
+
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Company Master Details")
+                .setView(sc)
+                .setPositiveButton("Save Profile", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+
+        dialog.setOnShowListener(d -> {
+            Button b = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            b.setOnClickListener(v -> {
+                String name = eName.getText().toString().trim();
+                String addr = eAddress.getText().toString().trim();
+                String phone = ePhone.getText().toString().trim();
+                String email = eEmail.getText().toString().trim();
+                String gstin = eGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
+
+                if (name.isEmpty()) { eName.setError("Company Name is required"); eName.requestFocus(); return; }
+                if (addr.isEmpty()) { eAddress.setError("Address is required"); eAddress.requestFocus(); return; }
+                if (!phone.matches("[0-9]{10}")) { ePhone.setError("Invalid phone number, must be 10 digits"); ePhone.requestFocus(); return; }
+                if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) { eEmail.setError("Invalid email address"); eEmail.requestFocus(); return; }
+                String pattern = "^[0-9]{2}[A-Z]{3}[PCHFATLJG][A-Z][0-9]{4}[A-Z][A-Z0-9]{3}$";
+                if (!gstin.isEmpty() && !gstin.matches(pattern)) { eGstin.setError("Invalid GSTIN format"); eGstin.requestFocus(); return; }
+
+                SQLiteDatabase db = dbHelper.getWritableDatabase();
+                ContentValues cv = new ContentValues();
+                cv.put("company_name", name);
+                cv.put("gstin", gstin);
+                cv.put("address", addr.toUpperCase(Locale.ROOT));
+                cv.put("phone", phone);
+                cv.put("email", email.toLowerCase(Locale.ROOT));
+                cv.put("bank_name", eBank.getText().toString().trim());
+                cv.put("account_no", eAcc.getText().toString().trim());
+                cv.put("ifsc_code", eIfsc.getText().toString().trim().toUpperCase(Locale.ROOT));
+                cv.put("branch_name", eBranch.getText().toString().trim());
+
+                db.delete("company_master", null, null);
+                db.insert("company_master", null, cv);
+                Toast.makeText(MainActivity.this, "Company Profile Saved Successfully!", Toast.LENGTH_SHORT).show();
+                loadCompanyMaster();
+                dialog.dismiss();
+            });
+        });
+        dialog.show();
+    }
+
+    private void showItemMasterDialog() {
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        Cursor c = db.query("items_master", null, null, null, null, null, "item_name ASC");
+        LinearLayout rootBox = new LinearLayout(this);
+        rootBox.setOrientation(LinearLayout.VERTICAL);
+        rootBox.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+        Button addBtn = new Button(this);
+        addBtn.setText("+ Add New Item to Master");
+        styleButton(addBtn, BLUE);
+        addBtn.setTextSize(12);
+        addBtn.setOnClickListener(v -> showEditItemMasterDialog(null, "", ""));
+        rootBox.addView(addBtn);
+
+        LinearLayout listContainer = new LinearLayout(this);
+        listContainer.setOrientation(LinearLayout.VERTICAL);
+        listContainer.setPadding(0, dp(10), 0, 0);
+
+        int idCol = c.getColumnIndex("id");
+        int nameCol = c.getColumnIndex("item_name");
+        int hsnCol = c.getColumnIndex("hsn");
+        int gstCol = c.getColumnIndex("gst_rate");
+
+        if (!c.moveToFirst()) {
+            c.close();
+            TextView emptyTv = new TextView(this);
+            emptyTv.setText("No master items found. Invoiced items will appear here automatically.");
+            emptyTv.setTextSize(13);
+            emptyTv.setPadding(dp(8), dp(16), dp(8), dp(16));
+            listContainer.addView(emptyTv);
+        } else {
+            do {
+                long itemId = idCol >= 0 ? c.getLong(idCol) : 0;
+                String name = nameCol >= 0 ? c.getString(nameCol) : "";
+                String hsn = hsnCol >= 0 ? c.getString(hsnCol) : "";
+                String gst = gstCol >= 0 ? c.getString(gstCol) : "";
+
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(0, dp(6), 0, dp(6));
+
+                TextView tv = new TextView(this);
+                tv.setText(String.format(Locale.US, "%s\nHSN: %s | GST: %s%%", name, hsn, gst));
+                tv.setTextSize(13);
+                row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                Button delBtn = new Button(this);
+                delBtn.setText("Delete");
+                styleButton(delBtn, RED);
+                delBtn.setTextSize(11);
+                delBtn.setPadding(dp(6), 0, dp(6), 0);
+                final long targetId = itemId;
+                delBtn.setOnClickListener(v -> {
+                    SQLiteDatabase writable = dbHelper.getWritableDatabase();
+                    writable.delete("items_master", "id=?", new String[]{String.valueOf(targetId)});
+                    Toast.makeText(this, "Item deleted from Master", Toast.LENGTH_SHORT).show();
+                    showItemMasterDialog();
+                });
+                row.addView(delBtn, new LinearLayout.LayoutParams(-2, dp(36)));
+
+                listContainer.addView(row);
+                View dv = new View(this);
+                dv.setBackgroundColor(0xFFE0E0E0);
+                listContainer.addView(dv, new LinearLayout.LayoutParams(-1, dp(1)));
+            } while (c.moveToNext());
+            c.close();
+        }
+
+        ScrollView sc = new ScrollView(this);
+        sc.addView(listContainer);
+        rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(320)));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Item Master List")
+                .setView(rootBox)
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private void showEditItemMasterDialog(String nameVal, String hsnVal, String gstVal) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+        EditText eName = edit("Item Name *", false); if (nameVal != null) eName.setText(nameVal);
+        EditText eHsn = edit("HSN / SAC Code", false); if (hsnVal != null) eHsn.setText(hsnVal);
+        Spinner sGst = spinner(GST_RATES); if (gstVal != null) selectSpinner(sGst, gstVal);
+
+        box.addView(field("Item Particulars *", eName));
+        box.addView(field("HSN / SAC Code", eHsn));
+        box.addView(field("GST Rate %", sGst));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Add Item to Master")
+                .setView(box)
+                .setPositiveButton("Save Item", (d, w) -> {
+                    String name = eName.getText().toString().trim();
+                    if (name.isEmpty()) {
+                        Toast.makeText(this, "Item Particulars is required", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    SQLiteDatabase db = dbHelper.getWritableDatabase();
+                    ContentValues cv = new ContentValues();
+                    cv.put("item_name", name);
+                    cv.put("hsn", eHsn.getText().toString().trim());
+                    cv.put("gst_rate", sGst.getSelectedItem().toString());
+                    db.insertWithOnConflict("items_master", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+                    Toast.makeText(this, "Item saved to Master!", Toast.LENGTH_SHORT).show();
+                    showItemMasterDialog();
+                })
+                .setNegativeButton("Cancel", null)
                 .show();
     }
 

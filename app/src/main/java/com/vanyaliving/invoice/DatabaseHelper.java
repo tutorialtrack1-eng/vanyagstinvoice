@@ -23,13 +23,15 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     }
 
     private void createInvoiceTables(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_no TEXT UNIQUE, date TEXT, payment_mode TEXT, " +
+        db.execSQL("CREATE TABLE IF NOT EXISTS company_master (id INTEGER PRIMARY KEY AUTOINCREMENT, company_name TEXT, gstin TEXT, address TEXT, phone TEXT, email TEXT, bank_name TEXT, account_no TEXT, ifsc_code TEXT, branch_name TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS items_master (id INTEGER PRIMARY KEY AUTOINCREMENT, item_name TEXT UNIQUE, hsn TEXT, gst_rate TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_no TEXT UNIQUE, date TEXT, payment_mode TEXT, " +
                 "buyer_name_addr TEXT, buyer_phone TEXT, buyer_gstin TEXT, buyer_state TEXT, " +
                 "same_as_billing INTEGER, consignee_name_addr TEXT, consignee_phone TEXT, consignee_gstin TEXT, consignee_state TEXT, " +
                 "destination TEXT, vehicle TEXT, others_checked INTEGER, transporter TEXT, vehicle_number TEXT, delivery_challan TEXT, " +
                 "order_date TEXT, ref_no TEXT, additional_info TEXT, " +
                 "taxable_value REAL, cgst REAL, sgst REAL, igst REAL, grand_total REAL, rounded_total REAL, amount_words TEXT)");
-        db.execSQL("CREATE TABLE invoice_items (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_id INTEGER, sl_no INTEGER, " +
+        db.execSQL("CREATE TABLE IF NOT EXISTS invoice_items (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_id INTEGER, sl_no INTEGER, " +
                 "particulars TEXT, hsn TEXT, gst_rate TEXT, qty REAL, uqc TEXT, rate REAL, amount REAL, " +
                 "sub_serial_no TEXT, sub_description TEXT, sub_other_info TEXT)");
     }
