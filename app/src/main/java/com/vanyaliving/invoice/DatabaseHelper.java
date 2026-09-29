@@ -140,6 +140,13 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return id;
     }
 
+    public String userEmail(long userId) {
+        Cursor c = getReadableDatabase().query("users", new String[]{"email"}, "id=?", new String[]{String.valueOf(userId)}, null, null, null);
+        String email = c.moveToFirst() && !c.isNull(0) ? c.getString(0).trim() : "";
+        c.close();
+        return email;
+    }
+
     public boolean resetPassword(String phoneOrEmail, String newPassword) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues cv = new ContentValues();

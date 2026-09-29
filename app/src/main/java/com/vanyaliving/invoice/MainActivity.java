@@ -428,9 +428,12 @@ public class MainActivity extends Activity {
         box.setPadding(dp(20), dp(8), dp(20), dp(4));
         TextView msg = new TextView(this);
         msg.setTextSize(13.5f);
+        String pending = Subscription.pendingRequest(this, userId);
         msg.setText((locked ? (Subscription.isOnTrial(this, userId) ? "Your 10-minute trial has ended." : Subscription.statusText(this, userId) + ".")
                 + "\n\nA subscription is needed to continue." : Subscription.statusText(this, userId) + ".")
-                + "\n\nPlans: 30, 90, 180, 365 or 730 days. Enter the activation code issued for this account (" + identity + ") to add validity.");
+                + "\n\nTap \"Buy / Renew\" to choose a plan and pay by UPI. The activation code is then sent to your mobile"
+                + (dbHelper.userEmail(userId).isEmpty() ? "" : " and email") + ". Enter it below."
+                + (pending.isEmpty() ? "" : "\n\n" + pending));
         box.addView(msg);
         EditText code = edit("XXXX-XXXX-XXXX-XXXX", false);
         code.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
@@ -441,6 +444,7 @@ public class MainActivity extends Activity {
                 .setTitle(locked ? "Subscription Required" : "Subscription")
                 .setView(box)
                 .setCancelable(!locked)
+                .setNeutralButton("Buy / Renew", null)
                 .setPositiveButton("Activate", null);
         if (locked) b.setNegativeButton("Logout", (d, w) -> {
             prefs.edit().putBoolean("is_logged_in", false).remove("user_id").apply();
@@ -448,16 +452,128 @@ public class MainActivity extends Activity {
             finish();
         }); else b.setNegativeButton("Close", null);
         subscriptionDialog = b.create();
-        subscriptionDialog.setOnShowListener(d -> subscriptionDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            int days = Subscription.activate(this, userId, identity, code.getText().toString());
-            if (days == -2) { code.setError("This code has already been used"); return; }
-            if (days < 0) { code.setError("Invalid activation code for this account"); return; }
-            Toast.makeText(this, "Activated: " + Subscription.statusText(this, userId), Toast.LENGTH_LONG).show();
-            subscriptionDialog.dismiss();
-            checkSubscription();
-            showDashboardView();
-        }));
+        subscriptionDialog.setOnShowListener(d -> {
+            subscriptionDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                int days = Subscription.activate(this, userId, identity, code.getText().toString());
+                if (days == -2) { code.setError("This code has already been used"); return; }
+                if (days < 0) { code.setError("Invalid activation code for this account"); return; }
+                Subscription.clearPendingRequest(this, userId);
+                Toast.makeText(this, "Activated: " + Subscription.statusText(this, userId), Toast.LENGTH_LONG).show();
+                subscriptionDialog.dismiss();
+                checkSubscription();
+                showDashboardView();
+            });
+            // Buying keeps the lock dialog underneath when the validity has run out
+            subscriptionDialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> showPlanChooser());
+        });
         subscriptionDialog.show();
+    }
+
+    // ---- Payment: pick a plan, pay by UPI, then the activation request goes out ----
+
+    private static final int REQ_UPI = 400;
+    private int pendingPlanDays, pendingPlanAmount;
+
+    private void showPlanChooser() {
+        String[] labels = new String[Subscription.PLAN_DAYS.length];
+        for (int i = 0; i < labels.length; i++) labels[i] = Subscription.planLabel(i);
+        new AlertDialog.Builder(this).setTitle("Choose a Plan")
+                .setItems(labels, (d, w) -> startUpiPayment(Subscription.PLAN_DAYS[w], Subscription.PLAN_PRICES[w]))
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    private void startUpiPayment(int days, int amount) {
+        pendingPlanDays = days; pendingPlanAmount = amount;
+        String phone = dbHelper.userIdentity(userId);
+        Intent pay = new Intent(Intent.ACTION_VIEW, Uri.parse(Subscription.upiUri(phone, days, amount)));
+        Intent chooser = Intent.createChooser(pay, "Pay Rs " + amount + " with");
+        if (pay.resolveActivity(getPackageManager()) == null) {
+            Toast.makeText(this, "No UPI app found on this phone. Install Google Pay, PhonePe, Paytm or your bank's UPI app.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        try { startActivityForResult(chooser, REQ_UPI); }
+        catch (Exception e) { Toast.makeText(this, "Could not open a UPI app: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
+    // UPI apps answer with "txnId=...&responseCode=...&Status=SUCCESS&txnRef=..."; some return nothing at all
+    private void onUpiResult(int res, Intent data) {
+        String response = data == null ? null : data.getStringExtra("response");
+        String status = "UNKNOWN", txnRef = "";
+        if (response != null) {
+            for (String part : response.split("&")) {
+                String[] kv = part.split("=", 2);
+                if (kv.length < 2) continue;
+                if (kv[0].equalsIgnoreCase("Status")) status = kv[1].trim().toUpperCase(Locale.ROOT);
+                if (kv[0].equalsIgnoreCase("txnRef") || (kv[0].equalsIgnoreCase("txnId") && txnRef.isEmpty())) txnRef = kv[1].trim();
+            }
+        } else if (res == RESULT_CANCELED) {
+            status = "CANCELLED";
+        }
+        if (status.equals("FAILURE") || status.equals("CANCELLED")) {
+            new AlertDialog.Builder(this).setTitle("Payment Not Completed")
+                    .setMessage(status.equals("CANCELLED") ? "The payment was cancelled. If you did pay, tap \"I have paid\" and enter the UPI transaction reference."
+                            : "The UPI app reported a failed payment. No amount should have been debited.")
+                    .setPositiveButton("I have paid", (d, w) -> askTxnRefThenRequest())
+                    .setNegativeButton("Close", null).show();
+            return;
+        }
+        if (txnRef.isEmpty()) { askTxnRefThenRequest(); return; }
+        submitActivationRequest(txnRef, status);
+    }
+
+    private void askTxnRefThenRequest() {
+        EditText eRef = edit("UPI transaction ID / UTR", false);
+        LinearLayout box = new LinearLayout(this); box.setPadding(dp(16), dp(8), dp(16), 0); box.addView(field("Transaction Reference", eRef));
+        new AlertDialog.Builder(this).setTitle("Payment Reference").setView(box)
+                .setPositiveButton("Submit", (d, w) -> submitActivationRequest(eRef.getText().toString().trim(), "REPORTED"))
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    // With an activation server: the server verifies the payment, sends the code by SMS and email and may
+    // return it so the app activates at once. Without one: the request is sent to the vendor on WhatsApp /
+    // SMS and the code comes back to the customer's mobile and email.
+    private void submitActivationRequest(String txnRef, String status) {
+        String phone = dbHelper.userIdentity(userId), email = dbHelper.userEmail(userId);
+        int days = pendingPlanDays, amount = pendingPlanAmount;
+        String summary = "Plan " + days + " days, Rs " + amount + ", UPI ref " + (txnRef.isEmpty() ? "-" : txnRef) + ", paid on " + today();
+        Subscription.savePendingRequest(this, userId, "Payment recorded: " + summary + ". Waiting for the activation code on " + phone + (email.isEmpty() ? "" : " / " + email) + ".");
+        Toast.makeText(this, "Sending activation request...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String code = Subscription.requestActivation(phone, email, days, amount, txnRef, status);
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                if (code != null && !code.isEmpty()) {
+                    int got = Subscription.activate(this, userId, phone, code);
+                    if (got > 0) {
+                        Subscription.clearPendingRequest(this, userId);
+                        if (subscriptionDialog != null && subscriptionDialog.isShowing()) subscriptionDialog.dismiss();
+                        new AlertDialog.Builder(this).setTitle("Subscription Activated")
+                                .setMessage(Subscription.statusText(this, userId) + ".\n\nThe activation code has also been sent to " + phone + (email.isEmpty() ? "" : " and " + email) + ".")
+                                .setPositiveButton("OK", (d, w) -> { checkSubscription(); showDashboardView(); }).show();
+                        return;
+                    }
+                }
+                if (code != null) {
+                    new AlertDialog.Builder(this).setTitle("Payment Received")
+                            .setMessage("Thank you. Your activation code is being sent to " + phone + (email.isEmpty() ? "" : " and " + email) + ". Enter it under Subscription > Activate.")
+                            .setPositiveButton("OK", null).show();
+                    return;
+                }
+                // Manual flow: hand the request to the vendor
+                String text = "BlitzBook activation request\nMobile: " + phone + (email.isEmpty() ? "" : "\nEmail: " + email) + "\n" + summary + "\nPlease send my activation code.";
+                new AlertDialog.Builder(this).setTitle("Payment Recorded")
+                        .setMessage("Send this request so your activation code can be issued. It will be sent to " + phone + (email.isEmpty() ? "" : " and " + email) + ".\n\n" + summary)
+                        .setPositiveButton("Send on WhatsApp", (d, w) -> {
+                            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/91" + Subscription.VENDOR_PHONE + "?text=" + Uri.encode(text)))); }
+                            catch (Exception e) { Toast.makeText(this, "WhatsApp is not available", Toast.LENGTH_SHORT).show(); }
+                        })
+                        .setNeutralButton("Send by SMS", (d, w) -> {
+                            try { Intent sms = new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Subscription.VENDOR_PHONE)); sms.putExtra("sms_body", text); startActivity(sms); }
+                            catch (Exception e) { Toast.makeText(this, "No SMS app available", Toast.LENGTH_SHORT).show(); }
+                        })
+                        .setNegativeButton("Later", null).show();
+            });
+        }).start();
     }
 
     private void applyRandomPastelTheme() {
@@ -547,6 +663,41 @@ public class MainActivity extends Activity {
     private boolean isValidEmail(String value) {
         String s = value == null ? "" : value.trim();
         return s.isEmpty() || Patterns.EMAIL_ADDRESS.matcher(s).matches();
+    }
+
+    // A GSTIN is 15 characters: state code 01-38, the 10-character PAN, entity number, the letter Z and a
+    // mod-36 check character. Blank is accepted (unregistered party); anything else must pass all of it.
+    static boolean isValidGstin(String value) {
+        String g = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        if (g.isEmpty()) return true;
+        if (!g.matches("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")) return false;
+        int state = Integer.parseInt(g.substring(0, 2));
+        if (state < 1 || state > 38) return false;
+        String chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        int sum = 0;
+        for (int i = 0; i < 14; i++) {
+            int value14 = chars.indexOf(g.charAt(i)) * (i % 2 == 0 ? 1 : 2);
+            sum += value14 / 36 + value14 % 36;
+        }
+        return chars.charAt((36 - sum % 36) % 36) == g.charAt(14);
+    }
+
+    // GSTIN field: capitals only, 15 characters, checked as you type
+    private EditText gstinEdit(String hint) {
+        EditText e = edit(hint, false);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        e.setFilters(new InputFilter[]{new InputFilter.AllCaps(), new InputFilter.LengthFilter(15)});
+        e.addTextChangedListener(new SimpleTextWatcher() {
+            @Override public void changed() { String s = e.getText().toString().trim(); e.setError(s.length() < 15 || isValidGstin(s) ? null : "Enter a valid 15-character GSTIN"); }
+        });
+        return e;
+    }
+
+    private boolean validGstin(EditText e, String label) {
+        if (isValidGstin(e.getText().toString())) return true;
+        Toast.makeText(this, "Enter a valid " + label + " GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)", Toast.LENGTH_SHORT).show();
+        e.setError("Enter a valid 15-character GSTIN"); e.requestFocus();
+        return false;
     }
 
     private Spinner spinner(String[] vals) {
@@ -1631,7 +1782,7 @@ public class MainActivity extends Activity {
 
         buyerPhone = phoneEdit();
         buyerEmail = emailEdit();
-        buyerGstin = edit("GSTIN Number", false);
+        buyerGstin = gstinEdit("GSTIN Number");
         buyerState = spinner(STATES);
         buyerState.setOnItemSelectedListener(new SimpleSpinnerListener() {
             @Override public void changed() { recalc(); syncConsignee(); }
@@ -1673,7 +1824,7 @@ public class MainActivity extends Activity {
 
         consigneePhone = phoneEdit();
         consigneeEmail = emailEdit();
-        consigneeGstin = edit("GSTIN Number", false);
+        consigneeGstin = gstinEdit("GSTIN Number");
         consigneeState = spinner(STATES);
 
         consigneeContainer.addView(field("Consignee (Ship To)", consignee));
@@ -2382,6 +2533,7 @@ public class MainActivity extends Activity {
             saveSignatureImage(data.getData());
             return;
         }
+        if (req == REQ_UPI) { onUpiResult(res, data); return; }
         if (req == 200 && res == RESULT_OK && data != null && data.getData() != null) {
             importContactsFromUri(data.getData());
             return;
@@ -3422,9 +3574,9 @@ public class MainActivity extends Activity {
         box.setPadding(dp(16), dp(12), dp(16), dp(12));
 
         EditText eName = edit("Name / Company Name *", false);
-        EditText ePhone = edit("Phone Number (10 digits)", false); ePhone.setInputType(InputType.TYPE_CLASS_PHONE);
-        EditText eEmail = edit("Email Address", false); eEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        EditText eGstin = edit("GSTIN Number", false);
+        EditText ePhone = phoneEdit();
+        EditText eEmail = emailEdit();
+        EditText eGstin = gstinEdit("GSTIN Number");
         EditText eAddr = edit("Address", false);
         Spinner sType = spinner(new String[]{"Customer", "Supplier"});
         if ("Supplier".equalsIgnoreCase(defaultType)) sType.setSelection(1);
@@ -3490,8 +3642,9 @@ public class MainActivity extends Activity {
                 String state = (String) sState.getSelectedItem();
 
                 if (name.isEmpty()) { eName.setError("Name is required"); eName.requestFocus(); return; }
-                if (!phone.isEmpty() && !phone.matches("[0-9]{10}")) { ePhone.setError("Phone must be 10 digits"); ePhone.requestFocus(); return; }
-                if (!email.isEmpty() && !Patterns.EMAIL_ADDRESS.matcher(email).matches()) { eEmail.setError("Invalid email address"); eEmail.requestFocus(); return; }
+                if (!validPhone(ePhone, "contact")) return;
+                if (!validEmail(eEmail, "contact")) return;
+                if (!validGstin(eGstin, "contact")) return;
                 double tdsRate = 0;
                 if (tdsCb.isChecked()) {
                     try { tdsRate = Double.parseDouble(eTdsRate.getText().toString().trim()); } catch (Exception ex) { tdsRate = 0; }
@@ -3785,9 +3938,9 @@ public class MainActivity extends Activity {
         // Card 1: Company Details (Pastel Blue)
         LinearLayout compCard = createPastelCard("Company & Contact Details", 0xFFF0F4F8, 0xFFCFD8DC);
         EditText eName = edit("Company Name *", false); eName.setText(sellerNameStr);
-        EditText eGstin = edit("GSTIN Number *", false); eGstin.setText(sellerGstinStr);
+        EditText eGstin = gstinEdit("GSTIN Number *"); eGstin.setText(sellerGstinStr);
         EditText eAddress = edit("Company Address *", false); eAddress.setText(sellerAddressStr);
-        EditText ePhone = edit("Phone Number (10 digits) *", false); ePhone.setInputType(InputType.TYPE_CLASS_PHONE); ePhone.setText(sellerPhoneStr);
+        EditText ePhone = phoneEdit(); ePhone.setHint("Phone Number (10 digits) *"); ePhone.setText(sellerPhoneStr);
         EditText eEmail = edit("Email Address *", false); eEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS); eEmail.setText(sellerEmailStr);
         Spinner sGstType = spinner(GST_REG_TYPES);
         sGstType.setSelection(Math.max(0, Arrays.asList(GST_REG_TYPES).indexOf(sellerGstTypeStr)));
@@ -3914,10 +4067,9 @@ public class MainActivity extends Activity {
 
                 if (name.isEmpty()) { eName.setError("Company Name is required"); eName.requestFocus(); return; }
                 if (addr.isEmpty()) { eAddress.setError("Address is required"); eAddress.requestFocus(); return; }
-                if (!phone.matches("[0-9]{10}")) { ePhone.setError("Invalid phone number, must be 10 digits"); ePhone.requestFocus(); return; }
+                if (!phone.matches("[6-9][0-9]{9}")) { ePhone.setError("Enter correct phone number"); ePhone.requestFocus(); return; }
                 if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) { eEmail.setError("Invalid email address"); eEmail.requestFocus(); return; }
-                String pattern = "^[0-9]{2}[A-Z]{3}[PCHFATLJG][A-Z][0-9]{4}[A-Z][A-Z0-9]{3}$";
-                if (!gstin.isEmpty() && !gstin.matches(pattern)) { eGstin.setError("Invalid GSTIN format"); eGstin.requestFocus(); return; }
+                if (!validGstin(eGstin, "company")) return;
                 String gstType = (String) sGstType.getSelectedItem();
                 if (!gstin.isEmpty() && "Unregistered".equals(gstType)) { Toast.makeText(MainActivity.this, "GSTIN given: select Regular or Composition", Toast.LENGTH_LONG).show(); return; }
                 if (gstin.isEmpty() && !"Unregistered".equals(gstType)) { eGstin.setError("GSTIN is required for " + gstType + " dealer"); eGstin.requestFocus(); return; }
@@ -4123,8 +4275,8 @@ public class MainActivity extends Activity {
     private void downloadContactsTemplate() {
         try {
             String csv = "Name,Phone,Email,GSTIN,Address,State\n" +
-                    "Ramesh Traders,9876543210,ramesh@gmail.com,37ABCDE1234F1Z5,100 Feet Road Vijayawada,Andhra Pradesh\n" +
-                    "Suresh Enterprises,9123456789,suresh@gmail.com,36XYZAB5678G2Z1,MG Road Hyderabad,Telangana\n";
+                    "Ramesh Traders,9876543210,ramesh@gmail.com,37ABCDE1234F1ZZ,100 Feet Road Vijayawada,Andhra Pradesh\n" +
+                    "Suresh Enterprises,9123456789,suresh@gmail.com,36XYZAB5678G2ZY,MG Road Hyderabad,Telangana\n";
             String fn = "BlitzBook_Contacts_Template.csv";
             ContentValues v = new ContentValues();
             v.put(MediaStore.Downloads.DISPLAY_NAME, fn);
@@ -4438,12 +4590,8 @@ public class MainActivity extends Activity {
             if (!validPhone(consigneePhone, "Ship To")) return false;
             if (!validEmail(consigneeEmail, "Ship To")) return false;
         }
-        String pattern = "^[0-9]{2}[A-Z]{3}[PCHFATLJG][A-Z][0-9]{4}[A-Z][A-Z0-9]{3}$";
-        String g = buyerGstin.getText().toString().trim().toUpperCase();
-        if (!g.isEmpty() && !g.matches(pattern)) {
-            Toast.makeText(this, "Invalid GSTIN format", Toast.LENGTH_SHORT).show();
-            return false;
-        }
+        if (!validGstin(buyerGstin, "buyer")) return false;
+        if (!sameAsBilling.isChecked() && !validGstin(consigneeGstin, "Ship To")) return false;
 
         // Completely blank rows are dropped; any row with an item needs both quantity and rate
         for (int i = rows.size() - 1; i >= 0 && rows.size() > 1; i--) {
@@ -4832,9 +4980,8 @@ public class MainActivity extends Activity {
         EditText eTotal = edit("0.00", true), eTaxable = edit("0.00", true), eGst = edit("0.00", true);
         Spinner sRate = spinner(GST_RATES);
         selectSpinner(sRate, e.gstRate);
-        EditText eVendorGstin = edit("Vendor GSTIN (optional, decides IGST vs CGST/SGST)", false);
+        EditText eVendorGstin = gstinEdit("Vendor GSTIN (optional, decides IGST vs CGST/SGST)");
         eVendorGstin.setText(e.vendorGstin);
-        eVendorGstin.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         CheckBox rcmBox = new CheckBox(this);
         rcmBox.setText("Reverse charge (RCM) - GST payable by us, not to the vendor");
         rcmBox.setTextSize(13); rcmBox.setChecked(e.rcm);
@@ -4906,6 +5053,7 @@ public class MainActivity extends Activity {
             if (eDate.getText().toString().trim().isEmpty()) { eDate.setError("Date is required"); return; }
             if (gstOn) {
                 e.taxable = parseNum(eTaxable); e.gst = parseNum(eGst); e.gstRate = (String) sRate.getSelectedItem();
+                if (!validGstin(eVendorGstin, "vendor")) return;
                 e.rcm = rcmBox.isChecked(); e.vendorGstin = eVendorGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
                 if (e.taxable <= 0) { EditText t = sEntry.getSelectedItemPosition() == 0 ? eTotal : eTaxable; t.setError("Enter the amount"); t.requestFocus(); return; }
                 e.compute(isInterStateGstin(e.vendorGstin));
@@ -5155,7 +5303,7 @@ public class MainActivity extends Activity {
 
         AutoCompleteTextView eSupplier = suggestEdit("Supplier name", supplierNames());
         eSupplier.setText(p.supplier);
-        EditText eGstin = edit("Supplier GSTIN", false); eGstin.setText(p.supplierGstin);
+        EditText eGstin = gstinEdit("Supplier GSTIN"); eGstin.setText(p.supplierGstin);
         eSupplier.setOnItemClickListener((parent, view, pos, id) -> {
             Cursor c = dbHelper.getReadableDatabase().query("contacts", new String[]{"gstin"}, "name=?", new String[]{(String) parent.getItemAtPosition(pos)}, null, null, null);
             if (c.moveToFirst() && !c.isNull(0)) eGstin.setText(c.getString(0));
@@ -5263,6 +5411,7 @@ public class MainActivity extends Activity {
             }
             if (items.isEmpty()) { Toast.makeText(this, "Add at least one item", Toast.LENGTH_SHORT).show(); return; }
             p.docNo = eNo.getText().toString().trim(); p.date = eDate.getText().toString().trim();
+            if (!validGstin(eGstin, "supplier")) return;
             p.supplier = titleCase(eSupplier.getText().toString()); p.supplierGstin = eGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
             p.paymentMode = (String) sMode.getSelectedItem(); p.notes = eNotes.getText().toString().trim();
             p.rcm = rcmBox.isChecked();
@@ -5608,7 +5757,7 @@ public class MainActivity extends Activity {
         box.addView(r1);
         AutoCompleteTextView eParty = suggestEdit(credit ? "Customer" : "Supplier", contactNames(credit ? null : "Supplier"));
         eParty.setText(n.party);
-        EditText eGstin = edit("Party GSTIN", false); eGstin.setText(n.partyGstin);
+        EditText eGstin = gstinEdit("Party GSTIN"); eGstin.setText(n.partyGstin);
         eParty.setOnItemClickListener((parent, view, pos, id) -> {
             Cursor c = dbHelper.getReadableDatabase().query("contacts", new String[]{"gstin"}, "name=?", new String[]{(String) parent.getItemAtPosition(pos)}, null, null, null);
             if (c.moveToFirst() && !c.isNull(0)) eGstin.setText(c.getString(0));
@@ -5659,6 +5808,7 @@ public class MainActivity extends Activity {
             double taxable = parseNum(eTaxable);
             if (taxable <= 0) { eTaxable.setError("Enter the taxable value"); eTaxable.requestFocus(); return; }
             n.noteNo = eNo.getText().toString().trim(); n.date = eDate.getText().toString().trim(); n.party = party;
+            if (!validGstin(eGstin, "party")) return;
             n.partyGstin = eGstin.getText().toString().trim().toUpperCase(Locale.ROOT); n.refNo = eRef.getText().toString().trim();
             n.reason = eReason.getText().toString().trim(); n.taxable = taxable; n.gstRate = chargesGst() ? (String) sRate.getSelectedItem() : "0";
             n.settlement = (String) sSettle.getSelectedItem();
@@ -5799,7 +5949,11 @@ public class MainActivity extends Activity {
     // One Dr / Cr line of a journal voucher: side, account, amount, remove
     private class JournalLineRow {
         final LinearLayout view; final ChoiceView side; final AccountPicker account; final EditText amount;
+        // manual = the user typed this amount; otherwise the editor fills it in to balance the entry
+        boolean manual;
+        private boolean settingAuto;
         JournalLineRow(boolean debit, String acc, double amt, Runnable onChange, Runnable onRemove) {
+            manual = amt > 0;
             view = new LinearLayout(MainActivity.this);
             view.setOrientation(LinearLayout.VERTICAL);
             view.setPadding(dp(6), dp(6), dp(6), dp(6));
@@ -5824,7 +5978,16 @@ public class MainActivity extends Activity {
             del.setOnClickListener(v -> onRemove.run());
             line.addView(del, iconLp(34, 4));
             view.addView(line);
-            amount.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { onChange.run(); } });
+            amount.addTextChangedListener(new SimpleTextWatcher() {
+                @Override public void changed() { if (settingAuto) return; manual = !amount.getText().toString().trim().isEmpty(); amount.setTextColor(0xFF212121); onChange.run(); }
+            });
+        }
+        // Balancing amount written by the editor, shown in the theme colour so it is clearly not typed
+        void setAuto(double v) {
+            settingAuto = true;
+            amount.setText(v > 0.004 ? String.format(Locale.US, "%.2f", v) : "");
+            amount.setTextColor(NAVY);
+            settingAuto = false;
         }
         Ledger.JournalLine read() { return new Ledger.JournalLine(account.value(), side.value().equals("Dr"), parseNum(amount)); }
     }
@@ -5853,6 +6016,16 @@ public class MainActivity extends Activity {
         totalsTv.setPadding(dp(4), dp(6), dp(4), dp(4));
         List<JournalLineRow> lineRows = new ArrayList<>();
         Runnable refresh = () -> {
+            // Auto-balance: the last untyped line on the lighter side receives whatever makes both sides equal
+            double drManual = 0, crManual = 0; JournalLineRow drAuto = null, crAuto = null;
+            for (JournalLineRow r : lineRows) {
+                Ledger.JournalLine l = r.read();
+                if (r.manual) { if (l.debit) drManual += l.amount; else crManual += l.amount; }
+                else { r.setAuto(0); if (l.debit) drAuto = r; else crAuto = r; }
+            }
+            double gap = drManual - crManual;
+            if (gap > 0 && crAuto != null) crAuto.setAuto(gap);
+            else if (gap < 0 && drAuto != null) drAuto.setAuto(-gap);
             double dr = 0, cr = 0;
             for (JournalLineRow r : lineRows) { Ledger.JournalLine l = r.read(); if (l.debit) dr += l.amount; else cr += l.amount; }
             double diff = dr - cr;
@@ -5953,7 +6126,7 @@ public class MainActivity extends Activity {
         EditText eName = edit("Name", false);
         eName.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
         EditText ePhone = phoneEdit();
-        EditText eGstin = edit("GSTIN (optional)", false);
+        EditText eGstin = gstinEdit("GSTIN (optional)");
         LinearLayout partyBox = new LinearLayout(this);
         partyBox.setOrientation(LinearLayout.VERTICAL);
         partyBox.addView(field("Phone", ePhone));
@@ -5975,6 +6148,7 @@ public class MainActivity extends Activity {
             SQLiteDatabase db = dbHelper.getWritableDatabase();
             if (k <= 1) {
                 if (!validPhone(ePhone, "party")) return;
+                if (!validGstin(eGstin, "party")) return;
                 ContentValues cv = new ContentValues();
                 cv.put("name", name); cv.put("phone", ePhone.getText().toString().trim());
                 cv.put("gstin", eGstin.getText().toString().trim().toUpperCase(Locale.ROOT));

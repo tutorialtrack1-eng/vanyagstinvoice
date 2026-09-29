@@ -33,7 +33,60 @@ final class Subscription {
 
     static final long TRIAL_MILLIS = 10 * 60 * 1000L;
     static final int[] PLAN_DAYS = {30, 90, 180, 365, 730};
+    static final int[] PLAN_PRICES = {299, 799, 1499, 2499, 3999};
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
+
+    // ---- Payment. Fill these in before release. ----
+    // UPI ID (VPA) that receives the subscription payment, and the payee name shown in the UPI app
+    static final String VENDOR_UPI_ID = "blitzbook@upi";
+    static final String VENDOR_NAME = "BlitzBook";
+    // Vendor mobile that receives activation requests on WhatsApp / SMS when no server is configured
+    static final String VENDOR_PHONE = "8074386833";
+    // Optional activation server. When set, the app POSTs {phone, email, days, amount, txnRef, status} here
+    // after payment; the server verifies the payment, sends the code to the customer by SMS and email,
+    // and may return {"code":"XXXX-XXXX-XXXX-XXXX"} so the app activates immediately. Leave blank for the
+    // manual flow (request reaches VENDOR_PHONE; the code is sent back by SMS / email).
+    static final String ACTIVATION_SERVER_URL = "";
+
+    static String planLabel(int i) { return PLAN_DAYS[i] + " days  -  Rs " + PLAN_PRICES[i]; }
+
+    /** upi://pay deep link that any UPI app understands; the note carries the phone and plan for matching. */
+    static String upiUri(String phone, int days, int amount) {
+        return "upi://pay?pa=" + android.net.Uri.encode(VENDOR_UPI_ID) + "&pn=" + android.net.Uri.encode(VENDOR_NAME)
+                + "&am=" + amount + ".00&cu=INR&tn=" + android.net.Uri.encode(VENDOR_NAME + " " + days + "d " + phone);
+    }
+
+    /** Sends the paid request to the activation server. Returns the code from the reply, "" when the server
+     *  accepted it but will send the code by SMS / email, or null when the server could not be reached. */
+    static String requestActivation(String phone, String email, int days, int amount, String txnRef, String status) {
+        if (ACTIVATION_SERVER_URL.isEmpty()) return null;
+        java.net.HttpURLConnection conn = null;
+        try {
+            org.json.JSONObject body = new org.json.JSONObject();
+            body.put("phone", phone); body.put("email", email); body.put("days", days); body.put("amount", amount);
+            body.put("txnRef", txnRef); body.put("status", status);
+            conn = (java.net.HttpURLConnection) new java.net.URL(ACTIVATION_SERVER_URL).openConnection();
+            conn.setConnectTimeout(10000); conn.setReadTimeout(15000);
+            conn.setRequestMethod("POST"); conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            try (java.io.OutputStream out = conn.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
+            if (conn.getResponseCode() != 200) return null;
+            StringBuilder sb = new StringBuilder();
+            try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                String line; while ((line = br.readLine()) != null) sb.append(line);
+            }
+            return new org.json.JSONObject(sb.toString()).optString("code", "");
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    // A paid request waiting for its code: shown in the subscription dialog until the code is entered
+    static void savePendingRequest(Context c, long userId, String text) { prefs(c).edit().putString("pending_activation_" + userId, text).apply(); }
+    static String pendingRequest(Context c, long userId) { return prefs(c).getString("pending_activation_" + userId, ""); }
+    static void clearPendingRequest(Context c, long userId) { prefs(c).edit().remove("pending_activation_" + userId).apply(); }
 
     private static final String PREFS = "invoice_prefs";
     private static final long DAY_MILLIS = 24L * 60 * 60 * 1000;
