@@ -32,8 +32,8 @@ final class Subscription {
     private Subscription() {}
 
     static final long TRIAL_MILLIS = 10 * 60 * 1000L;
-    static final int[] PLAN_DAYS = {30, 90, 180, 365, 730};
-    static final int[] PLAN_PRICES = {299, 799, 1499, 2499, 3999};
+    static final int[] PLAN_DAYS = {1, 30, 90, 180, 365, 730};
+    static final int[] PLAN_PRICES = {49, 299, 799, 1499, 2499, 3999};
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
 
     // ---- Payment. Fill these in before release. ----
@@ -48,7 +48,7 @@ final class Subscription {
     // manual flow (request reaches VENDOR_PHONE; the code is sent back by SMS / email).
     static final String ACTIVATION_SERVER_URL = "";
 
-    static String planLabel(int i) { return PLAN_DAYS[i] + " days  -  Rs " + PLAN_PRICES[i]; }
+    static String planLabel(int i) { return PLAN_DAYS[i] + (PLAN_DAYS[i] == 1 ? " day" : " days") + "  -  Rs " + PLAN_PRICES[i]; }
 
     /** upi://pay deep link that any UPI app understands; the note carries the phone and plan for matching. */
     static String upiUri(String phone, int days, int amount) {

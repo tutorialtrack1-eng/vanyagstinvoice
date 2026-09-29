@@ -212,6 +212,7 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout root, itemsContainer;
+    private TextView sideCompanyTv;
     private EditText invoiceNo, invoiceDate, destination, buyerPhone, consigneePhone, buyerEmail, consigneeEmail, buyerGstin, consigneeGstin, transporter, vehicle, vehicleNumber, otherInfo, deliveryNote, buyerOrderNo, buyerOrderDate, referenceNoDate;
     private AutoCompleteTextView buyerBillTo, consignee;
     private Spinner buyerState, consigneeState, paymentSpinner;
@@ -262,6 +263,8 @@ public class MainActivity extends Activity {
         String gstRate;
         double rate;
         int qty;
+        // Short code the business uses for the item (SKU); searchable everywhere the item is picked
+        String code = "";
 
         QuickMenuItem(String name, String hsn, String category, String gstRate, double rate) {
             this.name = name;
@@ -605,7 +608,7 @@ public class MainActivity extends Activity {
         section.setLayoutParams(lp); section.setPadding(dp(12), dp(12), dp(12), dp(12));
         GradientDrawable gd = new GradientDrawable(); gd.setStroke(dp(1), 0xFFD0D6DC); gd.setColor(0xFFF8FAFB); gd.setCornerRadius(dp(10)); section.setBackground(gd);
         if (title != null) {
-            TextView h = new TextView(this); h.setText(title.toUpperCase()); h.setTextSize(13); h.setTextColor(0xFF263238); h.setTypeface(Typeface.DEFAULT, Typeface.BOLD); h.setPadding(dp(12), dp(6), dp(12), dp(6));
+            TextView h = new TextView(this); h.setText(title.toUpperCase(java.util.Locale.ROOT)); h.setTextSize(13); h.setTextColor(0xFF263238); h.setTypeface(Typeface.DEFAULT, Typeface.BOLD); h.setPadding(dp(12), dp(6), dp(12), dp(6));
             GradientDrawable hgd = new GradientDrawable(); hgd.setColor(themeColor); hgd.setCornerRadius(dp(5)); h.setBackground(hgd);
             LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2); hlp.setMargins(0, 0, 0, dp(10)); section.addView(h, hlp);
         }
@@ -638,9 +641,11 @@ public class MainActivity extends Activity {
         e.setFilters(new InputFilter[]{new InputFilter.LengthFilter(10)});
         e.setMinHeight(dp(48));
         e.setPadding(dp(12), dp(10), dp(12), dp(10));
+        // No nagging while the number is still being typed: checked once all 10 digits are in, or on leaving the field
         e.addTextChangedListener(new SimpleTextWatcher() {
-            @Override public void changed() { e.setError(isValidPhone(e.getText().toString()) ? null : "Enter correct phone number"); }
+            @Override public void changed() { String s = e.getText().toString().trim(); e.setError(s.length() < 10 || isValidPhone(s) ? null : "Enter correct phone number"); }
         });
+        e.setOnFocusChangeListener((v, has) -> { if (!has) e.setError(isValidPhone(e.getText().toString()) ? null : "Enter correct phone number"); });
         return e;
     }
 
@@ -649,9 +654,7 @@ public class MainActivity extends Activity {
         e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
         e.setMinHeight(dp(48));
         e.setPadding(dp(12), dp(10), dp(12), dp(10));
-        e.addTextChangedListener(new SimpleTextWatcher() {
-            @Override public void changed() { e.setError(isValidEmail(e.getText().toString()) ? null : "Enter correct email address"); }
-        });
+        e.setOnFocusChangeListener((v, has) -> { if (!has) e.setError(isValidEmail(e.getText().toString()) ? null : "Enter correct email address"); });
         return e;
     }
 
@@ -737,7 +740,7 @@ public class MainActivity extends Activity {
     // Lightweight stand-in for Spinner inside item rows. Every Spinner owns a popup window, adapter and
     // recycler, which made rows with two of them expensive to measure and draw while scrolling a long
     // invoice. This is a plain TextView that opens a list dialog when tapped.
-    private class ChoiceView extends TextView {
+    private class ChoiceView extends androidx.appcompat.widget.AppCompatTextView {
         private final String[] options;
         private final String title;
         private int index = 0;
@@ -828,6 +831,7 @@ public class MainActivity extends Activity {
             int rIdx = c.getColumnIndex("rate");
             int cIdx = c.getColumnIndex("category");
             int xIdx = c.getColumnIndex("hidden");
+            int kIdx = c.getColumnIndex("item_code");
             while (c.moveToNext()) {
                 String name = nIdx >= 0 ? c.getString(nIdx) : "";
                 if (name == null || name.trim().isEmpty()) continue;
@@ -836,18 +840,22 @@ public class MainActivity extends Activity {
                 boolean hasRate = rIdx >= 0 && !c.isNull(rIdx);
                 String cat = cIdx >= 0 && c.getString(cIdx) != null ? c.getString(cIdx).trim() : "";
                 boolean hidden = xIdx >= 0 && c.getInt(xIdx) == 1;
+                String code = kIdx >= 0 && c.getString(kIdx) != null ? c.getString(kIdx).trim() : "";
 
                 // Saved master details override the built-in sample with the same name
                 QuickMenuItem existing = null;
                 for (QuickMenuItem q : items) if (q.name.equalsIgnoreCase(name)) { existing = q; break; }
                 if (hidden) { if (existing != null) items.remove(existing); continue; }
                 if (existing == null) {
-                    items.add(new QuickMenuItem(name, hsn, cat.isEmpty() ? "Catalog" : cat, gst, hasRate ? c.getDouble(rIdx) : 100.0));
+                    QuickMenuItem q = new QuickMenuItem(name, hsn, cat.isEmpty() ? "Catalog" : cat, gst, hasRate ? c.getDouble(rIdx) : 100.0);
+                    q.code = code;
+                    items.add(q);
                 } else {
                     if (!hsn.isEmpty()) existing.hsn = hsn;
                     existing.gstRate = gst;
                     if (hasRate) existing.rate = c.getDouble(rIdx);
                     if (!cat.isEmpty()) existing.category = cat;
+                    existing.code = code;
                 }
             }
             c.close();
@@ -968,7 +976,8 @@ public class MainActivity extends Activity {
     }
 
     private String quickItemSubtitle(QuickMenuItem item) {
-        String s = item.category == null ? "" : item.category;
+        String s = item.code == null || item.code.isEmpty() ? "" : item.code;
+        if (item.category != null && !item.category.isEmpty()) s += (s.isEmpty() ? "" : " · ") + item.category;
         if (item.hsn != null && !item.hsn.isEmpty()) s += (s.isEmpty() ? "" : " · ") + "HSN " + item.hsn;
         return s;
     }
@@ -1003,6 +1012,9 @@ public class MainActivity extends Activity {
         eCat.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_dropdown_item_1line, catOptions));
         EditText eHsn = edit("HSN / SAC", false);
         eHsn.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText eCode = edit("e.g. SKU-101", false);
+        eCode.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        eCode.setFilters(new InputFilter[]{new InputFilter.AllCaps(), new InputFilter.LengthFilter(20)});
         EditText ePrice = edit("0.00", true);
         Spinner sGst = spinner(GST_RATES);
 
@@ -1010,6 +1022,7 @@ public class MainActivity extends Activity {
             eName.setText(item.name);
             eCat.setText(item.category);
             eHsn.setText(item.hsn);
+            eCode.setText(item.code);
             ePrice.setText(String.format(Locale.US, "%.2f", item.rate));
             selectSpinner(sGst, item.gstRate);
         } else {
@@ -1017,7 +1030,10 @@ public class MainActivity extends Activity {
         }
 
         box.addView(field("Item Name *", eName));
-        box.addView(field("Category", eCat));
+        LinearLayout r0 = row();
+        r0.addView(field("Item Code", eCode), new LinearLayout.LayoutParams(0, -2, 1f));
+        r0.addView(field("Category", eCat), new LinearLayout.LayoutParams(0, -2, 1.3f));
+        box.addView(r0);
         LinearLayout r1 = row();
         r1.addView(field("HSN / SAC", eHsn), new LinearLayout.LayoutParams(0, -2, 1f));
         r1.addView(field("GST Rate %", sGst), new LinearLayout.LayoutParams(0, -2, 1f));
@@ -1053,12 +1069,13 @@ public class MainActivity extends Activity {
             if (item != null && !item.name.equalsIgnoreCase(name)) hideMasterItem(db, item.name);
             ContentValues cv = new ContentValues();
             cv.put("hsn", eHsn.getText().toString().trim());
+            cv.put("item_code", eCode.getText().toString().trim().toUpperCase(Locale.ROOT));
             cv.put("gst_rate", sGst.getSelectedItem().toString());
             cv.put("rate", price);
             cv.put("category", cat.isEmpty() ? "Catalog" : cat);
             cv.put("hidden", 0);
             upsertMasterItem(db, name, cv);
-            if (item != null) item.name = name;
+            if (item != null) { item.name = name; item.code = eCode.getText().toString().trim().toUpperCase(Locale.ROOT); }
             Toast.makeText(this, "Item saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
             onSaved.run();
@@ -1261,7 +1278,7 @@ public class MainActivity extends Activity {
             List<QuickMenuItem> filtered = new ArrayList<>();
             for (QuickMenuItem item : menuItems) {
                 boolean matchesCat = "All".equals(cat) || cat.equalsIgnoreCase(item.category);
-                boolean matchesQuery = query.isEmpty() || item.name.toLowerCase(Locale.ROOT).contains(query);
+                boolean matchesQuery = query.isEmpty() || item.name.toLowerCase(Locale.ROOT).contains(query) || (item.code != null && item.code.toLowerCase(Locale.ROOT).contains(query));
                 if (matchesCat && matchesQuery) filtered.add(item);
             }
 
@@ -1498,6 +1515,10 @@ public class MainActivity extends Activity {
         // At-a-glance figures for the month
         root.addView(statsRow());
 
+        // Items from the latest invoices, one tap away for the next bill
+        View recent = recentItemsStrip();
+        if (recent != null) root.addView(recent);
+
         TextView secTitle = new TextView(this);
         secTitle.setText("What would you like to do?");
         secTitle.setTextSize(15);
@@ -1554,6 +1575,55 @@ public class MainActivity extends Activity {
         r.addView(statCard("Invoices", String.valueOf(count), 0xFF43A047), weightLp());
         r.addView(statCard("Credit outstanding", money(credit), 0xFFFB8C00), weightLp());
         return r;
+    }
+
+    // Up to eight distinct items from the most recent invoices; tapping one starts a new invoice with it
+    private View recentItemsStrip() {
+        List<String> names = new ArrayList<>();
+        try {
+            Cursor c = dbHelper.getReadableDatabase().rawQuery("SELECT ii.particulars FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id ORDER BY i.id DESC, ii.id ASC LIMIT 60", null);
+            while (c.moveToNext() && names.size() < 8) {
+                String n = c.isNull(0) ? "" : c.getString(0).trim();
+                if (n.isEmpty()) continue;
+                boolean dup = false;
+                for (String s : names) if (s.equalsIgnoreCase(n)) { dup = true; break; }
+                if (!dup) names.add(n);
+            }
+            c.close();
+        } catch (Exception ignored) {}
+        if (names.isEmpty()) return null;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        TextView title = new TextView(this);
+        title.setText("Recent products");
+        title.setTextSize(12.5f); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD); title.setTextColor(0xFF37474F);
+        title.setPadding(dp(4), dp(14), dp(4), dp(4));
+        box.addView(title);
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout strip = new LinearLayout(this);
+        strip.setOrientation(LinearLayout.HORIZONTAL);
+        for (String n : names) {
+            TextView chip = chip(n, Color.WHITE, NAVY);
+            GradientDrawable gd = new GradientDrawable(); gd.setColor(Color.WHITE); gd.setCornerRadius(dp(16)); gd.setStroke(dp(1), lightenColor(BLUE, 0.2f));
+            chip.setBackground(gd);
+            chip.setPadding(dp(14), dp(8), dp(14), dp(8));
+            chip.setOnClickListener(v -> startInvoiceWithItem(n));
+            strip.addView(chip);
+        }
+        hs.addView(strip);
+        box.addView(hs);
+        return box;
+    }
+
+    private void startInvoiceWithItem(String itemName) {
+        showInvoiceView();
+        ItemRow r = rows.get(0);
+        r.desc.setText(itemName);
+        r.autoFillItemDetails(itemName);
+        if (r.qtyVal() == 0) r.qty.setText("1");
+        r.updateAmounts();
+        recalc();
     }
 
     private LinearLayout statCard(String label, String value, int accent) {
@@ -1636,15 +1706,17 @@ public class MainActivity extends Activity {
         card.setElevation(dp(1));
 
         if (tile.icon != 0) {
+            // Smaller badge for the compact sidebar tiles
+            boolean compact = titleSize < 12;
             ImageView iv = new ImageView(this);
             iv.setImageResource(tile.icon);
             iv.setColorFilter(Color.WHITE);
             GradientDrawable badge = new GradientDrawable(); badge.setShape(GradientDrawable.OVAL); badge.setColor(tile.accent);
             iv.setBackground(badge);
-            int pad = dp(10);
+            int pad = dp(compact ? 7 : 10);
             iv.setPadding(pad, pad, pad, pad);
-            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(44), dp(44));
-            ilp.setMargins(0, 0, 0, dp(8));
+            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(compact ? 32 : 44), dp(compact ? 32 : 44));
+            ilp.setMargins(0, 0, 0, dp(compact ? 5 : 8));
             card.addView(iv, ilp);
         }
 
@@ -2032,23 +2104,40 @@ public class MainActivity extends Activity {
 
         LinearLayout side = new LinearLayout(this);
         side.setOrientation(LinearLayout.VERTICAL);
-        side.setBackgroundColor(Color.WHITE);
-        side.setPadding(dp(12), dp(55), dp(12), dp(20));
+        side.setBackgroundColor(0xFFF6F8FA);
 
-        // Sidebar: company profile, the reports, and backup. Day-to-day work is on the dashboard grid.
-        int tileBg = lightenColor(SLATE, 0.30f), tileBorder = BLUE;
+        // Drawer header: gradient band with the app name and company, like the dashboard banner
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.VERTICAL);
+        head.setPadding(dp(18), dp(48), dp(18), dp(16));
+        head.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{NAVY, BLUE}));
+        TextView appTv = new TextView(this);
+        appTv.setText("BlitzBook"); appTv.setTextSize(20); appTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD); appTv.setTextColor(Color.WHITE);
+        head.addView(appTv);
+        sideCompanyTv = new TextView(this);
+        sideCompanyTv.setText(sellerNameStr.isEmpty() ? "Set up your company profile" : sellerNameStr);
+        sideCompanyTv.setTextSize(12.5f); sideCompanyTv.setTextColor(0xE6FFFFFF); sideCompanyTv.setPadding(0, dp(2), 0, 0);
+        sideCompanyTv.setSingleLine(true); sideCompanyTv.setEllipsize(TextUtils.TruncateAt.END);
+        head.addView(sideCompanyTv);
+        side.addView(head);
+
+        // Small colour-coded icon tiles, three per row: profile, reports, backup and subscription
         DashboardTile[] menu = {
-                new DashboardTile("Company Profile", 0, tileBorder, tileBg, v -> { drawer.closeDrawers(); showCompanyMasterDialog(); }),
-                new DashboardTile("Sales Report", 0, tileBorder, tileBg, v -> { drawer.closeDrawers(); showSalesReport(); }),
-                new DashboardTile("Profit & Loss", 0, tileBorder, tileBg, v -> { drawer.closeDrawers(); showProfitAndLoss(); }),
-                new DashboardTile("Balance Sheet", 0, tileBorder, tileBg, v -> { drawer.closeDrawers(); showBalanceSheet(); }),
-                new DashboardTile("Stock in Hand", 0, tileBorder, tileBg, v -> { drawer.closeDrawers(); showStockDialog(); }),
-                new DashboardTile("Export / Import", 0, tileBorder, tileBg, v -> { drawer.closeDrawers(); showBackupDialog(); }),
-                new DashboardTile("Subscription", R.drawable.ic_key, GREEN, tileBg, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
+                new DashboardTile("Company Profile", R.drawable.ic_business, 0xFF5E35B1, 0xFFEDE7F6, v -> { drawer.closeDrawers(); showCompanyMasterDialog(); }),
+                new DashboardTile("Sales Report", R.drawable.ic_reports, 0xFF1E88E5, 0xFFE3F2FD, v -> { drawer.closeDrawers(); showSalesReport(); }),
+                new DashboardTile("Profit & Loss", R.drawable.ic_journal, 0xFF43A047, 0xFFE8F5E9, v -> { drawer.closeDrawers(); showProfitAndLoss(); }),
+                new DashboardTile("Balance Sheet", R.drawable.ic_expense, 0xFFFB8C00, 0xFFFFF3E0, v -> { drawer.closeDrawers(); showBalanceSheet(); }),
+                new DashboardTile("Stock in Hand", R.drawable.ic_stock, 0xFF00ACC1, 0xFFE0F7FA, v -> { drawer.closeDrawers(); showStockDialog(); }),
+                new DashboardTile("Export / Import", R.drawable.ic_backup, 0xFF546E7A, 0xFFECEFF1, v -> { drawer.closeDrawers(); showBackupDialog(); }),
+                new DashboardTile("Subscription", R.drawable.ic_key, 0xFF00897B, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
         };
         ScrollView menuScroll = new ScrollView(this);
         menuScroll.setVerticalScrollBarEnabled(false);
-        menuScroll.addView(tileGrid(menu, 2, 13.5f, 11));
+        LinearLayout menuBox = new LinearLayout(this);
+        menuBox.setOrientation(LinearLayout.VERTICAL);
+        menuBox.setPadding(dp(8), dp(10), dp(8), dp(4));
+        menuBox.addView(tileGrid(menu, 3, 10.5f, 10));
+        menuScroll.addView(menuBox);
         side.addView(menuScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         Button logoutBtn = new Button(this);
@@ -2061,8 +2150,8 @@ public class MainActivity extends Activity {
             drawer.closeDrawers();
             logout();
         });
-        LinearLayout.LayoutParams logoutLp = new LinearLayout.LayoutParams(-1, dp(48));
-        logoutLp.setMargins(0, dp(5), 0, dp(5));
+        LinearLayout.LayoutParams logoutLp = new LinearLayout.LayoutParams(-1, dp(44));
+        logoutLp.setMargins(dp(12), dp(6), dp(12), dp(14));
         side.addView(logoutBtn, logoutLp);
         drawer.addView(main);
         drawer.addView(side, new DrawerLayout.LayoutParams(dp(285), -1, GravityCompat.START));
@@ -2151,21 +2240,35 @@ public class MainActivity extends Activity {
     // Item-name suggestions shared by every row; rebuilt only after the item master changes
     private List<String> itemSuggestionCache;
 
+    // Items with a code are also listed as "Name - CODE" so typing the code finds them
+    private final Map<String, String> itemCodeNames = new HashMap<>();
+
     private List<String> itemSuggestions() {
         if (itemSuggestionCache != null) return itemSuggestionCache;
         Set<String> suggestions = new LinkedHashSet<>();
+        itemCodeNames.clear();
         try {
             SQLiteDatabase db = dbHelper.getReadableDatabase();
-            Cursor c = db.query("items_master", new String[]{"item_name"}, "IFNULL(hidden,0)=0", null, null, null, "item_name ASC");
+            Cursor c = db.query("items_master", new String[]{"item_name", "item_code"}, "IFNULL(hidden,0)=0", null, null, null, "item_name ASC");
             while (c.moveToNext()) {
                 String name = c.getString(0);
-                if (name != null && !name.trim().isEmpty()) suggestions.add(name);
+                if (name == null || name.trim().isEmpty()) continue;
+                suggestions.add(name);
+                String code = c.isNull(1) ? "" : c.getString(1).trim();
+                if (!code.isEmpty()) { String label = name + " - " + code; suggestions.add(label); itemCodeNames.put(label, name); }
             }
             c.close();
         } catch (Exception ignored) {}
         suggestions.addAll(HSN_MAP.keySet());
         itemSuggestionCache = new ArrayList<>(suggestions);
         return itemSuggestionCache;
+    }
+
+    // "Name - CODE" suggestion back to the plain item name
+    private String suggestionToName(String s) {
+        if (itemSuggestionCache == null) itemSuggestions();
+        String n = itemCodeNames.get(s);
+        return n != null ? n : s;
     }
 
     private void addItemsHeader() {
@@ -2224,7 +2327,7 @@ public class MainActivity extends Activity {
     private TextView totalLine(LinearLayout parent, String name) {
         LinearLayout row = new LinearLayout(this); row.setPadding(0, dp(4), 0, dp(4));
         TextView l = new TextView(this); l.setText(name); l.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        TextView v = new TextView(this); v.setText("₹ 0.00"); v.setGravity(Gravity.RIGHT);
+        TextView v = new TextView(this); v.setText("₹ 0.00"); v.setGravity(Gravity.END);
         row.addView(l, new LinearLayout.LayoutParams(0, -2, 1)); row.addView(v, new LinearLayout.LayoutParams(0, -2, 1));
         parent.addView(row); return v;
     }
@@ -2354,7 +2457,11 @@ public class MainActivity extends Activity {
         }
         private void setupItemAutoComplete() {
             desc.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_dropdown_item_1line, new ArrayList<>(itemSuggestions())));
-            desc.setOnItemClickListener((p, v, pos, id) -> autoFillItemDetails((String) p.getItemAtPosition(pos)));
+            desc.setOnItemClickListener((p, v, pos, id) -> {
+                String name = suggestionToName((String) p.getItemAtPosition(pos));
+                if (!name.contentEquals(desc.getText())) { desc.setText(name); desc.setSelection(name.length()); }
+                autoFillItemDetails(name);
+            });
         }
 
         private void autoFillItemDetails(String itemName) {
@@ -2650,6 +2757,7 @@ public class MainActivity extends Activity {
         addColumnIfMissing(db, "items_master", "category", "TEXT");
         // hidden=1 marks a built-in quick menu item the user removed or renamed
         addColumnIfMissing(db, "items_master", "hidden", "INTEGER DEFAULT 0");
+        addColumnIfMissing(db, "items_master", "item_code", "TEXT");
         addColumnIfMissing(db, "company_master", "account_holder", "TEXT");
         Ledger.createTables(db);
     }
@@ -2761,8 +2869,12 @@ public class MainActivity extends Activity {
     private float pdfLogicalH = 842f;
     private float pdfScale() { return pdfFormat.w / A4_WIDTH; }
 
-    // Print / Save PDF: pick the paper first, then generate
+    // Print / Save PDF: invoices pick the layout first, then everything picks the paper, then generate
     private void choosePrintFormat(boolean challan) {
+        if (challan) choosePaperSize(true); else chooseInvoiceLayout(() -> choosePaperSize(false));
+    }
+
+    private void choosePaperSize(boolean challan) {
         String[] names = new String[PAGE_FORMATS.length];
         for (int i = 0; i < names.length; i++) names[i] = PAGE_FORMATS[i].name;
         new AlertDialog.Builder(this)
@@ -2791,6 +2903,7 @@ public class MainActivity extends Activity {
             Canvas c = p.getCanvas();
             c.scale(s, s);
             if (challan) drawChallanPage(c, i + 1, pgs.size(), pgs.get(i), i == 0, i == pgs.size() - 1);
+            else if (classicLayout()) drawClassicPage(c, i + 1, pgs.size(), pgs.get(i), i == 0, i == pgs.size() - 1);
             else drawPdfPage(c, i + 1, pgs.size(), pgs.get(i), i == 0, i == pgs.size() - 1);
             pdf.finishPage(p);
         }
@@ -3089,10 +3202,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    private float calculatePdfRowHeight(Paint p, ItemRow r, float descWidth, boolean noGst) {
+    private float calculatePdfRowHeight(Paint p, ItemRow r, float descWidth, boolean noGst) { return calculatePdfRowHeight(p, r, descWidth, noGst, false); }
+    // boldDesc: the classic layout prints the description in bold, which wraps a little sooner
+    private float calculatePdfRowHeight(Paint p, ItemRow r, float descWidth, boolean noGst, boolean boldDesc) {
         String mainDesc = titleCase(r.desc.getText().toString().trim());
         p.setTextSize(9.5f);
-        p.setTypeface(pdfTypeface(false));
+        p.setTypeface(pdfTypeface(boldDesc));
         int mainLines = Math.max(1, countTextLines(p, mainDesc, descWidth));
         float mainTextH = mainLines * 10;
 
@@ -3116,38 +3231,40 @@ public class MainActivity extends Activity {
     // Mirrors the y increments in drawInvoiceBody.
     private float invoiceFooterHeight() {
         boolean noGst = !chargesGst();
-        float h = 20 + 14 + (noGst ? 0 : isIntraState() ? 24 : 12) + 28;
+        float h;
         if (noGst) {
-            h += 25;
+            h = 18;
         } else {
             Set<String> rates = new LinkedHashSet<>();
             for (ItemRow r : rows) if (r.amountVal() > 0) rates.add(r.gst.value());
-            h += 25 + 12 + 18 + 16 * rates.size();
+            h = 18 + 12 + 18 + 16 * rates.size();
         }
-        h += 25;
+        h += 20;
         if (isRcm()) h += 12;
         if (othersCb != null && othersCb.isChecked() && !otherInfo.getText().toString().trim().isEmpty()) h += 20;
-        h += 15 + 85 + 25 + 45;
+        // Bank box (85) sits beside the totals column (about 70), then the signature block
+        h += 12 + 85 + 20 + 45;
         return h + 6;
     }
 
-    // Splits the items across as many A4 pages as needed. Every page is filled down to the table bottom;
-    // the last page also has to hold the footer block, so if it does not fit the final item is carried
-    // to a new page (a closing page never shows totals without at least one item above them).
+    // Splits the items across as many pages as needed. Every page is filled down to the table bottom;
+    // if the closing block does not fit under the last items it continues on a page of its own, so no
+    // page is left half empty by items being pulled forward.
     private List<List<ItemRow>> pdfPages(boolean challan) {
         List<List<ItemRow>> pgs = new ArrayList<>();
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         boolean noGst = !chargesGst();
         // PARTICULARS column width minus padding, matching the column layouts in drawInvoiceBody / drawChallanPage
-        float descWidth = challan ? 225 - 8 : noGst ? 250 - 8 : 190 - 8;
+        boolean classic = !challan && classicLayout();
+        float descWidth = challan ? 225 - 8 : classic ? (noGst ? 240 : 204) - 24 - 8 : noGst ? 250 - 8 : 190 - 8;
         // Items start below the header block plus the 25pt column heading row; the bottoms follow the paper size
-        final float firstTop = 238 + 25, nextTop = 77 + 25, itemsBottom = pdfLogicalH - 62, footerBottom = pdfLogicalH - 27;
-        float footerH = challan ? 180 : invoiceFooterHeight();
+        final float firstTop = (classic ? classicHeaderBottom() : 238) + 25, nextTop = 77 + 25, itemsBottom = pdfLogicalH - 62, footerBottom = pdfLogicalH - 27;
+        float footerH = challan ? 180 : classic ? classicFooterHeight() : invoiceFooterHeight();
 
         List<ItemRow> cur = new ArrayList<>();
         float y = firstTop;
         for (ItemRow r : rows) {
-            float h = calculatePdfRowHeight(p, r, descWidth, noGst);
+            float h = calculatePdfRowHeight(p, r, descWidth, noGst, classic);
             if (!cur.isEmpty() && y + h > itemsBottom) {
                 pgs.add(cur);
                 cur = new ArrayList<>();
@@ -3156,12 +3273,7 @@ public class MainActivity extends Activity {
             cur.add(r);
             y += h;
         }
-        if (y + footerH > footerBottom) {
-            List<ItemRow> last = new ArrayList<>();
-            if (cur.size() > 1) last.add(cur.remove(cur.size() - 1));
-            pgs.add(cur);
-            cur = last;
-        }
+        if (y + footerH > footerBottom) { pgs.add(cur); cur = new ArrayList<>(); }
         pgs.add(cur);
         return pgs;
     }
@@ -3391,17 +3503,14 @@ public class MainActivity extends Activity {
             text(c, p, "Continued on next page...", R, y + 14, false, true, false);
         }
         if (isLast) {
-            y+=20; boolean intra = isIntraState(); float lX = 410, vX = R; p.setTextSize(10.5f);
-            text(c,p,noGst ? "Total Value:" : "Taxable Value:",lX,y,true); text(c,p,money(parseValue(taxableValue)),vX,y,true,true, false); y+=14;
-            if(noGst){ /* no tax lines when the seller cannot charge GST */ }
-            else if(intra){ text(c,p,"CGST Amount:",lX,y,true); text(c,p,money(parseValue(cgstAmount)),vX,y,false,true, false); y+=12; text(c,p,"SGST Amount:",lX,y,true); text(c,p,money(parseValue(sgstAmount)),vX,y,false,true, false); y+=12; }
-            else { text(c,p,"IGST Amount:",lX,y,true); text(c,p,money(parseValue(igstAmount)),vX,y,false,true, false); y+=12; }
-            c.drawLine(lX-5,y+2,R,y+2,p); y+=14; text(c,p,"Grand Total:",lX,y,true); text(c,p,money(parseValue(grandTotal)),vX,y,true,true, false); y+=14; text(c,p,"Rounding:",lX,y,true); text(c,p,money(parseValue(roundedTotal)),vX,y,true,true, false);
+            // Closing block kept short so it normally sits under the items: GST breakdown across the width,
+            // amount in words, then bank details on the left beside the totals and signature on the right
+            boolean intra = isIntraState();
             if (noGst) {
-                y+=25; p.setTextSize(9.5f); text(c,p,isComposition() ? "Declaration: Composition taxable person, not eligible to collect tax on supplies."
+                y+=18; p.setTextSize(9.5f); text(c,p,isComposition() ? "Declaration: Composition taxable person, not eligible to collect tax on supplies."
                         : "Declaration: Supplier not registered under GST. No GST charged on this invoice.",L,y,true);
             } else {
-            y+=25; p.setTextSize(9f); text(c,p,"GST Breakdown:",L,y,true); y+=12;
+            y+=18; p.setTextSize(9f); text(c,p,"GST Breakdown:",L,y,true); y+=12;
             Map<String, Double> breakdown = new TreeMap<>();
             for(ItemRow r : rows) { double a = r.amountVal(); if(a>0) { String rt = r.gst.value(); Double current = breakdown.get(rt); breakdown.put(rt, (current != null ? current : 0.0) + a); } }
             float[] sxs; String[] sh;
@@ -3424,10 +3533,12 @@ public class MainActivity extends Activity {
                 y+=16;
             }
             }
-            y+=25; p.setTextSize(9.5f); text(c,p,"Amount in Words: "+amountWords.getText(),L,y,true);
+            y+=20; p.setTextSize(9.5f); text(c,p,"Amount in Words: "+amountWords.getText(),L,y,true);
             if (isRcm()) { y+=12; p.setTextSize(8.5f); text(c,p,"Tax payable under reverse charge by the recipient (Sec 9(3)/9(4) CGST Act). GST shown above is not included in the total.",L,y,true); p.setTextSize(9.5f); }
             if (othersCb != null && othersCb.isChecked()) { String oi = otherInfo.getText().toString().trim(); if (!oi.isEmpty()) { text(c,p,"Other Info: " + titleCase(oi),L,y+13,false); y+=20; } }
-            y+=15; box(c,p,L,y,W,85); p.setTextSize(10f); p.setUnderlineText(true); text(c,p,"BANK DETAILS", L+8, y+14, true); p.setUnderlineText(false);
+            y+=12;
+            float colY = y, bankW = 300;
+            box(c,p,L,colY,bankW,85); p.setTextSize(10f); p.setUnderlineText(true); text(c,p,"BANK DETAILS", L+8, colY+14, true); p.setUnderlineText(false);
             // Labels in one column, a colon in the next and every value starting on the same x, one per line
             p.setTextSize(9f);
             String[][] bank = {
@@ -3438,10 +3549,16 @@ public class MainActivity extends Activity {
                     {"Branch Name", bankBranchStr}};
             float labelX = L + 8, colonX = L + 112, valueX = L + 122;
             for (int i = 0; i < bank.length; i++) {
-                float ly = y + 28 + 12 * i;
+                float ly = colY + 28 + 12 * i;
                 text(c, p, bank[i][0], labelX, ly, true); text(c, p, ":", colonX, ly, true); text(c, p, bank[i][1], valueX, ly, false);
             }
-            float signY = y + 85 + 25; p.setTextSize(10.5f); text(c,p,"For " + sellerNameStr,R,signY,true,true, false);
+            float lX = L + bankW + 20, vX = R, ty = colY + 12; p.setTextSize(10.5f);
+            text(c,p,noGst ? "Total Value:" : "Taxable Value:",lX,ty,true); text(c,p,money(parseValue(taxableValue)),vX,ty,true,true, false); ty+=14;
+            if(noGst){ /* no tax lines when the seller cannot charge GST */ }
+            else if(intra){ text(c,p,"CGST Amount:",lX,ty,true); text(c,p,money(parseValue(cgstAmount)),vX,ty,false,true, false); ty+=12; text(c,p,"SGST Amount:",lX,ty,true); text(c,p,money(parseValue(sgstAmount)),vX,ty,false,true, false); ty+=12; }
+            else { text(c,p,"IGST Amount:",lX,ty,true); text(c,p,money(parseValue(igstAmount)),vX,ty,false,true, false); ty+=12; }
+            c.drawLine(lX-5,ty+2,R,ty+2,p); ty+=14; text(c,p,"Grand Total:",lX,ty,true); text(c,p,money(parseValue(grandTotal)),vX,ty,true,true, false); ty+=14; text(c,p,"Rounding:",lX,ty,true); text(c,p,money(parseValue(roundedTotal)),vX,ty,true,true, false);
+            float signY = Math.max(colY + 85, ty) + 20; p.setTextSize(10.5f); text(c,p,"For " + sellerNameStr,R,signY,true,true, false);
             Bitmap sig = pdfSignature;
             if (sig != null) {
                 // Fit inside a 120x36 area above "Authorised Signatory", right-aligned, keeping aspect ratio
@@ -3453,6 +3570,334 @@ public class MainActivity extends Activity {
             p.setTextSize(10.5f); text(c,p,"Authorised Signatory",R,signY+45,false,true, false);
         }
         p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, R, pdfLogicalH - 17, false, true, false); if (isLast && pdfSignature == null) text(c,p,"Computer-generated document. No signature required.",L, pdfLogicalH - 17, false);
+    }
+
+    // ------------------------------------------------------------------ classic boxed invoice layout
+    // Second print format, modelled on the familiar Tally tax invoice: one outer frame, seller / consignee /
+    // buyer stacked on the left with the document references in a label-value grid on the right, an items
+    // grid whose totals sit inside the grid, the HSN-wise tax summary, then bank details and declaration.
+    // The layout picked last is remembered ("pdf_layout"); 0 is the standard BlitzBook layout (drawPdfPage).
+    private static final String[] PDF_LAYOUT_NAMES = {"Standard  (BlitzBook layout)", "Classic boxed  (Tally style)"};
+    private int pdfLayout = 0;
+    private static final float TL = 40, TR = 555, TW = TR - TL;
+
+    private void chooseInvoiceLayout(Runnable then) {
+        pdfLayout = prefs.getInt("pdf_layout", 0);
+        new AlertDialog.Builder(this).setTitle("Invoice Format")
+                .setSingleChoiceItems(PDF_LAYOUT_NAMES, pdfLayout, (d, w) -> {
+                    pdfLayout = w; prefs.edit().putInt("pdf_layout", w).apply();
+                    d.dismiss(); then.run();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private boolean classicLayout() { return pdfLayout == 1; }
+
+    // Column edges: Sl | Description | HSN/SAC | [GST Rate] | Quantity | Rate | per | Amount
+    private float[] classicColumns() {
+        return chargesGst() ? new float[]{TL, TL + 24, TL + 204, TL + 262, TL + 298, TL + 353, TL + 415, TL + 443, TR}
+                            : new float[]{TL, TL + 24, TL + 240, TL + 298, TL + 353, TL + 415, TL + 443, TR};
+    }
+
+    // "Telangana (36)" -> "Telangana, Code : 36"
+    private String stateNameCode(String s) {
+        if (s == null) return "";
+        int i = s.lastIndexOf(" (");
+        return i > 0 && s.endsWith(")") ? s.substring(0, i) + ", Code : " + s.substring(i + 2, s.length() - 1) : s;
+    }
+
+    private String clipText(Paint p, String s, float w) {
+        if (s == null) return "";
+        s = s.trim();
+        if (p.measureText(s) <= w) return s;
+        while (s.length() > 1 && p.measureText(s + "...") > w) s = s.substring(0, s.length() - 1);
+        return s + "...";
+    }
+
+    private String fmtQty(double q) {
+        if (q == Math.rint(q)) return String.valueOf((long) q);
+        String s = String.format(Locale.US, "%.3f", q);
+        while (s.endsWith("0")) s = s.substring(0, s.length() - 1);
+        return s;
+    }
+
+    private String pct(double r) {
+        String s = r == Math.rint(r) ? String.valueOf((long) r) : String.format(Locale.US, "%.3f", r).replaceAll("0+$", "");
+        return s + "%";
+    }
+
+    private String rupeesPaiseWords(double v) {
+        long r = (long) Math.floor(v + 1e-9);
+        int ps = (int) Math.round((v - r) * 100);
+        if (ps >= 100) { r++; ps -= 100; }
+        String w = toIndianWords(r);
+        if (ps > 0) w = w.replace(" only.", "") + " and " + twoDigits(ps) + " Paise only.";
+        return w;
+    }
+
+    // HSN-wise taxable value keyed by "hsn|rate" -> {taxable, rate}, in the order the items appear
+    private Map<String, double[]> classicHsnGroups() {
+        Map<String, double[]> g = new java.util.LinkedHashMap<>();
+        for (ItemRow r : rows) {
+            double a = r.amountVal(); if (a <= 0) continue;
+            String key = r.hsnSac.getText().toString().trim() + "|" + r.gst.value();
+            double[] v = g.get(key);
+            if (v == null) { double rt; try { rt = Double.parseDouble(r.gst.value()); } catch (Exception e) { rt = 0; } v = new double[]{0, rt}; g.put(key, v); }
+            v[0] += a;
+        }
+        return g;
+    }
+
+    // One party block: optional caption, name in bold, address lines, GSTIN, state, e-mail, phone. Returns the y below it.
+    private float drawClassicParty(Canvas c, Paint p, String caption, String nameAndAddress, String gstin, String state, String email, String phone, float x, float y, float w) {
+        float yy = y + 11;
+        p.setTextSize(8.5f);
+        if (caption != null) { text(c, p, caption, x, yy, false); yy += 11; }
+        String[] lines = (nameAndAddress == null ? "" : nameAndAddress.trim()).split("\n");
+        p.setTextSize(9.5f); text(c, p, lines[0].trim(), x, yy, true); yy += 12;
+        p.setTextSize(8.5f); p.setTypeface(pdfTypeface(false));
+        for (int i = 1; i < lines.length; i++) {
+            String s = lines[i].trim(); if (s.isEmpty()) continue;
+            drawMultiline(c, p, s, x, yy, w, 10); yy += 10 * Math.max(1, countTextLines(p, s, w));
+        }
+        if (gstin != null && !gstin.isEmpty()) { text(c, p, "GSTIN/UIN : " + gstin, x, yy, true); yy += 10; }
+        if (state != null && !state.isEmpty()) { text(c, p, "State Name : " + state, x, yy, false); yy += 10; }
+        if (email != null && !email.isEmpty()) { text(c, p, "E-Mail : " + email, x, yy, false); yy += 10; }
+        if (phone != null && !phone.isEmpty()) { text(c, p, "Phone : " + phone, x, yy, false); yy += 10; }
+        return yy + 3;
+    }
+
+    // Title bar, then the party column beside the reference grid. Returns the y where the items heading starts.
+    private float drawClassicHeader(Canvas c, Paint p) {
+        final boolean noGst = !chargesGst();
+        float y = 30;
+        box(c, p, TL, y, TW, 20);
+        p.setTextSize(12f); center(c, p, isComposition() ? "BILL OF SUPPLY" : noGst ? "INVOICE" : "TAX INVOICE", (TL + TR) / 2, y + 14, true);
+        y += 20;
+        final float top = y, midX = TL + 250, lx = TL + 5, lw = midX - TL - 10;
+
+        // Left: seller, consignee, buyer
+        float ly = y;
+        String sellerGst = isComposition() ? sellerGstinStr + " (Composition Dealer)" : noGst ? null : sellerGstinStr;
+        ly = drawClassicParty(c, p, null, sellerNameStr + "\n" + sellerAddressStr, sellerGst, sellerStateName() + ", Code : " + sellerStateCode(), sellerEmailStr, sellerPhoneStr, lx, ly, lw);
+        c.drawLine(TL, ly, midX, ly, p);
+        String cons = consignee.getText().toString().trim();
+        if (!cons.isEmpty()) {
+            ly = drawClassicParty(c, p, "Consignee (Ship to)", cons, consigneeGstin.getText().toString().trim().toUpperCase(Locale.ROOT), stateNameCode((String) consigneeState.getSelectedItem()),
+                    consigneeEmail.getText().toString().trim().toLowerCase(Locale.ROOT), consigneePhone.getText().toString().trim(), lx, ly, lw);
+            c.drawLine(TL, ly, midX, ly, p);
+        }
+        ly = drawClassicParty(c, p, "Buyer (Bill to)", buyerBillTo.getText().toString().trim(), buyerGstin.getText().toString().trim().toUpperCase(Locale.ROOT), stateNameCode((String) buyerState.getSelectedItem()),
+                buyerEmail.getText().toString().trim().toLowerCase(Locale.ROOT), buyerPhone.getText().toString().trim(), lx, ly, lw);
+
+        // Right: label / value grid, two cells per row
+        Object pay = paymentSpinner.getSelectedItem();
+        String[][] cells = {
+                {"Invoice No.", invoiceNo.getText().toString().trim(), "Dated", invoiceDate.getText().toString().trim()},
+                {"Delivery Note", deliveryNote.getText().toString().trim(), "Mode/Terms of Payment", pay == null ? "" : pay.toString()},
+                {"Reference No. & Date", referenceNoDate.getText().toString().trim(), "Other References", titleCase(otherInfo.getText().toString())},
+                {"Buyer's Order No.", buyerOrderNo.getText().toString().trim(), "Dated", buyerOrderDate.getText().toString().trim()},
+                {"Dispatched through", titleCase(transporter.getText().toString()), "Destination", titleCase(destination.getText().toString())},
+                {"Motor Vehicle No.", vehicleNumber.getText().toString().trim().toUpperCase(Locale.ROOT), noGst ? "" : "Reverse Charge", noGst ? "" : isRcm() ? "Yes" : "No"}};
+        final float rowH = 26, half = (TR - midX) / 2;
+        float ry = y;
+        for (String[] cell : cells) {
+            c.drawLine(midX, ry + rowH, TR, ry + rowH, p);
+            c.drawLine(midX + half, ry, midX + half, ry + rowH, p);
+            for (int k = 0; k < 2; k++) {
+                float cx = midX + half * k + 4;
+                p.setTextSize(8.5f); text(c, p, cell[2 * k], cx, ry + 10, true);
+                p.setTextSize(9f); p.setTypeface(pdfTypeface(false)); text(c, p, clipText(p, cell[2 * k + 1], half - 8), cx, ry + 21, false);
+            }
+            ry += rowH;
+        }
+        float bottom = Math.max(ly, ry);
+        c.drawLine(midX, top, midX, bottom, p);
+        box(c, p, TL, top, TW, bottom - top);
+        return bottom;
+    }
+
+    // Header height for pagination: lay it out once on a throwaway canvas
+    private float classicHeaderBottom() {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setTextSize(9.5f); p.setColor(Color.BLACK); p.setTypeface(pdfTypeface(false));
+        return drawClassicHeader(new Canvas(Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)), p);
+    }
+
+    // Everything drawn after the last item: totals rows, amount in words, HSN summary, bank / declaration block
+    private float classicFooterHeight() {
+        boolean noGst = !chargesGst(), intra = isIntraState();
+        float h = 18;
+        if (!noGst) h += 16 * (intra ? 3 : 2);
+        if (Math.abs(parseValue(roundedTotal) - parseValue(grandTotal)) >= 0.005) h += 16;
+        h += 28;
+        if (isRcm()) h += 14;
+        if (noGst) h += 14;
+        if (!noGst) h += 24 + 14 * (classicHsnGroups().size() + 1) + 14;
+        h += 110;
+        return h + 6;
+    }
+
+    private void drawClassicPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setTextSize(9.5f); p.setColor(Color.BLACK); p.setTypeface(pdfTypeface(false));
+        final boolean noGst = !chargesGst(), intra = isIntraState();
+        final String title = isComposition() ? "BILL OF SUPPLY" : noGst ? "INVOICE" : "TAX INVOICE";
+        float y;
+        if (isFirst) {
+            y = drawClassicHeader(c, p);
+        } else {
+            y = 35;
+            box(c, p, TL, y, TW, 32);
+            p.setTextSize(10f); text(c, p, title + " (Continued)", TL + 6, y + 14, true);
+            p.setTextSize(9f); text(c, p, "Invoice No. " + invoiceNo.getText().toString().trim() + "   Dated " + invoiceDate.getText().toString().trim(), TR - 6, y + 14, true, true, false);
+            text(c, p, sellerNameStr, TL + 6, y + 26, false); text(c, p, "Page " + pageNum + " of " + totalPages, TR - 6, y + 26, false, true, false);
+            y += 42;
+        }
+        float[] xs = classicColumns();
+        final int qc = noGst ? 3 : 4, rc = qc + 1, pc = qc + 2, ac = qc + 3;
+        final float descW = xs[2] - xs[1] - 8;
+
+        if (isFirst || !items.isEmpty()) {
+            box(c, p, TL, y, TW, 25); for (int j = 1; j < xs.length - 1; j++) c.drawLine(xs[j], y, xs[j], y + 25, p);
+            p.setTextSize(8.5f);
+            center(c, p, "Sl", (xs[0] + xs[1]) / 2, y + 11, true); center(c, p, "No.", (xs[0] + xs[1]) / 2, y + 21, true);
+            String[] hds = noGst ? new String[]{"Description of Goods", "HSN/SAC", "Quantity", "Rate", "per", "Amount"}
+                                 : new String[]{"Description of Goods", "HSN/SAC", "GST Rate", "Quantity", "Rate", "per", "Amount"};
+            for (int j = 0; j < hds.length; j++) {
+                float cx = (xs[j + 1] + xs[j + 2]) / 2;
+                if ("GST Rate".equals(hds[j])) { center(c, p, "GST", cx, y + 11, true); center(c, p, "Rate", cx, y + 21, true); } else center(c, p, hds[j], cx, y + 16, true);
+            }
+            y += 25;
+        }
+        for (ItemRow r : items) {
+            float h = calculatePdfRowHeight(p, r, descW, noGst, true);
+            box(c, p, TL, y, TW, h); for (int j = 1; j < xs.length - 1; j++) c.drawLine(xs[j], y, xs[j], y + h, p);
+            String mainDesc = titleCase(r.desc.getText().toString().trim());
+            p.setTextSize(9.5f);
+            center(c, p, r.slNo.getText().toString(), (xs[0] + xs[1]) / 2, y + 13, false);
+            p.setTypeface(pdfTypeface(true)); drawMultiline(c, p, mainDesc, xs[1] + 4, y + 13, descW, 10);
+            int mainLines = Math.max(1, countTextLines(p, mainDesc, descW));
+            StringBuilder extra = new StringBuilder();
+            if (r.hasSubDetails()) {
+                if (!r.subSerialNo.isEmpty()) extra.append("S/N: ").append(r.subSerialNo).append(" ");
+                if (!r.subDescription.isEmpty()) extra.append(r.subDescription).append(" ");
+                if (!r.subOtherInfo.isEmpty()) extra.append("Info: ").append(r.subOtherInfo);
+            }
+            String sub = extra.toString().trim();
+            if (!sub.isEmpty()) { p.setTextSize(8f); p.setTypeface(pdfTypeface(false)); drawMultiline(c, p, sub, xs[1] + 6, y + 13 + mainLines * 10 + 2, descW - 4, 9); }
+            p.setTextSize(9.5f);
+            center(c, p, r.hsnSac.getText().toString().trim(), (xs[2] + xs[3]) / 2, y + 13, false);
+            if (!noGst) center(c, p, r.gst.value() + "%", (xs[3] + xs[4]) / 2, y + 13, false);
+            text(c, p, r.qty.getText().toString().trim() + " " + r.uqc.value(), xs[qc + 1] - 4, y + 13, false, true, false);
+            text(c, p, indianNumber(r.rateVal()), xs[rc + 1] - 4, y + 13, false, true, false);
+            center(c, p, r.uqc.value(), (xs[pc] + xs[pc + 1]) / 2, y + 13, false);
+            text(c, p, indianNumber(r.amountVal()), xs[ac + 1] - 4, y + 13, false, true, false);
+            y += h;
+        }
+        if (!isLast) {
+            p.setTextSize(9f); text(c, p, "Continued on next page...", TR, y + 14, false, true, false);
+        } else {
+            // Totals inside the grid: sub total, tax lines, round off, then the Total row
+            double taxable = parseValue(taxableValue), grand = parseValue(grandTotal), rounded = parseValue(roundedTotal);
+            List<String[]> tot = new ArrayList<>();
+            if (!noGst) {
+                tot.add(new String[]{"", indianNumber(taxable)});
+                if (intra) { tot.add(new String[]{"CGST", indianNumber(parseValue(cgstAmount))}); tot.add(new String[]{"SGST", indianNumber(parseValue(sgstAmount))}); }
+                else tot.add(new String[]{"IGST", indianNumber(parseValue(igstAmount))});
+            }
+            if (Math.abs(rounded - grand) >= 0.005) tot.add(new String[]{"Round Off", indianNumber(rounded - grand)});
+            p.setTextSize(9.5f);
+            for (String[] t : tot) {
+                box(c, p, TL, y, TW, 16); for (int j = 1; j < xs.length - 1; j++) if (j != pc) c.drawLine(xs[j], y, xs[j], y + 16, p);
+                text(c, p, t[0], xs[ac] - 4, y + 12, true, true, false);
+                text(c, p, t[1], TR - 4, y + 12, false, true, false);
+                y += 16;
+            }
+            double qsum = 0; Set<String> units = new LinkedHashSet<>();
+            for (ItemRow r : rows) if (r.qtyVal() > 0) { qsum += r.qtyVal(); units.add(r.uqc.value()); }
+            box(c, p, TL, y, TW, 18); for (int j = 1; j < xs.length - 1; j++) if (j != pc) c.drawLine(xs[j], y, xs[j], y + 18, p);
+            p.setTextSize(9.5f);
+            text(c, p, "Total", xs[2] - 4, y + 13, true, true, false);
+            text(c, p, fmtQty(qsum) + (units.size() == 1 ? " " + units.iterator().next() : ""), xs[qc + 1] - 4, y + 13, true, true, false);
+            p.setTextSize(10f); text(c, p, money(rounded), TR - 4, y + 13, true, true, false);
+            y += 18;
+
+            box(c, p, TL, y, TW, 28);
+            p.setTextSize(8.5f); text(c, p, "Amount Chargeable (in words)", TL + 4, y + 11, false); text(c, p, "E. & O.E", TR - 4, y + 11, false, true, false);
+            p.setTextSize(9.5f); p.setTypeface(pdfTypeface(true)); text(c, p, clipText(p, amountWords.getText().toString(), TW - 8), TL + 4, y + 23, true);
+            y += 28;
+            if (isRcm()) { box(c, p, TL, y, TW, 14); p.setTextSize(8f); text(c, p, "Tax payable under reverse charge by the recipient (Sec 9(3)/9(4) CGST Act). GST shown above is not included in the total.", TL + 4, y + 10, true); y += 14; }
+            if (noGst) { box(c, p, TL, y, TW, 14); p.setTextSize(8.5f); text(c, p, isComposition() ? "Declaration: Composition taxable person, not eligible to collect tax on supplies." : "Declaration: Supplier not registered under GST. No GST charged on this invoice.", TL + 4, y + 10, true); y += 14; }
+
+            if (!noGst) {
+                // HSN-wise summary: HSN | Taxable | (CGST rate, amount | SGST rate, amount) or (IGST rate, amount) | Total tax
+                Map<String, double[]> groups = classicHsnGroups();
+                float[] hx = intra ? new float[]{TL, TL + 90, TL + 200, TL + 240, TL + 315, TL + 355, TL + 430, TR} : new float[]{TL, TL + 120, TL + 260, TL + 330, TL + 440, TR};
+                int tc = hx.length - 2;
+                box(c, p, TL, y, TW, 24);
+                for (int j = 1; j < hx.length - 1; j++) c.drawLine(hx[j], j == 3 || (intra && j == 5) ? y + 12 : y, hx[j], y + 24, p);
+                c.drawLine(hx[2], y + 12, hx[tc], y + 12, p);
+                p.setTextSize(8f);
+                center(c, p, "HSN/SAC", (hx[0] + hx[1]) / 2, y + 15, true); center(c, p, "Taxable Value", (hx[1] + hx[2]) / 2, y + 15, true);
+                if (intra) { center(c, p, "CGST", (hx[2] + hx[4]) / 2, y + 9, true); center(c, p, "SGST", (hx[4] + hx[6]) / 2, y + 9, true); }
+                else center(c, p, "IGST", (hx[2] + hx[4]) / 2, y + 9, true);
+                for (int j = 2; j < tc; j++) center(c, p, j % 2 == 0 ? "Rate" : "Amount", (hx[j] + hx[j + 1]) / 2, y + 21, true);
+                center(c, p, "Total Tax Amount", (hx[tc] + hx[tc + 1]) / 2, y + 15, true);
+                y += 24;
+                double sT = 0, sA = 0, sTax = 0;
+                p.setTextSize(8.5f);
+                for (Map.Entry<String, double[]> e : groups.entrySet()) {
+                    double tv = e.getValue()[0], rt = e.getValue()[1], halfTax = tv * rt / 200.0, full = tv * rt / 100.0;
+                    box(c, p, TL, y, TW, 14); for (int j = 1; j < hx.length - 1; j++) c.drawLine(hx[j], y, hx[j], y + 14, p);
+                    text(c, p, e.getKey().substring(0, e.getKey().indexOf('|')), TL + 4, y + 10, false);
+                    text(c, p, indianNumber(tv), hx[2] - 4, y + 10, false, true, false);
+                    if (intra) {
+                        center(c, p, pct(rt / 2), (hx[2] + hx[3]) / 2, y + 10, false); text(c, p, indianNumber(halfTax), hx[4] - 4, y + 10, false, true, false);
+                        center(c, p, pct(rt / 2), (hx[4] + hx[5]) / 2, y + 10, false); text(c, p, indianNumber(halfTax), hx[6] - 4, y + 10, false, true, false);
+                    } else { center(c, p, pct(rt), (hx[2] + hx[3]) / 2, y + 10, false); text(c, p, indianNumber(full), hx[4] - 4, y + 10, false, true, false); }
+                    text(c, p, indianNumber(full), TR - 4, y + 10, false, true, false);
+                    sT += tv; sA += intra ? halfTax : full; sTax += full;
+                    y += 14;
+                }
+                box(c, p, TL, y, TW, 14); for (int j = 1; j < hx.length - 1; j++) c.drawLine(hx[j], y, hx[j], y + 14, p);
+                text(c, p, "Total", TL + 4, y + 10, true);
+                text(c, p, indianNumber(sT), hx[2] - 4, y + 10, true, true, false);
+                text(c, p, indianNumber(sA), hx[4] - 4, y + 10, true, true, false);
+                if (intra) text(c, p, indianNumber(sA), hx[6] - 4, y + 10, true, true, false);
+                text(c, p, indianNumber(sTax), TR - 4, y + 10, true, true, false);
+                y += 14;
+                box(c, p, TL, y, TW, 14); p.setTextSize(8.5f); p.setTypeface(pdfTypeface(true));
+                text(c, p, clipText(p, "Tax Amount (in words) : " + rupeesPaiseWords(sTax), TW - 8), TL + 4, y + 10, true);
+                y += 14;
+            }
+
+            // Bank details on the left, declaration and signature on the right
+            final float bw = 270, bh = 110;
+            box(c, p, TL, y, bw, bh); box(c, p, TL + bw, y, TW - bw, bh);
+            p.setTextSize(8.5f); text(c, p, "Company's Bank Details", TL + 6, y + 13, true);
+            String[][] bank = {
+                    {"Bank Name", bankNameStr},
+                    {"A/c Holder's Name", (bankAccountHolderStr.isEmpty() ? sellerNameStr : bankAccountHolderStr).toUpperCase(Locale.ROOT)},
+                    {"A/c No.", bankAccountNoStr},
+                    {"IFSC Code", bankIfscStr.toUpperCase(Locale.ROOT)},
+                    {"Branch", bankBranchStr}};
+            for (int i = 0; i < bank.length; i++) { float by = y + 28 + 12 * i; text(c, p, bank[i][0], TL + 6, by, false); text(c, p, ":", TL + 92, by, false); text(c, p, bank[i][1], TL + 98, by, true); }
+            float rx = TL + bw + 6, rw = TW - bw - 12;
+            text(c, p, "Declaration", TR - 6, y + 13, true, true, false);
+            p.setTextSize(9f); text(c, p, "for " + sellerNameStr, rx, y + 26, true);
+            p.setTextSize(8f); p.setTypeface(pdfTypeface(false));
+            drawMultiline(c, p, "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.", rx, y + 38, rw, 9.5f);
+            Bitmap sig = pdfSignature;
+            if (sig != null) {
+                float sc = Math.min(120f / sig.getWidth(), 34f / sig.getHeight());
+                float sw = sig.getWidth() * sc, sh = sig.getHeight() * sc;
+                c.drawBitmap(sig, null, new RectF(TR - 6 - sw, y + bh - 18 - sh, TR - 6, y + bh - 18), new Paint(Paint.FILTER_BITMAP_FLAG));
+            }
+            p.setTextSize(9f); text(c, p, "Authorised Signatory", TR - 6, y + bh - 6, true, true, false);
+            y += bh;
+            p.setTextSize(8f); center(c, p, pdfSignature == null ? "This is a Computer Generated Invoice. No signature required." : "This is a Computer Generated Invoice", (TL + TR) / 2, y + 11, false);
+        }
+        p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, TR, pdfLogicalH - 17, false, true, false);
     }
 
     private void drawChallanPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
@@ -3888,6 +4333,7 @@ public class MainActivity extends Activity {
             }
             c.close();
             if (sellerName != null) sellerName.setText(sellerNameStr);
+            if (sideCompanyTv != null && !sellerNameStr.isEmpty()) sideCompanyTv.setText(sellerNameStr);
             // Registration type decides whether GST is charged, so refresh amounts already on screen
             applyGstVisibility();
             for (ItemRow r : rows) r.updateAmounts();
@@ -4175,7 +4621,9 @@ public class MainActivity extends Activity {
                 }
 
                 TextView tv = new TextView(this);
-                tv.setText(String.format(Locale.US, "%s\nHSN: %s | GST: %s%% | ₹ %.2f%s", name, hsn == null ? "" : hsn, gst, price, cat.isEmpty() ? "" : " | " + cat));
+                int codeCol = c.getColumnIndex("item_code");
+                String code = codeCol >= 0 && c.getString(codeCol) != null ? c.getString(codeCol).trim() : "";
+                tv.setText(String.format(Locale.US, "%s%s\nHSN: %s | GST: %s%% | ₹ %.2f%s", code.isEmpty() ? "" : "[" + code + "]  ", name, hsn == null ? "" : hsn, gst, price, cat.isEmpty() ? "" : " | " + cat));
                 tv.setTextSize(13);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
                 if (itemSelectMode) {
@@ -4184,6 +4632,7 @@ public class MainActivity extends Activity {
                     // Pen and bin icons instead of text buttons leave the width to the item details
                     ImageButton editBtn = iconButton(R.drawable.ic_edit, BLUE, "Edit " + name);
                     QuickMenuItem editable = new QuickMenuItem(name, hsn == null ? "" : hsn, cat, gst == null || gst.isEmpty() ? "18" : gst, price);
+                    editable.code = code;
                     editBtn.setOnClickListener(v -> showQuickItemEditor(editable, categories, this::showItemMasterDialog));
                     row.addView(editBtn, iconLp(36, 6));
 
@@ -6090,7 +6539,7 @@ public class MainActivity extends Activity {
 
     // Tap-to-choose account field. The list is grouped (ledgers, then parties, then own accounts) and the
     // first entry creates a new party or account without leaving the journal entry.
-    private class AccountPicker extends TextView {
+    private class AccountPicker extends androidx.appcompat.widget.AppCompatTextView {
         private String value = "";
         AccountPicker(String initial) {
             super(MainActivity.this);

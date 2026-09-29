@@ -104,7 +104,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         ContentValues cv = new ContentValues();
         cv.put("name", name);
         cv.put("phone", phone);
-        if (email.isEmpty()) cv.putNull("email"); else cv.put("email", email.toLowerCase());
+        if (email.isEmpty()) cv.putNull("email"); else cv.put("email", email.toLowerCase(java.util.Locale.ROOT));
         cv.put("password", password);
         long result = db.insert("users", null, cv);
         return result != -1;
