@@ -47,7 +47,7 @@ public class LoginActivity extends Activity {
         root.setGravity(Gravity.CENTER_HORIZONTAL);
 
         TextView title = new TextView(this);
-        title.setText("Invoice Book");
+        title.setText("BlitzBook");
         title.setTextSize(24);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setPadding(0, 0, 0, dp(32));

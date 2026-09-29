@@ -1,4 +1,4 @@
-# Vanya GST Invoice — Android App
+# BlitzBook — GST Invoice & Accounts (Android App)
 
 A native Android invoice generator for **VANYA LIVING FURNITURE**.
 

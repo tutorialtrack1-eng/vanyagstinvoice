@@ -128,6 +128,18 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return id;
     }
 
+    // The login the account was registered with (phone, else email); activation codes are tied to it
+    public String userIdentity(long userId) {
+        Cursor c = getReadableDatabase().query("users", new String[]{"phone", "email"}, "id=?", new String[]{String.valueOf(userId)}, null, null, null);
+        String id = "";
+        if (c.moveToFirst()) {
+            String phone = c.isNull(0) ? "" : c.getString(0).trim();
+            id = !phone.isEmpty() ? phone : (c.isNull(1) ? "" : c.getString(1).trim());
+        }
+        c.close();
+        return id;
+    }
+
     public boolean resetPassword(String phoneOrEmail, String newPassword) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues cv = new ContentValues();
