@@ -16,6 +16,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -27,11 +28,14 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.text.Editable;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Patterns;
+import android.util.Xml;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
@@ -43,6 +47,7 @@ import android.widget.TableRow;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -53,15 +58,20 @@ import androidx.core.view.GravityCompat;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.xmlpull.v1.XmlPullParser;
+
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
@@ -69,12 +79,19 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Random;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class MainActivity extends Activity {
     private static final String PREFS = "invoice_prefs";
-    private static final String COUNTER = "invoice_counter";
+    // Login accounts are never part of a backup; each backup holds only the signed-in user's business data
+    private static final String[] BACKUP_TABLES = {"company_master", "items_master", "contacts", "history", "invoices", "invoice_items"};
     private final String[] GST_RATES = {"0", "5", "18", "40", "3", "0.25"};
     private final String[] PAYMENT = {"Cash", "Online", "Cheque", "Credit"};
     private final String[] STATES = {
@@ -97,36 +114,197 @@ public class MainActivity extends Activity {
         HSN_MAP.put("Recliner", "9401"); HSN_MAP.put("Stool", "9401"); HSN_MAP.put("Dressing Table", "9403");
     }
 
+    private static final Map<String, String> BANK_IFSC_MAP = new HashMap<>();
+    static {
+        BANK_IFSC_MAP.put("UTIB", "Axis Bank Ltd.");
+        BANK_IFSC_MAP.put("SBIN", "State Bank of India");
+        BANK_IFSC_MAP.put("HDFC", "HDFC Bank Ltd.");
+        BANK_IFSC_MAP.put("ICIC", "ICICI Bank Ltd.");
+        BANK_IFSC_MAP.put("PUNB", "Punjab National Bank");
+        BANK_IFSC_MAP.put("BARB", "Bank of Baroda");
+        BANK_IFSC_MAP.put("CNRB", "Canara Bank");
+        BANK_IFSC_MAP.put("UBIN", "Union Bank of India");
+        BANK_IFSC_MAP.put("KKBK", "Kotak Mahindra Bank Ltd.");
+        BANK_IFSC_MAP.put("INDB", "IndusInd Bank Ltd.");
+        BANK_IFSC_MAP.put("YESB", "Yes Bank Ltd.");
+        BANK_IFSC_MAP.put("IDFB", "IDFC FIRST Bank Ltd.");
+        BANK_IFSC_MAP.put("MAHB", "Bank of Maharashtra");
+        BANK_IFSC_MAP.put("IOBA", "Indian Overseas Bank");
+        BANK_IFSC_MAP.put("CBIN", "Central Bank of India");
+        BANK_IFSC_MAP.put("BKID", "Bank of India");
+        BANK_IFSC_MAP.put("PSIB", "Punjab & Sind Bank");
+        BANK_IFSC_MAP.put("UCOB", "UCO Bank");
+        BANK_IFSC_MAP.put("IDIB", "Indian Bank");
+        BANK_IFSC_MAP.put("DBSS", "DBS Bank India Ltd.");
+        BANK_IFSC_MAP.put("HSBC", "HSBC Bank");
+        BANK_IFSC_MAP.put("SCBL", "Standard Chartered Bank");
+        BANK_IFSC_MAP.put("CITI", "Citibank N.A.");
+        BANK_IFSC_MAP.put("FDRL", "Federal Bank Ltd.");
+        BANK_IFSC_MAP.put("KARB", "Karnataka Bank Ltd.");
+        BANK_IFSC_MAP.put("KVBL", "Karur Vysya Bank");
+        BANK_IFSC_MAP.put("TMBL", "Tamilnad Mercantile Bank Ltd.");
+        BANK_IFSC_MAP.put("SIBL", "The South Indian Bank Ltd.");
+        BANK_IFSC_MAP.put("CSBK", "CSB Bank Ltd.");
+        BANK_IFSC_MAP.put("RBLN", "RBL Bank Ltd.");
+        BANK_IFSC_MAP.put("AUBL", "AU Small Finance Bank Ltd.");
+        BANK_IFSC_MAP.put("ESFB", "Equitas Small Finance Bank Ltd.");
+        BANK_IFSC_MAP.put("UJVN", "Ujjivan Small Finance Bank Ltd.");
+        BANK_IFSC_MAP.put("JAKA", "Jammu & Kashmir Bank Ltd.");
+        BANK_IFSC_MAP.put("BAND", "Bandhan Bank Ltd.");
+        BANK_IFSC_MAP.put("PYTM", "Paytm Payments Bank");
+        BANK_IFSC_MAP.put("IPPB", "India Post Payments Bank");
+    }
+
+    public static String getBankNameFromIfsc(String ifsc) {
+        if (ifsc == null) return "";
+        String clean = ifsc.trim().toUpperCase(Locale.ROOT);
+        if (clean.length() >= 4) {
+            String prefix = clean.substring(0, 4);
+            return BANK_IFSC_MAP.getOrDefault(prefix, "");
+        }
+        return "";
+    }
+
+    public static boolean isValidIfsc(String ifsc) {
+        if (ifsc == null || ifsc.trim().isEmpty()) return true;
+        return ifsc.trim().toUpperCase(Locale.ROOT).matches("^[A-Z]{4}0[A-Z0-9]{6}$");
+    }
+
+    // Result of an IFSC lookup: (bank, branch) when found; ("", null) when the code is unknown; (null, null) when offline
+    private interface IfscCallback { void done(String bankName, String branch); }
+
+    private void lookupIfsc(String ifsc, IfscCallback cb) {
+        new Thread(() -> {
+            String bank = null, branch = null;
+            java.net.HttpURLConnection conn = null;
+            try {
+                conn = (java.net.HttpURLConnection) new java.net.URL("https://ifsc.razorpay.com/" + ifsc).openConnection();
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                int code = conn.getResponseCode();
+                if (code == 200) {
+                    StringBuilder sb = new StringBuilder();
+                    try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                        String line; while ((line = br.readLine()) != null) sb.append(line);
+                    }
+                    JSONObject o = new JSONObject(sb.toString());
+                    bank = o.optString("BANK", "").trim();
+                    branch = titleCase(o.optString("BRANCH", "").trim());
+                } else if (code == 404) {
+                    bank = "";
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+            final String fb = bank, fbr = branch;
+            runOnUiThread(() -> { if (!isFinishing()) cb.done(fb, fbr); });
+        }).start();
+    }
+
     private LinearLayout root, itemsContainer;
     private EditText invoiceNo, invoiceDate, destination, buyerPhone, consigneePhone, buyerEmail, consigneeEmail, buyerGstin, consigneeGstin, transporter, vehicle, vehicleNumber, otherInfo, deliveryNote, buyerOrderNo, buyerOrderDate, referenceNoDate;
     private AutoCompleteTextView buyerBillTo, consignee;
     private Spinner buyerState, consigneeState, paymentSpinner;
     private CheckBox sameAsBilling, othersCb;
-    private TextView sellerName, sellerAddress, sellerGstin, taxableValue, cgstAmount, sgstAmount, igstAmount, grandTotal, roundedTotal, amountWords;
+    private TextView sellerName, taxableLabel, taxableValue, cgstAmount, sgstAmount, igstAmount, grandTotal, roundedTotal, amountWords;
+    private final List<TextView> gstOnlyHeaders = new ArrayList<>();
+    private TextView amountHeader;
+    private Button challanBtn;
     private final List<ItemRow> rows = new ArrayList<>();
     private SharedPreferences prefs;
     private DatabaseHelper dbHelper;
+    private long userId;
     private boolean loadingInvoice = false;
 
-    private String sellerNameStr = "Vanya Living Furniture";
-    private String sellerGstinStr = "37BPVPG2248M1Z8";
-    private String sellerAddressStr = "176, BLOCK B-08, 100 FEET ROAD, ENIKEPADU, VIJAYAWADA, ANDHRA PRADESH, 520007";
-    private String sellerPhoneStr = "8074386833";
-    private String sellerEmailStr = "vanyaliving.contact@gmail.com";
-    private String bankNameStr = "HDFC BANK";
-    private String bankAccountNoStr = "50200123667011";
-    private String bankIfscStr = "HDFC0003975";
-    private String bankBranchStr = "ENIKEPADU";
-    private TextView sellerContact;
+    private String sellerNameStr = "";
+    private String sellerGstinStr = "";
+    private String sellerAddressStr = "";
+    private String sellerPhoneStr = "";
+    private String sellerEmailStr = "";
+    private String bankNameStr = "";
+    private String bankAccountNoStr = "";
+    private String bankIfscStr = "";
+    private String bankBranchStr = "";
+    private String bankAccountHolderStr = "";
+    private static final String DEFAULT_INVOICE_FORMAT = "####";
+    private String invoiceFormatStr = DEFAULT_INVOICE_FORMAT;
+    private static final String[] GST_REG_TYPES = {"Regular", "Composition", "Unregistered"};
+    private String sellerGstTypeStr = "Regular";
 
+    private static final String[] LINE_OF_ACTIVITIES = {
+            "Select Line of Activity",
+            "Food and Beverages",
+            "Retailer",
+            "Services",
+            "Manufacturing",
+            "Wholesale",
+            "General"
+    };
+    private String lineOfActivityStr = "General";
+    private Spinner activitySpinner;
+
+    private static class QuickMenuItem {
+        String name;
+        String hsn;
+        String category;
+        String gstRate;
+        double rate;
+        int qty;
+
+        QuickMenuItem(String name, String hsn, String category, String gstRate, double rate) {
+            this.name = name;
+            this.hsn = hsn;
+            this.category = category;
+            this.gstRate = gstRate;
+            this.rate = rate;
+            this.qty = 0;
+        }
+    }
+    private boolean isComposition() { return "Composition".equals(sellerGstTypeStr); }
+    private boolean chargesGst() { return "Regular".equals(sellerGstTypeStr); }
+    private static final int REQ_SIGNATURE = 300;
+    private ImageView signaturePreview;
+    private TextView signatureStatus;
+
+    private boolean isLegacyOwner() { return DatabaseHelper.isLegacyOwner(this, userId); }
+
+    private File signatureFile() { return new File(getFilesDir(), isLegacyOwner() ? "signature.png" : "signature_" + userId + ".png"); }
+
+    // User-attached signature first, then the bundled asset (which belongs to the original account only)
+    private Bitmap loadSignature() {
+        File f = signatureFile();
+        if (f.exists()) { Bitmap b = BitmapFactory.decodeFile(f.getAbsolutePath()); if (b != null) return b; }
+        if (!isLegacyOwner()) return null;
+        try (InputStream is = getAssets().open("signature.png")) { return BitmapFactory.decodeStream(is); } catch (Exception e) { return null; }
+    }
+
+    private void saveSignatureImage(Uri uri) {
+        try (InputStream is = getContentResolver().openInputStream(uri)) {
+            Bitmap src = BitmapFactory.decodeStream(is);
+            if (src == null) { Toast.makeText(this, "Could not read that image", Toast.LENGTH_SHORT).show(); return; }
+            int maxW = 600;
+            Bitmap scaled = src.getWidth() > maxW ? Bitmap.createScaledBitmap(src, maxW, Math.round(src.getHeight() * (maxW / (float) src.getWidth())), true) : src;
+            try (OutputStream out = new FileOutputStream(signatureFile())) { scaled.compress(Bitmap.CompressFormat.PNG, 100, out); }
+            refreshSignaturePreview();
+            Toast.makeText(this, "Signature attached", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Failed to attach signature: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void refreshSignaturePreview() {
+        if (signaturePreview == null) return;
+        Bitmap b = signatureFile().exists() ? BitmapFactory.decodeFile(signatureFile().getAbsolutePath()) : null;
+        signaturePreview.setImageBitmap(b);
+        signaturePreview.setVisibility(b != null ? View.VISIBLE : View.GONE);
+        if (signatureStatus != null) signatureStatus.setText(b != null ? "Signature will print above \"Authorised Signatory\"" : "No signature attached");
+    }
     // Classic, business-style colours
     private int NAVY = 0xFF607D8B;
     private int BLUE = 0xFF78909C;
     private int SLATE = 0xFF90A4AE;
     private int LIGHT = 0xFFF4F6F8;
-    private static final String SELLER_STATE = "Andhra Pradesh";
-    private static final String SELLER_PHONE = "8074386833";
-    private static final String SELLER_EMAIL = "vanyaliving.contact@gmail.com";
     private static final int GREEN = 0xFF3F6B4F;
     private static final int RED = 0xFF8B3A3A;
 
@@ -152,16 +330,27 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!prefs.getBoolean("is_logged_in", false)) { startActivity(new Intent(this, LoginActivity.class)); finish(); return; }
-        dbHelper = new DatabaseHelper(this); ensureInvoiceColumns(); loadHsnMapFromAsset(); applyRandomPastelTheme(); buildUi(); loadCompanyMaster();
+        userId = prefs.getLong("user_id", -1);
+        // Sessions from before accounts were separated only stored the login email
+        if (userId < 0 && prefs.getBoolean("is_logged_in", false)) {
+            userId = new DatabaseHelper(this).findUserId(prefs.getString("user_email", ""));
+            if (userId >= 0) prefs.edit().putLong("user_id", userId).apply();
+        }
+        if (!prefs.getBoolean("is_logged_in", false) || userId < 0) {
+            prefs.edit().putBoolean("is_logged_in", false).apply();
+            startActivity(new Intent(this, LoginActivity.class)); finish(); return;
+        }
+        dbHelper = DatabaseHelper.forUser(this, userId); ensureInvoiceColumns(); loadHsnMapFromAsset(); applyRandomPastelTheme(); buildUi(); loadCompanyMaster();
 
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         Cursor c = db.query("company_master", null, null, null, null, null, null);
         if (!c.moveToFirst()) {
             c.close();
+            showDashboardView();
             showCompanyMasterDialog();
         } else {
             c.close();
+            showDashboardView();
         }
     }
 
@@ -207,10 +396,51 @@ public class MainActivity extends Activity {
         e.setTextSize(14);
         e.setGravity(Gravity.CENTER_VERTICAL);
         e.setMinHeight(dp(48));
-        e.setPadding(dp(8), 0, dp(8), 0);
+        e.setPadding(dp(12), dp(10), dp(12), dp(10));
         if (num) e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         applyBoxBackground(e);
         return e;
+    }
+
+    private EditText compactEdit() {
+        EditText e = edit(null, false);
+        e.setMinHeight(dp(40));
+        e.setPadding(dp(8), dp(6), dp(8), dp(6));
+        return e;
+    }
+
+    // Optional contact fields: empty is fine, anything typed is checked as you type
+    private EditText phoneEdit() {
+        EditText e = edit("Phone Number", false);
+        e.setInputType(InputType.TYPE_CLASS_PHONE);
+        e.setFilters(new InputFilter[]{new InputFilter.LengthFilter(10)});
+        e.setMinHeight(dp(48));
+        e.setPadding(dp(12), dp(10), dp(12), dp(10));
+        e.addTextChangedListener(new SimpleTextWatcher() {
+            @Override public void changed() { e.setError(isValidPhone(e.getText().toString()) ? null : "Enter correct phone number"); }
+        });
+        return e;
+    }
+
+    private EditText emailEdit() {
+        EditText e = edit("Email Address", false);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        e.setMinHeight(dp(48));
+        e.setPadding(dp(12), dp(10), dp(12), dp(10));
+        e.addTextChangedListener(new SimpleTextWatcher() {
+            @Override public void changed() { e.setError(isValidEmail(e.getText().toString()) ? null : "Enter correct email address"); }
+        });
+        return e;
+    }
+
+    private boolean isValidPhone(String value) {
+        String s = value == null ? "" : value.trim();
+        return s.isEmpty() || s.matches("[6-9][0-9]{9}");
+    }
+
+    private boolean isValidEmail(String value) {
+        String s = value == null ? "" : value.trim();
+        return s.isEmpty() || Patterns.EMAIL_ADDRESS.matcher(s).matches();
     }
 
     private Spinner spinner(String[] vals) {
@@ -256,112 +486,835 @@ public class MainActivity extends Activity {
         box.addView(t); LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(-1, -2); inputLp.weight = 0; box.addView(input, inputLp); return box;
     }
 
-    private void buildUi() {
-        DrawerLayout drawer = new DrawerLayout(this);
-        LinearLayout main = new LinearLayout(this);
-        main.setOrientation(LinearLayout.VERTICAL);
 
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(16), dp(34), dp(16), dp(10));
-        toolbar.setBackgroundColor(NAVY);
+    private List<QuickMenuItem> getQuickMenuItemsForActivity(String activityType) {
+        List<QuickMenuItem> items = new ArrayList<>();
+        String act = activityType == null ? "" : activityType.trim().toLowerCase(Locale.ROOT);
 
-        TextView ham = new TextView(this);
-        ham.setText("☰");
-        ham.setTextSize(27);
-        ham.setTextColor(Color.WHITE);
-        ham.setPadding(0, 0, dp(18), 0);
-        ham.setOnClickListener(v -> drawer.openDrawer(GravityCompat.START));
-        toolbar.addView(ham);
-
-        TextView title = new TextView(this);
-        title.setText("GST BILLBOOK");
-        title.setTextSize(20);
-        title.setTextColor(Color.WHITE);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        toolbar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        main.addView(toolbar);
-
-        ScrollView scroll = new ScrollView(this);
-        scroll.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1));
-        root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(8), dp(12), dp(32));
-        scroll.addView(root);
-        main.addView(scroll);
-
-        LinearLayout side = new LinearLayout(this);
-        side.setOrientation(LinearLayout.VERTICAL);
-        side.setBackgroundColor(Color.WHITE);
-        side.setPadding(dp(16), dp(55), dp(16), dp(20));
-
-        String[] menu = {"Company Profile", "Item Master", "Sales Report", "Contact List", "Export Data", "Import Data"};
-        for (String m : menu) {
-            Button b = new Button(this);
-            b.setText(m);
-            styleButton(b, BLUE);
-            b.setAllCaps(false);
-            b.setTextSize(14);
-            b.setMinHeight(dp(48));
-            b.setOnClickListener(v -> {
-                drawer.closeDrawers();
-                if (m.equals("Company Profile")) showCompanyMasterDialog();
-                else if (m.equals("Item Master")) showItemMasterDialog();
-                else if (m.equals("Sales Report")) showSalesReport();
-                else if (m.equals("Contact List")) showContactList();
-                else if (m.equals("Export Data")) exportData();
-                else if (m.equals("Import Data")) importData();
-            });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48));
-            lp.setMargins(0, dp(5), 0, dp(5));
-            side.addView(b, lp);
+        if (act.contains("food") || act.contains("beverage")) {
+            items.add(new QuickMenuItem("Tea / Chai", "2101", "Beverages", "5", 20.0));
+            items.add(new QuickMenuItem("Coffee", "2101", "Beverages", "5", 30.0));
+            items.add(new QuickMenuItem("Masala Chai", "2101", "Beverages", "5", 25.0));
+            items.add(new QuickMenuItem("Mineral Water 1L", "2201", "Beverages", "18", 20.0));
+            items.add(new QuickMenuItem("Soft Drink 300ml", "2202", "Beverages", "40", 40.0));
+            items.add(new QuickMenuItem("Veg Sandwich", "2106", "Snacks", "5", 60.0));
+            items.add(new QuickMenuItem("Cheese Burger", "2106", "Snacks", "5", 100.0));
+            items.add(new QuickMenuItem("Veg Pizza", "2106", "Snacks", "5", 200.0));
+            items.add(new QuickMenuItem("French Fries", "2106", "Snacks", "5", 80.0));
+            items.add(new QuickMenuItem("Masala Dosa", "2106", "Snacks", "5", 90.0));
+            items.add(new QuickMenuItem("Special Veg Thali", "2106", "Meals", "5", 150.0));
+            items.add(new QuickMenuItem("Special Non-Veg Thali", "2106", "Meals", "5", 220.0));
+            items.add(new QuickMenuItem("Red Sauce Pasta", "2106", "Meals", "5", 120.0));
+            items.add(new QuickMenuItem("Ice Cream Scoop", "2105", "Desserts", "18", 50.0));
+            items.add(new QuickMenuItem("Gulab Jamun (2 pcs)", "2106", "Desserts", "5", 60.0));
+        } else if (act.contains("retail")) {
+            items.add(new QuickMenuItem("Cotton Shirt", "6205", "Apparel", "5", 850.0));
+            items.add(new QuickMenuItem("Denim Jeans", "6203", "Apparel", "12", 1200.0));
+            items.add(new QuickMenuItem("Leather Wallet", "4202", "Accessories", "18", 450.0));
+            items.add(new QuickMenuItem("Stainless Steel Bottle", "7323", "Accessories", "18", 350.0));
+            items.add(new QuickMenuItem("A4 Notebook", "4820", "Stationery", "12", 80.0));
+            items.add(new QuickMenuItem("Ball Pen Pack", "9608", "Stationery", "18", 50.0));
+        } else if (act.contains("service")) {
+            items.add(new QuickMenuItem("Consulting Service", "9983", "Professional", "18", 1500.0));
+            items.add(new QuickMenuItem("Maintenance & Repair", "9987", "Maintenance", "18", 800.0));
+            items.add(new QuickMenuItem("Design & Branding", "9983", "Professional", "18", 2500.0));
+            items.add(new QuickMenuItem("Delivery & Logistics", "9968", "Logistics", "18", 200.0));
+            items.add(new QuickMenuItem("Installation Fee", "9987", "Maintenance", "18", 500.0));
+        } else if (act.contains("manufactur") || act.contains("wholesale")) {
+            items.add(new QuickMenuItem("Raw Material Pack", "9999", "Materials", "18", 5000.0));
+            items.add(new QuickMenuItem("Finished Goods Unit", "9999", "Products", "18", 2500.0));
+            items.add(new QuickMenuItem("Bulk Packaging Box", "4819", "Packaging", "12", 150.0));
+            items.add(new QuickMenuItem("Freight Charges", "9965", "Logistics", "18", 1200.0));
+        } else {
+            items.add(new QuickMenuItem("General Goods Item", "9999", "General", "18", 100.0));
+            items.add(new QuickMenuItem("Standard Product Unit", "9999", "General", "18", 250.0));
+            items.add(new QuickMenuItem("Service Charge", "9987", "General", "18", 500.0));
         }
 
-        View sideSpacer = new View(this);
-        side.addView(sideSpacer, new LinearLayout.LayoutParams(-1, 0, 1f));
+        try {
+            SQLiteDatabase db = dbHelper.getReadableDatabase();
+            Cursor c = db.query("items_master", null, null, null, null, null, "item_name ASC");
+            int nIdx = c.getColumnIndex("item_name");
+            int hIdx = c.getColumnIndex("hsn");
+            int gIdx = c.getColumnIndex("gst_rate");
+            int rIdx = c.getColumnIndex("rate");
+            int cIdx = c.getColumnIndex("category");
+            int xIdx = c.getColumnIndex("hidden");
+            while (c.moveToNext()) {
+                String name = nIdx >= 0 ? c.getString(nIdx) : "";
+                if (name == null || name.trim().isEmpty()) continue;
+                String hsn = hIdx >= 0 && c.getString(hIdx) != null ? c.getString(hIdx) : "";
+                String gst = gIdx >= 0 && c.getString(gIdx) != null ? c.getString(gIdx) : "18";
+                boolean hasRate = rIdx >= 0 && !c.isNull(rIdx);
+                String cat = cIdx >= 0 && c.getString(cIdx) != null ? c.getString(cIdx).trim() : "";
+                boolean hidden = xIdx >= 0 && c.getInt(xIdx) == 1;
 
-        Button logoutBtn = new Button(this);
-        logoutBtn.setText("Logout");
-        styleButton(logoutBtn, RED);
-        logoutBtn.setAllCaps(false);
-        logoutBtn.setTextSize(14);
-        logoutBtn.setMinHeight(dp(48));
-        logoutBtn.setOnClickListener(v -> {
-            drawer.closeDrawers();
-            logout();
+                // Saved master details override the built-in sample with the same name
+                QuickMenuItem existing = null;
+                for (QuickMenuItem q : items) if (q.name.equalsIgnoreCase(name)) { existing = q; break; }
+                if (hidden) { if (existing != null) items.remove(existing); continue; }
+                if (existing == null) {
+                    items.add(new QuickMenuItem(name, hsn, cat.isEmpty() ? "Catalog" : cat, gst, hasRate ? c.getDouble(rIdx) : 100.0));
+                } else {
+                    if (!hsn.isEmpty()) existing.hsn = hsn;
+                    existing.gstRate = gst;
+                    if (hasRate) existing.rate = c.getDouble(rIdx);
+                    if (!cat.isEmpty()) existing.category = cat;
+                }
+            }
+            c.close();
+        } catch (Exception ignored) {}
+
+        return items;
+    }
+
+    private boolean isGridViewQuickMenu = false;
+
+    // Small square +/- style button: the framework Button's 88x48dp minimum would clip the text
+    private Button smallButton(String text, int color, float textSize) {
+        Button b = new Button(this);
+        b.setText(text); styleButton(b, color); b.setTextSize(textSize);
+        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0);
+        b.setPadding(0, 0, 0, 0); b.setIncludeFontPadding(false); b.setGravity(Gravity.CENTER);
+        b.setAllCaps(false);
+        return b;
+    }
+
+    // [-] qty [+] control shared by the list and grid views of the quick menu
+    private LinearLayout qtyStepper(QuickMenuItem item, Runnable onChange) {
+        LinearLayout ctrl = new LinearLayout(this);
+        ctrl.setOrientation(LinearLayout.HORIZONTAL);
+        ctrl.setGravity(Gravity.CENTER);
+        Button minus = smallButton("−", RED, 16);
+        Button plus = smallButton("+", GREEN, 16);
+        EditText qtyEt = compactEdit();
+        qtyEt.setInputType(InputType.TYPE_CLASS_NUMBER);
+        qtyEt.setGravity(Gravity.CENTER); qtyEt.setTextSize(13); qtyEt.setPadding(dp(2), 0, dp(2), 0);
+        qtyEt.setMinHeight(0); qtyEt.setMinimumHeight(0);
+        qtyEt.setText(String.valueOf(item.qty));
+        minus.setOnClickListener(v -> { if (item.qty > 0) qtyEt.setText(String.valueOf(item.qty - 1)); });
+        plus.setOnClickListener(v -> qtyEt.setText(String.valueOf(item.qty + 1)));
+        qtyEt.addTextChangedListener(new SimpleTextWatcher() {
+            @Override public void changed() {
+                String s = qtyEt.getText().toString().trim();
+                try { item.qty = s.isEmpty() ? 0 : Math.max(0, Integer.parseInt(s)); } catch (Exception e) { item.qty = 0; }
+                onChange.run();
+            }
         });
-        LinearLayout.LayoutParams logoutLp = new LinearLayout.LayoutParams(-1, dp(48));
-        logoutLp.setMargins(0, dp(5), 0, dp(5));
-        side.addView(logoutBtn, logoutLp);
-        drawer.addView(main);
-        drawer.addView(side, new DrawerLayout.LayoutParams(dp(285), -1, GravityCompat.START));
-        setContentView(drawer);
+        ctrl.addView(minus, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(dp(46), dp(34));
+        qlp.setMargins(dp(4), 0, dp(4), 0);
+        ctrl.addView(qtyEt, qlp);
+        ctrl.addView(plus, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        return ctrl;
+    }
+
+    // "₹ 20.00 · GST 5% ✎": tapping it changes the price (and GST) for this invoice, or opens the menu item editor
+    private TextView quickPriceLabel(QuickMenuItem item, boolean gstOn, List<String> categories, Runnable reloadItems, Runnable afterChange) {
+        TextView priceTv = new TextView(this);
+        priceTv.setText(quickPriceText(item, gstOn) + "  ✎");
+        priceTv.setTextSize(13.5f);
+        priceTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        priceTv.setTextColor(NAVY);
+        priceTv.setSingleLine(true);
+        priceTv.setPadding(0, dp(4), 0, dp(4));
+        priceTv.setClickable(true);
+        priceTv.setOnClickListener(v -> showQuickPriceDialog(item, gstOn, categories, reloadItems, afterChange));
+        return priceTv;
+    }
+
+    private String quickPriceText(QuickMenuItem item, boolean gstOn) {
+        String s = String.format(Locale.US, "₹ %.2f", item.rate);
+        if (gstOn) s += " · GST " + item.gstRate + "%";
+        return s;
+    }
+
+    private void showQuickPriceDialog(QuickMenuItem item, boolean gstOn, List<String> categories, Runnable reloadItems, Runnable afterChange) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(4));
+
+        EditText ePrice = edit("0.00", true);
+        ePrice.setText(String.format(Locale.US, "%.2f", item.rate));
+        ePrice.setSelectAllOnFocus(true);
+        Spinner sGst = spinner(GST_RATES);
+        selectSpinner(sGst, item.gstRate);
+        LinearLayout r = row();
+        r.addView(field("Unit Price ₹", ePrice), weightLp());
+        if (gstOn) r.addView(field("GST Rate %", sGst), weightLp());
+        box.addView(r);
+
+        TextView note = new TextView(this);
+        note.setText("Applies to this invoice only. Use \"Customise Item\" to change the saved name, category, HSN or price.");
+        note.setTextSize(11.5f);
+        note.setTextColor(0xFF607D8B);
+        note.setPadding(dp(4), dp(8), dp(4), 0);
+        box.addView(note);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(item.name)
+                .setView(box)
+                .setPositiveButton("Apply", null)
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Customise Item", (d, w) -> showQuickItemEditor(item, categories, reloadItems))
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            double price;
+            try { String s = ePrice.getText().toString().trim(); price = s.isEmpty() ? 0 : Double.parseDouble(s); }
+            catch (Exception e) { ePrice.setError("Enter a valid price"); ePrice.requestFocus(); return; }
+            if (price < 0) { ePrice.setError("Enter a valid price"); ePrice.requestFocus(); return; }
+            item.rate = price;
+            if (gstOn && sGst.getSelectedItem() != null) item.gstRate = sGst.getSelectedItem().toString();
+            dialog.dismiss();
+            afterChange.run();
+        }));
+        dialog.show();
+    }
+
+    private void styleQuickCard(View card, boolean selected) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setCornerRadius(dp(8));
+        gd.setColor(selected ? 0xFFEFF7F1 : 0xFFFAFAFA);
+        gd.setStroke(dp(selected ? 2 : 1), selected ? GREEN : 0xFFD0D6DC);
+        card.setBackground(gd);
+    }
+
+    private String quickItemSubtitle(QuickMenuItem item) {
+        String s = item.category == null ? "" : item.category;
+        if (item.hsn != null && !item.hsn.isEmpty()) s += (s.isEmpty() ? "" : " · ") + "HSN " + item.hsn;
+        return s;
+    }
+
+    // Inserts or updates one items_master row by name without dropping its other columns
+    private void upsertMasterItem(SQLiteDatabase db, String name, ContentValues cv) {
+        cv.put("item_name", name);
+        if (db.update("items_master", cv, "item_name=?", new String[]{name}) == 0) db.insert("items_master", null, cv);
+        itemSuggestionCache = null;
+    }
+
+    private void hideMasterItem(SQLiteDatabase db, String name) {
+        ContentValues cv = new ContentValues();
+        cv.put("hidden", 1);
+        upsertMasterItem(db, name, cv);
+    }
+
+    // Add (item == null) or customise a quick menu item. Saved to the item master so it persists.
+    private void showQuickItemEditor(QuickMenuItem item, List<String> categories, Runnable onSaved) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        EditText eName = edit("Item Name *", false);
+        eName.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        AutoCompleteTextView eCat = new AutoCompleteTextView(this);
+        eCat.setHint("e.g. Beverages"); eCat.setTextSize(14); eCat.setMinHeight(dp(48)); eCat.setThreshold(1);
+        eCat.setPadding(dp(12), dp(10), dp(12), dp(10)); eCat.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        applyBoxBackground(eCat);
+        List<String> catOptions = new ArrayList<>(categories);
+        catOptions.remove("All");
+        eCat.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_dropdown_item_1line, catOptions));
+        EditText eHsn = edit("HSN / SAC", false);
+        eHsn.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText ePrice = edit("0.00", true);
+        Spinner sGst = spinner(GST_RATES);
+
+        if (item != null) {
+            eName.setText(item.name);
+            eCat.setText(item.category);
+            eHsn.setText(item.hsn);
+            ePrice.setText(String.format(Locale.US, "%.2f", item.rate));
+            selectSpinner(sGst, item.gstRate);
+        } else {
+            selectSpinner(sGst, "18");
+        }
+
+        box.addView(field("Item Name *", eName));
+        box.addView(field("Category", eCat));
+        LinearLayout r1 = row();
+        r1.addView(field("HSN / SAC", eHsn), new LinearLayout.LayoutParams(0, -2, 1f));
+        r1.addView(field("GST Rate %", sGst), new LinearLayout.LayoutParams(0, -2, 1f));
+        box.addView(r1);
+        box.addView(field("Unit Price ₹", ePrice));
+
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(item == null ? "Add Quick Item" : "Customise Item")
+                .setView(sc)
+                .setPositiveButton("Save", null)
+                .setNegativeButton("Cancel", null);
+        if (item != null) {
+            b.setNeutralButton("Remove", (d, w) -> {
+                hideMasterItem(dbHelper.getWritableDatabase(), item.name);
+                Toast.makeText(this, item.name + " removed from quick items", Toast.LENGTH_SHORT).show();
+                onSaved.run();
+            });
+        }
+        AlertDialog dialog = b.create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String name = titleCase(eName.getText().toString().trim());
+            if (name.isEmpty()) { eName.setError("Item name is required"); eName.requestFocus(); return; }
+            double price;
+            try { String s = ePrice.getText().toString().trim(); price = s.isEmpty() ? 0 : Double.parseDouble(s); }
+            catch (Exception e) { ePrice.setError("Enter a valid price"); ePrice.requestFocus(); return; }
+            String cat = titleCase(eCat.getText().toString().trim());
+
+            SQLiteDatabase db = dbHelper.getWritableDatabase();
+            // Renaming leaves the old entry behind as hidden so a built-in sample does not reappear
+            if (item != null && !item.name.equalsIgnoreCase(name)) hideMasterItem(db, item.name);
+            ContentValues cv = new ContentValues();
+            cv.put("hsn", eHsn.getText().toString().trim());
+            cv.put("gst_rate", sGst.getSelectedItem().toString());
+            cv.put("rate", price);
+            cv.put("category", cat.isEmpty() ? "Catalog" : cat);
+            cv.put("hidden", 0);
+            upsertMasterItem(db, name, cv);
+            if (item != null) item.name = name;
+            Toast.makeText(this, "Item saved", Toast.LENGTH_SHORT).show();
+            dialog.dismiss();
+            onSaved.run();
+        }));
+        dialog.show();
+    }
+
+    // "Food Items" for a restaurant, "Products" for a trader, and so on, so the heading never assumes a food business
+    private String quickItemsLabel(String activity) {
+        String a = activity == null ? "" : activity.toLowerCase(Locale.ROOT);
+        if (a.contains("food") || a.contains("beverage")) return "Food Items";
+        if (a.contains("service")) return "Services";
+        if (a.contains("retail") || a.contains("wholesale") || a.contains("manufactur")) return "Products";
+        return "Items";
+    }
+
+    // The spinner's "Select..." placeholder falls back to the line of activity saved in the company profile
+    private String effectiveActivity(String selected) {
+        if (selected != null && !selected.trim().isEmpty() && !selected.startsWith("Select")) return selected;
+        if (lineOfActivityStr != null && !lineOfActivityStr.isEmpty() && !lineOfActivityStr.startsWith("Select")) return lineOfActivityStr;
+        return "General";
+    }
+
+    private void showQuickMenuDialog(String activityType) {
+        String titleType = effectiveActivity(activityType);
+        String itemsLabel = quickItemsLabel(titleType);
+        List<QuickMenuItem> menuItems = new ArrayList<>(getQuickMenuItemsForActivity(titleType));
+
+        // Pre-sync with currently active items on the invoice
+        for (QuickMenuItem item : menuItems) {
+            for (ItemRow r : rows) {
+                if (r.desc.getText().toString().trim().equalsIgnoreCase(item.name)) {
+                    item.qty = (int) r.qtyVal();
+                    if (r.rateVal() > 0) item.rate = r.rateVal();
+                    if (r.gst != null && r.gst.getSelectedItem() != null) item.gstRate = r.gst.getSelectedItem().toString();
+                    break;
+                }
+            }
+        }
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(14), dp(4), dp(14), dp(8));
+
+        TextView hintTv = new TextView(this);
+        hintTv.setText(titleType + "  ·  Tap + / − to pick quantities, tap a price to change it");
+        hintTv.setTextSize(11.5f);
+        hintTv.setTextColor(0xFF78909C);
+        hintTv.setSingleLine(true);
+        hintTv.setEllipsize(TextUtils.TruncateAt.END);
+        box.addView(hintTv);
+
+        // Search, Add and the list/grid toggle share one row
+        LinearLayout searchRow = new LinearLayout(this);
+        searchRow.setOrientation(LinearLayout.HORIZONTAL);
+        searchRow.setGravity(Gravity.CENTER_VERTICAL);
+        EditText searchEt = edit("🔍 Search " + itemsLabel.toLowerCase(Locale.ROOT) + "...", false);
+        searchEt.setSingleLine(true);
+        searchRow.addView(searchEt, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        Button addItemBtn = smallButton("+ Add", GREEN, 12);
+        addItemBtn.setPadding(dp(10), 0, dp(10), 0);
+        LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(-2, dp(40));
+        addLp.setMargins(dp(6), 0, 0, 0);
+        searchRow.addView(addItemBtn, addLp);
+        Button viewToggleBtn = smallButton(isGridViewQuickMenu ? "☰" : "▦", BLUE, 15);
+        LinearLayout.LayoutParams toggleLp = new LinearLayout.LayoutParams(dp(40), dp(40));
+        toggleLp.setMargins(dp(6), 0, 0, 0);
+        searchRow.addView(viewToggleBtn, toggleLp);
+        LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(-1, -2);
+        searchLp.setMargins(0, dp(6), 0, dp(8));
+        box.addView(searchRow, searchLp);
+
+        // Category filter chips
+        HorizontalScrollView catScroll = new HorizontalScrollView(this);
+        catScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout catContainer = new LinearLayout(this);
+        catContainer.setOrientation(LinearLayout.HORIZONTAL);
+        catScroll.addView(catContainer, new ViewGroup.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams catLp = new LinearLayout.LayoutParams(-1, -2);
+        catLp.setMargins(0, 0, 0, dp(6));
+        box.addView(catScroll, catLp);
+
+        final String[] selectedCategory = {"All"};
+        final List<String> categories = new ArrayList<>();
+        final Runnable[] renderItems = new Runnable[1];
+
+        Runnable rebuildCategories = () -> {
+            Set<String> set = new LinkedHashSet<>();
+            set.add("All");
+            for (QuickMenuItem item : menuItems) if (item.category != null && !item.category.isEmpty()) set.add(item.category);
+            categories.clear();
+            categories.addAll(set);
+            if (!categories.contains(selectedCategory[0])) selectedCategory[0] = "All";
+            catContainer.removeAllViews();
+            for (String cat : categories) {
+                Button catBtn = smallButton(cat, cat.equals(selectedCategory[0]) ? NAVY : SLATE, 12);
+                catBtn.setPadding(dp(12), 0, dp(12), 0);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(32));
+                lp.setMargins(0, 0, dp(6), 0);
+                catBtn.setOnClickListener(v -> {
+                    selectedCategory[0] = cat;
+                    for (int i = 0; i < catContainer.getChildCount(); i++) {
+                        Button other = (Button) catContainer.getChildAt(i);
+                        styleButton(other, other.getText().toString().equals(cat) ? NAVY : SLATE);
+                    }
+                    renderItems[0].run();
+                });
+                catContainer.addView(catBtn, lp);
+            }
+        };
+        rebuildCategories.run();
+
+        // Selection summary pill
+        TextView summaryTv = new TextView(this);
+        summaryTv.setTextSize(12.5f);
+        summaryTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        summaryTv.setTextColor(GREEN);
+        summaryTv.setGravity(Gravity.CENTER_VERTICAL);
+        summaryTv.setPadding(dp(10), dp(6), dp(10), dp(6));
+        GradientDrawable sumBg = new GradientDrawable();
+        sumBg.setCornerRadius(dp(6));
+        sumBg.setColor(0xFFEFF7F1);
+        sumBg.setStroke(dp(1), 0xFFC8E6C9);
+        summaryTv.setBackground(sumBg);
+        LinearLayout.LayoutParams sumLp = new LinearLayout.LayoutParams(-1, -2);
+        sumLp.setMargins(0, dp(2), 0, dp(6));
+        box.addView(summaryTv, sumLp);
+
+        Runnable updateSummary = () -> {
+            int count = 0;
+            double total = 0;
+            for (QuickMenuItem item : menuItems) {
+                if (item.qty > 0) {
+                    count += item.qty;
+                    total += item.qty * item.rate;
+                }
+            }
+            summaryTv.setText(count == 0 ? "Nothing selected yet. Tap + on an item to add it."
+                    : String.format(Locale.US, "Selected: %d %s   |   Total: ₹ %.2f", count, count == 1 ? "item" : "items", total));
+        };
+        updateSummary.run();
+
+        // Reload after an item is added/customised, keeping quantities already chosen
+        Runnable reloadItems = () -> {
+            Map<String, Integer> qtys = new HashMap<>();
+            for (QuickMenuItem item : menuItems) if (item.qty > 0) qtys.put(item.name.toLowerCase(Locale.ROOT), item.qty);
+            menuItems.clear();
+            menuItems.addAll(getQuickMenuItemsForActivity(titleType));
+            for (QuickMenuItem item : menuItems) {
+                Integer q = qtys.get(item.name.toLowerCase(Locale.ROOT));
+                if (q != null) item.qty = q;
+            }
+            rebuildCategories.run();
+            renderItems[0].run();
+            updateSummary.run();
+        };
+        Runnable afterPriceChange = () -> { renderItems[0].run(); updateSummary.run(); };
+
+        addItemBtn.setOnClickListener(v -> showQuickItemEditor(null, categories, reloadItems));
+
+        // Main container for the list or grid view
+        LinearLayout itemsMainHolder = new LinearLayout(this);
+        itemsMainHolder.setOrientation(LinearLayout.VERTICAL);
+
+        renderItems[0] = () -> {
+            itemsMainHolder.removeAllViews();
+            String query = searchEt.getText().toString().trim().toLowerCase(Locale.ROOT);
+            String cat = selectedCategory[0];
+
+            List<QuickMenuItem> filtered = new ArrayList<>();
+            for (QuickMenuItem item : menuItems) {
+                boolean matchesCat = "All".equals(cat) || cat.equalsIgnoreCase(item.category);
+                boolean matchesQuery = query.isEmpty() || item.name.toLowerCase(Locale.ROOT).contains(query);
+                if (matchesCat && matchesQuery) filtered.add(item);
+            }
+
+            if (filtered.isEmpty()) {
+                TextView emptyTv = new TextView(MainActivity.this);
+                emptyTv.setText(query.isEmpty() ? "No " + itemsLabel.toLowerCase(Locale.ROOT) + " in this category. Tap \"+ Add\" to create one." : "No matching " + itemsLabel.toLowerCase(Locale.ROOT) + " found for '" + query + "'.");
+                emptyTv.setTextColor(0xFF78909C);
+                emptyTv.setPadding(dp(12), dp(24), dp(12), dp(24));
+                emptyTv.setGravity(Gravity.CENTER);
+                itemsMainHolder.addView(emptyTv);
+                return;
+            }
+
+            boolean gstOn = chargesGst();
+            if (!isGridViewQuickMenu) {
+                // List: name and details on the left, price above the quantity stepper on the right
+                for (QuickMenuItem item : filtered) {
+                    LinearLayout row = new LinearLayout(MainActivity.this);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    row.setPadding(dp(12), dp(8), dp(8), dp(8));
+                    styleQuickCard(row, item.qty > 0);
+                    LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, -2);
+                    rowLp.setMargins(0, dp(3), 0, dp(3));
+
+                    LinearLayout nameCol = new LinearLayout(MainActivity.this);
+                    nameCol.setOrientation(LinearLayout.VERTICAL);
+                    TextView nameTv = new TextView(MainActivity.this);
+                    nameTv.setText(item.name);
+                    nameTv.setTextSize(14);
+                    nameTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                    nameTv.setTextColor(0xFF212121);
+                    nameTv.setMaxLines(2);
+                    nameTv.setEllipsize(TextUtils.TruncateAt.END);
+                    TextView subTv = new TextView(MainActivity.this);
+                    subTv.setText(quickItemSubtitle(item));
+                    subTv.setTextSize(11);
+                    subTv.setTextColor(0xFF78909C);
+                    subTv.setSingleLine(true);
+                    subTv.setEllipsize(TextUtils.TruncateAt.END);
+                    nameCol.addView(nameTv);
+                    nameCol.addView(subTv);
+                    LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(0, -2, 1f);
+                    nameLp.setMargins(0, 0, dp(8), 0);
+                    row.addView(nameCol, nameLp);
+
+                    LinearLayout rightCol = new LinearLayout(MainActivity.this);
+                    rightCol.setOrientation(LinearLayout.VERTICAL);
+                    rightCol.setGravity(Gravity.END);
+                    rightCol.addView(quickPriceLabel(item, gstOn, categories, reloadItems, afterPriceChange));
+                    Runnable onChange = () -> { updateSummary.run(); styleQuickCard(row, item.qty > 0); };
+                    LinearLayout.LayoutParams stepLp = new LinearLayout.LayoutParams(-2, -2);
+                    stepLp.setMargins(0, dp(2), 0, 0);
+                    rightCol.addView(qtyStepper(item, onChange), stepLp);
+                    row.addView(rightCol, new LinearLayout.LayoutParams(-2, -2));
+
+                    itemsMainHolder.addView(row, rowLp);
+                }
+            } else {
+                // Grid: two equal-height cards per row, stepper pinned to the bottom so they line up
+                LinearLayout currentGridRow = null;
+                for (int i = 0; i < filtered.size(); i++) {
+                    QuickMenuItem item = filtered.get(i);
+                    if (i % 2 == 0) {
+                        currentGridRow = new LinearLayout(MainActivity.this);
+                        currentGridRow.setOrientation(LinearLayout.HORIZONTAL);
+                        itemsMainHolder.addView(currentGridRow, new LinearLayout.LayoutParams(-1, -2));
+                    }
+
+                    LinearLayout card = new LinearLayout(MainActivity.this);
+                    card.setOrientation(LinearLayout.VERTICAL);
+                    card.setPadding(dp(10), dp(10), dp(10), dp(10));
+                    styleQuickCard(card, item.qty > 0);
+                    LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(0, -1, 1f);
+                    cardLp.setMargins(dp(3), dp(3), dp(3), dp(3));
+
+                    TextView nameTv = new TextView(MainActivity.this);
+                    nameTv.setText(item.name);
+                    nameTv.setTextSize(13.5f);
+                    nameTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                    nameTv.setTextColor(0xFF212121);
+                    nameTv.setMinLines(2);
+                    nameTv.setMaxLines(2);
+                    nameTv.setEllipsize(TextUtils.TruncateAt.END);
+                    card.addView(nameTv);
+
+                    TextView subTv = new TextView(MainActivity.this);
+                    subTv.setText(quickItemSubtitle(item));
+                    subTv.setTextSize(10.5f);
+                    subTv.setTextColor(0xFF78909C);
+                    subTv.setSingleLine(true);
+                    subTv.setEllipsize(TextUtils.TruncateAt.END);
+                    subTv.setPadding(0, dp(2), 0, 0);
+                    card.addView(subTv);
+
+                    card.addView(quickPriceLabel(item, gstOn, categories, reloadItems, afterPriceChange));
+
+                    // Pushes the stepper to the bottom so steppers line up across a row
+                    card.addView(new View(MainActivity.this), new LinearLayout.LayoutParams(-1, 0, 1f));
+
+                    Runnable onChange = () -> { updateSummary.run(); styleQuickCard(card, item.qty > 0); };
+                    LinearLayout.LayoutParams stepLp = new LinearLayout.LayoutParams(-1, -2);
+                    stepLp.setMargins(0, dp(6), 0, 0);
+                    card.addView(qtyStepper(item, onChange), stepLp);
+
+                    currentGridRow.addView(card, cardLp);
+                }
+                // Keep a lone last card at half width instead of stretching across the row
+                if (filtered.size() % 2 == 1 && currentGridRow != null) {
+                    LinearLayout.LayoutParams fillerLp = new LinearLayout.LayoutParams(0, 0, 1f);
+                    fillerLp.setMargins(dp(3), dp(3), dp(3), dp(3));
+                    currentGridRow.addView(new View(MainActivity.this), fillerLp);
+                }
+            }
+        };
+
+        viewToggleBtn.setOnClickListener(v -> {
+            isGridViewQuickMenu = !isGridViewQuickMenu;
+            viewToggleBtn.setText(isGridViewQuickMenu ? "☰" : "▦");
+            renderItems[0].run();
+        });
+
+        searchEt.addTextChangedListener(new SimpleTextWatcher() {
+            @Override public void changed() { renderItems[0].run(); }
+        });
+
+        renderItems[0].run();
+
+        // Item list takes a little under half the screen so the search, chips and dialog buttons stay visible
+        int listH = Math.min(dp(400), (int) (getResources().getDisplayMetrics().heightPixels * 0.45f));
+        ScrollView sc = new ScrollView(this);
+        sc.addView(itemsMainHolder);
+        box.addView(sc, new LinearLayout.LayoutParams(-1, listH));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("⚡ Quick " + itemsLabel)
+                .setView(box)
+                .setPositiveButton("Apply to Invoice", (d, w) -> {
+                    // Filter out blank rows
+                    for (int i = rows.size() - 1; i >= 0; i--) {
+                        if (rows.get(i).isBlank()) {
+                            ItemRow r = rows.remove(i);
+                            itemsContainer.removeView(r.view);
+                        }
+                    }
+
+                    for (QuickMenuItem item : menuItems) {
+                        ItemRow existing = null;
+                        for (ItemRow r : rows) {
+                            if (r.desc.getText().toString().trim().equalsIgnoreCase(item.name)) {
+                                existing = r;
+                                break;
+                            }
+                        }
+
+                        if (item.qty > 0) {
+                            if (existing != null) {
+                                existing.qty.setText(String.valueOf(item.qty));
+                                existing.rate.setText(String.format(Locale.US, "%.2f", item.rate));
+                                selectSpinner(existing.gst, item.gstRate);
+                            } else {
+                                ItemRow r = new ItemRow(MainActivity.this, rows.size() + 1);
+                                r.desc.setText(item.name);
+                                if (item.hsn != null && !item.hsn.isEmpty()) r.hsnSac.setText(item.hsn);
+                                selectSpinner(r.gst, item.gstRate);
+                                r.qty.setText(String.valueOf(item.qty));
+                                r.rate.setText(String.format(Locale.US, "%.2f", item.rate));
+                                rows.add(r);
+                                itemsContainer.addView(r.view);
+                            }
+                        } else if (existing != null) {
+                            // If qty reduced to 0 in quick menu, remove from invoice
+                            rows.remove(existing);
+                            itemsContainer.removeView(existing.view);
+                        }
+                    }
+
+                    if (rows.isEmpty()) {
+                        addItemRow();
+                    }
+                    renumberRows();
+                    recalc();
+                    Toast.makeText(MainActivity.this, "Invoice updated with selected items!", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showDashboardView() {
+        if (root == null) return;
+        root.removeAllViews();
+
+        LinearLayout bannerCard = createPastelCard(null, 0xFFEBF3FA, 0xFFB0BEC5);
+        TextView welcomeTv = new TextView(this);
+        welcomeTv.setText("Welcome back!");
+        welcomeTv.setTextSize(13);
+        welcomeTv.setTextColor(0xFF546E7A);
+
+        TextView companyTv = new TextView(this);
+        companyTv.setText(sellerNameStr.isEmpty() ? "My Business / Company Profile" : sellerNameStr);
+        companyTv.setTextSize(20);
+        companyTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        companyTv.setTextColor(0xFF263238);
+
+        TextView detailsTv = new TextView(this);
+        detailsTv.setText("GSTIN: " + (sellerGstinStr.isEmpty() ? "Not Specified" : sellerGstinStr) +
+                "  |  Activity: " + (lineOfActivityStr.isEmpty() ? "General" : lineOfActivityStr));
+        detailsTv.setTextSize(12);
+        detailsTv.setTextColor(0xFF455A64);
+        detailsTv.setPadding(0, dp(4), 0, 0);
+
+        bannerCard.addView(welcomeTv);
+        bannerCard.addView(companyTv);
+        bannerCard.addView(detailsTv);
+        root.addView(bannerCard);
+
+        TextView secTitle = new TextView(this);
+        secTitle.setText("SELECT OPERATION");
+        secTitle.setTextSize(13);
+        secTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        secTitle.setTextColor(0xFF37474F);
+        secTitle.setPadding(dp(4), dp(12), dp(4), dp(8));
+        root.addView(secTitle);
+
+        LinearLayout invoiceCard = createDashboardOptionCard(
+                "📝  Invoice",
+                "Create & Generate Tax Invoice / Bill",
+                0xFFE3F2FD, 0xFF90CAF9,
+                v -> showInvoiceView()
+        );
+        root.addView(invoiceCard);
+
+        LinearLayout itemsCard = createDashboardOptionCard(
+                "📦  Items",
+                "View, Add & Manage Item Master Catalog",
+                0xFFE8F5E9, 0xFFA5D6A7,
+                v -> showItemMasterDialog()
+        );
+        root.addView(itemsCard);
+
+        LinearLayout customerCard = createDashboardOptionCard(
+                "👥  Customer",
+                "Manage Buyer & Customer Contacts",
+                0xFFF3E5F5, 0xFFCE93D8,
+                v -> showContactListFiltered("Customer")
+        );
+        root.addView(customerCard);
+
+        LinearLayout supplierCard = createDashboardOptionCard(
+                "🚚  Supplier",
+                "Manage Supplier & Vendor Contacts",
+                0xFFFFF3E0, 0xFFFFCC80,
+                v -> showContactListFiltered("Supplier")
+        );
+        root.addView(supplierCard);
+
+        LinearLayout backupCard = createDashboardOptionCard(
+                "💾  Export / Import",
+                "Backup All Data to a File or Restore from a Backup",
+                0xFFECEFF1, 0xFFB0BEC5,
+                v -> showBackupDialog()
+        );
+        root.addView(backupCard);
+
+        LinearLayout utilSec = createSectionContainer("Quick Tools & Reports", SLATE);
+        LinearLayout r1 = row();
+        Button btnProfile = new Button(this); btnProfile.setText("Company Profile"); styleButton(btnProfile, BLUE); btnProfile.setOnClickListener(v -> showCompanyMasterDialog());
+        Button btnAddContact = new Button(this); btnAddContact.setText("+ Create Contact"); styleButton(btnAddContact, GREEN); btnAddContact.setOnClickListener(v -> showAddContactDialog("Customer"));
+        r1.addView(btnProfile, weightLp());
+        r1.addView(btnAddContact, weightLp());
+
+        LinearLayout r2 = row();
+        Button btnReport = new Button(this); btnReport.setText("Sales Report"); styleButton(btnReport, NAVY); btnReport.setOnClickListener(v -> showSalesReport());
+        r2.addView(btnReport, weightLp());
+
+        utilSec.addView(r1);
+        utilSec.addView(r2);
+        root.addView(utilSec);
+    }
+
+    private LinearLayout createDashboardOptionCard(String title, String subtitle, int bgColor, int borderColor, View.OnClickListener listener) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(16), dp(16), dp(16));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(6), 0, dp(6));
+        card.setLayoutParams(lp);
+
+        GradientDrawable gd = new GradientDrawable();
+        gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setColor(bgColor);
+        gd.setStroke(dp(1.5f), borderColor);
+        gd.setCornerRadius(dp(10));
+        card.setBackground(gd);
+
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(18);
+        t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        t.setTextColor(0xFF212121);
+
+        TextView sub = new TextView(this);
+        sub.setText(subtitle);
+        sub.setTextSize(12.5f);
+        sub.setTextColor(0xFF555555);
+        sub.setPadding(0, dp(4), 0, 0);
+
+        card.addView(t);
+        card.addView(sub);
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setOnClickListener(listener);
+        return card;
+    }
+
+    private void showInvoiceView() {
+        if (root == null) return;
+        root.removeAllViews();
+
+        LinearLayout topNav = new LinearLayout(this);
+        topNav.setOrientation(LinearLayout.HORIZONTAL);
+        topNav.setGravity(Gravity.CENTER_VERTICAL);
+        topNav.setPadding(0, 0, 0, dp(8));
+
+        Button backBtn = new Button(this);
+        backBtn.setText("← Back to Dashboard");
+        styleButton(backBtn, NAVY);
+        backBtn.setAllCaps(false);
+        backBtn.setTextSize(13);
+        backBtn.setOnClickListener(v -> showDashboardView());
+        topNav.addView(backBtn, new LinearLayout.LayoutParams(-2, dp(38)));
+
+        root.addView(topNav);
 
         LinearLayout sBox = createSectionContainer(null, NAVY);
         sellerName = new TextView(this);
-        sellerName.setText("Vanya Living Furniture");
+        sellerName.setText(sellerNameStr.isEmpty() ? "My Company Profile" : sellerNameStr);
         sellerName.setTextSize(18);
         sellerName.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-
-        sellerAddress = new TextView(this);
-        sellerAddress.setText("176, BLOCK B-08, 100 FEET ROAD, ENIKEPADU, VIJAYAWADA, ANDHRA PRADESH, 520007");
-
-        sellerGstin = new TextView(this);
-        sellerGstin.setText("GSTIN: 37BPVPG2248M1Z8");
-        sellerGstin.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-
         sBox.addView(sellerName);
-        sBox.addView(sellerAddress);
-        sBox.addView(sellerGstin);
-        sellerContact = new TextView(this);
-        sellerContact.setText("Phone: " + sellerPhoneStr + "   |   Email: " + sellerEmailStr);
-        sellerContact.setTextSize(13);
-        sellerContact.setTextColor(0xFF37474F);
-        sellerContact.setPadding(0, dp(4), 0, 0);
-        sBox.addView(sellerContact);
         root.addView(sBox);
 
-        LinearLayout invSec = createSectionContainer("Invoice Details", BLUE);
+        LinearLayout invSec = createSectionContainer("Invoice Details & Line of Activity", BLUE);
+
+        activitySpinner = spinner(LINE_OF_ACTIVITIES);
+        int actIdx = Arrays.asList(LINE_OF_ACTIVITIES).indexOf(lineOfActivityStr);
+        activitySpinner.setSelection(actIdx >= 0 ? actIdx : 0);
+
+        Button quickMenuBtn = new Button(this);
+        // Heading follows the line of activity: "Food Items" for a restaurant, "Products" for a trader, ...
+        quickMenuBtn.setText("⚡ Quick " + quickItemsLabel(effectiveActivity((String) activitySpinner.getSelectedItem())));
+        styleButton(quickMenuBtn, GREEN);
+        quickMenuBtn.setAllCaps(false);
+        quickMenuBtn.setTextSize(12);
+        quickMenuBtn.setOnClickListener(v -> showQuickMenuDialog((String) activitySpinner.getSelectedItem()));
+
+        activitySpinner.setOnItemSelectedListener(new SimpleSpinnerListener() {
+            @Override public void changed() {
+                String selected = (String) activitySpinner.getSelectedItem();
+                quickMenuBtn.setText("⚡ Quick " + quickItemsLabel(effectiveActivity(selected)));
+                if (selected != null && selected.equalsIgnoreCase("Food and Beverages")) {
+                    showQuickMenuDialog("Food and Beverages");
+                }
+            }
+        });
+
+        LinearLayout actRow = row();
+        actRow.addView(field("Line of Activity (Optional)", activitySpinner), weightLp());
+        actRow.addView(field("Quick POS Items", quickMenuBtn), weightLp());
+        invSec.addView(actRow);
+
         LinearLayout invNoContainer = new LinearLayout(this);
         invNoContainer.setOrientation(LinearLayout.HORIZONTAL);
         invNoContainer.setGravity(Gravity.CENTER_VERTICAL);
@@ -382,17 +1335,11 @@ public class MainActivity extends Activity {
         btnCol.setPadding(dp(2), 0, 0, 0);
 
         Button upBtn = new Button(this);
-        upBtn.setText("▲");
-        styleButton(upBtn, BLUE);
-        upBtn.setTextSize(10);
-        upBtn.setPadding(0, 0, 0, 0);
+        upBtn.setText("▲"); styleButton(upBtn, BLUE); upBtn.setTextSize(10); upBtn.setPadding(0, 0, 0, 0);
         upBtn.setOnClickListener(v -> stepInvoiceNumber(1));
 
         Button downBtn = new Button(this);
-        downBtn.setText("▼");
-        styleButton(downBtn, BLUE);
-        downBtn.setTextSize(10);
-        downBtn.setPadding(0, 0, 0, 0);
+        downBtn.setText("▼"); styleButton(downBtn, BLUE); downBtn.setTextSize(10); downBtn.setPadding(0, 0, 0, 0);
         downBtn.setOnClickListener(v -> stepInvoiceNumber(-1));
 
         btnCol.addView(upBtn, new LinearLayout.LayoutParams(dp(28), dp(20)));
@@ -415,7 +1362,6 @@ public class MainActivity extends Activity {
         invSec.addView(g1);
         root.addView(invSec);
 
-        // Entering an existing invoice number loads the saved invoice.
         invoiceNo.addTextChangedListener(new SimpleTextWatcher() {
             @Override public void changed() {
                 if (!loadingInvoice) loadInvoiceByNumber(invoiceNo.getText().toString().trim());
@@ -435,12 +1381,8 @@ public class MainActivity extends Activity {
         applyBoxBackground(buyerBillTo);
         setupAutoComplete(buyerBillTo);
 
-        buyerPhone = edit("Phone Number", false);
-        buyerPhone.setInputType(InputType.TYPE_CLASS_PHONE);
-        buyerPhone.setMinHeight(dp(56));
-        buyerEmail = edit("Email Address", false);
-        buyerEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        buyerEmail.setMinHeight(dp(56));
+        buyerPhone = phoneEdit();
+        buyerEmail = emailEdit();
         buyerGstin = edit("GSTIN Number", false);
         buyerState = spinner(STATES);
         buyerState.setOnItemSelectedListener(new SimpleSpinnerListener() {
@@ -480,12 +1422,8 @@ public class MainActivity extends Activity {
         applyBoxBackground(consignee);
         setupAutoComplete(consignee);
 
-        consigneePhone = edit("Phone Number", false);
-        consigneePhone.setInputType(InputType.TYPE_CLASS_PHONE);
-        consigneePhone.setMinHeight(dp(56));
-        consigneeEmail = edit("Email Address", false);
-        consigneeEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        consigneeEmail.setMinHeight(dp(56));
+        consigneePhone = phoneEdit();
+        consigneeEmail = emailEdit();
         consigneeGstin = edit("GSTIN Number", false);
         consigneeState = spinner(STATES);
 
@@ -515,9 +1453,9 @@ public class MainActivity extends Activity {
 
         LinearLayout otherSec = createSectionContainer("Other Details", SLATE);
         LinearLayout g4 = row();
-        destination = edit(null, false);
-        vehicle = edit(null, false);
-        vehicleNumber = edit(null, false);
+        destination = compactEdit();
+        vehicle = compactEdit();
+        vehicleNumber = compactEdit();
         g4.addView(field("Destination", destination), weightLp());
         g4.addView(field("Vehicle Type", vehicle), weightLp());
         g4.addView(field("Vehicle Number", vehicleNumber), weightLp());
@@ -530,21 +1468,21 @@ public class MainActivity extends Activity {
         otherSec.addView(othersCb);
 
         LinearLayout o1 = row();
-        transporter = edit(null, false);
-        deliveryNote = edit(null, false);
-        buyerOrderNo = edit(null, false);
+        transporter = compactEdit();
+        deliveryNote = compactEdit();
+        buyerOrderNo = compactEdit();
         o1.addView(field("Transporter", transporter), weightLp());
         o1.addView(field("Delivery Note", deliveryNote), weightLp());
         o1.addView(field("Buyer Order No", buyerOrderNo), weightLp());
 
         LinearLayout o2 = row();
-        buyerOrderDate = edit(null, false);
+        buyerOrderDate = compactEdit();
         buyerOrderDate.setFocusable(false);
         buyerOrderDate.setClickable(true);
         buyerOrderDate.setOnClickListener(v -> pickDate(buyerOrderDate));
         buyerOrderDate.setOnLongClickListener(v -> { buyerOrderDate.setText(""); Toast.makeText(this, "Date removed", Toast.LENGTH_SHORT).show(); return true; });
-        referenceNoDate = edit(null, false);
-        otherInfo = edit(null, false);
+        referenceNoDate = compactEdit();
+        otherInfo = compactEdit();
         o2.addView(field("Buyer Order Date", buyerOrderDate), weightLp());
         o2.addView(field("Reference No", referenceNoDate), weightLp());
         o2.addView(field("Other Info", otherInfo), weightLp());
@@ -560,25 +1498,29 @@ public class MainActivity extends Activity {
         root.addView(otherSec);
 
         LinearLayout goodsSec = createSectionContainer("Goods / Services", NAVY);
-        ScrollView vScroll = new ScrollView(this);
-        HorizontalScrollView hsv = new HorizontalScrollView(this);
+        HorizontalScrollView hsv = tableScroll();
         itemsContainer = new LinearLayout(this);
         itemsContainer.setOrientation(LinearLayout.VERTICAL);
         addItemsHeader();
         hsv.addView(itemsContainer);
-        vScroll.addView(hsv, new ViewGroup.LayoutParams(-1, -2));
-        goodsSec.addView(vScroll, new LinearLayout.LayoutParams(-1, dp(320)));
+        goodsSec.addView(hsv, new LinearLayout.LayoutParams(-1, -2));
 
         Button addBtn = new Button(this);
-        addBtn.setText("+ Add Item");
+        addBtn.setText("+ Add Particular / Row");
         styleButton(addBtn, BLUE);
         addBtn.setAllCaps(false);
-        addBtn.setOnClickListener(v -> addItemRow());
+        addBtn.setOnClickListener(v -> {
+            int before = rows.size();
+            addItemRow();
+            // Move into the new row so the page scrolls to it instead of leaving it below the fold
+            if (rows.size() > before) { ItemRow r = rows.get(rows.size() - 1); r.view.post(() -> r.desc.requestFocus()); }
+        });
         goodsSec.addView(addBtn);
         root.addView(goodsSec);
 
         LinearLayout totalsSec = createSectionContainer("Totals Summary", SLATE);
         taxableValue = totalLine(totalsSec, "Taxable Value");
+        taxableLabel = (TextView) ((LinearLayout) taxableValue.getParent()).getChildAt(0);
         cgstAmount = totalLine(totalsSec, "CGST Amount");
         sgstAmount = totalLine(totalsSec, "SGST Amount");
         igstAmount = totalLine(totalsSec, "IGST Amount");
@@ -607,6 +1549,11 @@ public class MainActivity extends Activity {
         save.setText("SAVE PDF");
         styleButton(save, GREEN);
         bRow.addView(save, weightLp());
+        challanBtn = new Button(this);
+        challanBtn.setText("DELIVERY CHALLAN");
+        styleButton(challanBtn, NAVY);
+        challanBtn.setVisibility(View.GONE);
+        bRow.addView(challanBtn, weightLp());
         root.addView(bRow);
 
         LinearLayout actionRow = row();
@@ -621,11 +1568,9 @@ public class MainActivity extends Activity {
         root.addView(actionRow);
 
         save.setOnClickListener(v -> checkEwayBillWarningThenGenerate(false));
+        challanBtn.setOnClickListener(v -> checkEwayBillWarningThenGenerate(true));
         newInvoiceBtn.setOnClickListener(v -> resetForNewInvoice());
         deleteInvoiceBtn.setOnClickListener(v -> deleteCurrentInvoice());
-
-        addItemRow();
-        recalc();
 
         sameAsBilling.setOnCheckedChangeListener((v, c) -> {
             consigneeContainer.setVisibility(c ? View.GONE : View.VISIBLE);
@@ -633,6 +1578,97 @@ public class MainActivity extends Activity {
         });
         sameAsBilling.setChecked(true);
         consigneeContainer.setVisibility(View.GONE);
+
+        rows.clear();
+        itemsContainer.removeAllViews();
+        addItemsHeader();
+        addItemRow();
+        recalc();
+    }
+
+    private void buildUi() {
+        DrawerLayout drawer = new DrawerLayout(this);
+        LinearLayout main = new LinearLayout(this);
+        main.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setPadding(dp(16), dp(34), dp(16), dp(10));
+        toolbar.setBackgroundColor(NAVY);
+
+        TextView ham = new TextView(this);
+        ham.setText("☰");
+        ham.setTextSize(27);
+        ham.setTextColor(Color.WHITE);
+        ham.setPadding(0, 0, dp(18), 0);
+        ham.setOnClickListener(v -> drawer.openDrawer(GravityCompat.START));
+        toolbar.addView(ham);
+
+        TextView title = new TextView(this);
+        title.setText("INVOICE BOOK");
+        title.setTextSize(20);
+        title.setTextColor(Color.WHITE);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        toolbar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        main.addView(toolbar);
+
+        ScrollView scroll = pageScroll();
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1));
+        root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(12), dp(8), dp(12), dp(32));
+        scroll.addView(root);
+        main.addView(scroll);
+
+        LinearLayout side = new LinearLayout(this);
+        side.setOrientation(LinearLayout.VERTICAL);
+        side.setBackgroundColor(Color.WHITE);
+        side.setPadding(dp(16), dp(55), dp(16), dp(20));
+
+        String[] menu = {"Dashboard", "Create Invoice", "Company Profile", "Item Master", "Create Contact", "Customer List", "Supplier List", "Sales Report", "Export / Import Data"};
+        for (String m : menu) {
+            Button b = new Button(this);
+            b.setText(m);
+            styleButton(b, BLUE);
+            b.setAllCaps(false);
+            b.setTextSize(14);
+            b.setMinHeight(dp(48));
+            b.setOnClickListener(v -> {
+                drawer.closeDrawers();
+                if (m.equals("Dashboard")) showDashboardView();
+                else if (m.equals("Create Invoice")) showInvoiceView();
+                else if (m.equals("Company Profile")) showCompanyMasterDialog();
+                else if (m.equals("Item Master")) showItemMasterDialog();
+                else if (m.equals("Create Contact")) showAddContactDialog("Customer");
+                else if (m.equals("Customer List")) showContactListFiltered("Customer");
+                else if (m.equals("Supplier List")) showContactListFiltered("Supplier");
+                else if (m.equals("Sales Report")) showSalesReport();
+                else if (m.equals("Export / Import Data")) showBackupDialog();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48));
+            lp.setMargins(0, dp(5), 0, dp(5));
+            side.addView(b, lp);
+        }
+
+        View sideSpacer = new View(this);
+        side.addView(sideSpacer, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        Button logoutBtn = new Button(this);
+        logoutBtn.setText("Logout");
+        styleButton(logoutBtn, RED);
+        logoutBtn.setAllCaps(false);
+        logoutBtn.setTextSize(14);
+        logoutBtn.setMinHeight(dp(48));
+        logoutBtn.setOnClickListener(v -> {
+            drawer.closeDrawers();
+            logout();
+        });
+        LinearLayout.LayoutParams logoutLp = new LinearLayout.LayoutParams(-1, dp(48));
+        logoutLp.setMargins(0, dp(5), 0, dp(5));
+        side.addView(logoutBtn, logoutLp);
+        drawer.addView(main);
+        drawer.addView(side, new DrawerLayout.LayoutParams(dp(285), -1, GravityCompat.START));
+        setContentView(drawer);
     }
 
     private void addStateSeparator(LinearLayout parent) {
@@ -656,22 +1692,99 @@ public class MainActivity extends Activity {
         lp.setMargins(dp(2), 0, dp(2), 0);
         return lp;
     }
+
+    // The page scrolls vertically and the items table horizontally. A stock ScrollView grabs any drag that
+    // moves more than the touch slop vertically, even when the finger is clearly moving sideways, and the
+    // stock HorizontalScrollView does the mirror image. With many item rows that tug-of-war made scrolling
+    // stutter, so each one only claims the drag when it is mostly in its own direction.
+    private ScrollView pageScroll() {
+        return new ScrollView(this) {
+            private float downX, downY;
+            @Override public boolean onInterceptTouchEvent(MotionEvent ev) {
+                switch (ev.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN: downX = ev.getX(); downY = ev.getY(); break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (Math.abs(ev.getX() - downX) > Math.abs(ev.getY() - downY) * 1.5f) return false;
+                        break;
+                }
+                return super.onInterceptTouchEvent(ev);
+            }
+        };
+    }
+
+    private HorizontalScrollView tableScroll() {
+        HorizontalScrollView hsv = new HorizontalScrollView(this) {
+            private float downX, downY;
+            @Override public boolean onInterceptTouchEvent(MotionEvent ev) {
+                switch (ev.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN: downX = ev.getX(); downY = ev.getY(); break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (Math.abs(ev.getY() - downY) > Math.abs(ev.getX() - downX)) return false;
+                        break;
+                }
+                return super.onInterceptTouchEvent(ev);
+            }
+        };
+        hsv.setHorizontalScrollBarEnabled(true);
+        return hsv;
+    }
+    // Item-name suggestions shared by every row; rebuilt only after the item master changes
+    private List<String> itemSuggestionCache;
+
+    private List<String> itemSuggestions() {
+        if (itemSuggestionCache != null) return itemSuggestionCache;
+        Set<String> suggestions = new LinkedHashSet<>();
+        try {
+            SQLiteDatabase db = dbHelper.getReadableDatabase();
+            Cursor c = db.query("items_master", new String[]{"item_name"}, "IFNULL(hidden,0)=0", null, null, null, "item_name ASC");
+            while (c.moveToNext()) {
+                String name = c.getString(0);
+                if (name != null && !name.trim().isEmpty()) suggestions.add(name);
+            }
+            c.close();
+        } catch (Exception ignored) {}
+        suggestions.addAll(HSN_MAP.keySet());
+        itemSuggestionCache = new ArrayList<>(suggestions);
+        return itemSuggestionCache;
+    }
+
     private void addItemsHeader() {
         LinearLayout h = new LinearLayout(this);
         h.setBackgroundColor(0xFFEEEEEE);
         h.setPadding(0, dp(6), 0, dp(6));
+        gstOnlyHeaders.clear();
         h.addView(tableHeaderLabel("Sl", 32));
         h.addView(tableHeaderLabel("Particulars", 160));
         h.addView(tableHeaderLabel("HSN/SAC", 75));
-        h.addView(tableHeaderLabel("GST %", 65));
-        h.addView(tableHeaderLabel("Inc?", 40));
-        h.addView(tableHeaderLabel("Qty", 60));
+        h.addView(gstHeader(tableHeaderLabel("GST %", 65)));
+        h.addView(gstHeader(tableHeaderLabel("Inc?", 40)));
+        h.addView(tableHeaderLabel("Qty *", 60));
         h.addView(tableHeaderLabel("UQC", 65));
-        h.addView(tableHeaderLabel("Rate", 85));
-        h.addView(tableHeaderLabel("Taxable", 95));
-        h.addView(tableHeaderLabel("Total Incl.", 100));
+        h.addView(tableHeaderLabel("Rate *", 85));
+        amountHeader = tableHeaderLabel(chargesGst() ? "Taxable" : "Amount", 95);
+        h.addView(amountHeader);
+        h.addView(gstHeader(tableHeaderLabel("Total Incl.", 100)));
         h.addView(tableHeaderLabel("", 40));
         itemsContainer.addView(h);
+    }
+
+    private TextView gstHeader(TextView t) {
+        t.setVisibility(chargesGst() ? View.VISIBLE : View.GONE);
+        gstOnlyHeaders.add(t);
+        return t;
+    }
+
+    // Composition and unregistered dealers cannot charge GST, so every GST field is hidden in the app
+    private void applyGstVisibility() {
+        boolean gst = chargesGst();
+        for (TextView t : gstOnlyHeaders) t.setVisibility(gst ? View.VISIBLE : View.GONE);
+        if (amountHeader != null) amountHeader.setText(gst ? "Taxable" : "Amount");
+        for (ItemRow r : rows) r.applyGstMode();
+        if (taxableLabel != null) {
+            taxableLabel.setText(gst ? "Taxable Value" : "Total Value");
+            for (TextView v : new TextView[]{cgstAmount, sgstAmount, igstAmount}) ((View) v.getParent()).setVisibility(gst ? View.VISIBLE : View.GONE);
+        }
+        if (challanBtn != null) challanBtn.setVisibility(isComposition() ? View.VISIBLE : View.GONE);
     }
 
     private TextView tableHeaderLabel(String text, int widthDp) {
@@ -701,6 +1814,13 @@ public class MainActivity extends Activity {
             if (last.desc.getText().toString().trim().isEmpty()) {
                 Toast.makeText(this, "Please enter particulars for the current item before adding a new item.", Toast.LENGTH_SHORT).show();
                 last.desc.requestFocus();
+                return;
+            }
+            if (last.qtyVal() <= 0) { last.qty.setError("Enter quantity"); last.qty.requestFocus(); Toast.makeText(this, "Quantity is required for the current item", Toast.LENGTH_SHORT).show(); return; }
+            if (last.rateVal() <= 0) {
+                EditText target = last.incToggle.isChecked() ? last.totalIncl : last.rate;
+                target.setError("Enter rate"); target.requestFocus();
+                Toast.makeText(this, "Rate is required for the current item", Toast.LENGTH_SHORT).show();
                 return;
             }
         }
@@ -739,7 +1859,7 @@ public class MainActivity extends Activity {
             rate = edit(null, true); rate.setGravity(Gravity.CENTER);
             taxable = edit(null, true); taxable.setGravity(Gravity.CENTER);
             totalIncl = edit(null, true); totalIncl.setGravity(Gravity.CENTER);
-            Button del = new Button(ctx); del.setText("X"); styleButton(del, RED); del.setPadding(0, 0, 0, 0);
+            Button del = new Button(ctx); del.setText("🗑️"); del.setTextSize(14); styleButton(del, RED); del.setPadding(0, 0, 0, 0);
             del.setOnClickListener(v -> { if (rows.size() > 1) { rows.remove(this); itemsContainer.removeView(view); renumberRows(); recalc(); } });
 
             view.addView(slNo, lp(32));
@@ -765,7 +1885,17 @@ public class MainActivity extends Activity {
                 @Override public void changed() { autoFillHsnFromItem(); }
             });
             gst.setOnItemSelectedListener(new SimpleSpinnerListener() { @Override public void changed() { updateAmounts(); recalc(); }});
+            applyGstMode();
             updateAmounts();
+        }
+
+        // Only Regular dealers charge GST; hide the GST columns otherwise
+        void applyGstMode() {
+            boolean on = chargesGst();
+            if (!on && incToggle.isChecked()) incToggle.setChecked(false);
+            gst.setVisibility(on ? View.VISIBLE : View.GONE);
+            incToggle.setVisibility(on ? View.VISIBLE : View.GONE);
+            totalIncl.setVisibility(on ? View.VISIBLE : View.GONE);
         }
 
         boolean hasSubDetails() {
@@ -804,22 +1934,7 @@ public class MainActivity extends Activity {
                     .show();
         }
         private void setupItemAutoComplete() {
-            List<String> suggestions = new ArrayList<>();
-            try {
-                SQLiteDatabase db = dbHelper.getReadableDatabase();
-                Cursor c = db.query("items_master", new String[]{"item_name"}, null, null, null, null, "item_name ASC");
-                while (c.moveToNext()) {
-                    String name = c.getString(0);
-                    if (name != null && !name.trim().isEmpty() && !suggestions.contains(name)) {
-                        suggestions.add(name);
-                    }
-                }
-                c.close();
-            } catch (Exception ignored) {}
-            for (String k : HSN_MAP.keySet()) {
-                if (!suggestions.contains(k)) suggestions.add(k);
-            }
-            desc.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_dropdown_item_1line, suggestions));
+            desc.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_dropdown_item_1line, new ArrayList<>(itemSuggestions())));
             desc.setOnItemClickListener((p, v, pos, id) -> autoFillItemDetails((String) p.getItemAtPosition(pos)));
         }
 
@@ -832,6 +1947,8 @@ public class MainActivity extends Activity {
                     int gstCol = c.getColumnIndex("gst_rate");
                     if (hsnCol >= 0) hsnSac.setText(c.getString(hsnCol));
                     if (gstCol >= 0) selectSpinner(gst, c.getString(gstCol));
+                    int rateCol = c.getColumnIndex("rate");
+                    if (rateCol >= 0 && !c.isNull(rateCol) && c.getDouble(rateCol) > 0 && rateVal() == 0) rate.setText(f(c.getDouble(rateCol)));
                     c.close();
                     updateAmounts();
                     recalc();
@@ -860,7 +1977,7 @@ public class MainActivity extends Activity {
         private void updateAmounts() {
             if (isUpdating) return; isUpdating = true;
             try {
-                double q = parse(qty), g = parse(gst.getSelectedItem().toString());
+                double q = parse(qty), g = !chargesGst() ? 0 : parse(gst.getSelectedItem().toString());
                 if (!incToggle.isChecked()) {
                     double r = parse(rate); double t = q * r; double tot = t * (1 + g / 100.0);
                     taxable.setText(f(t)); totalIncl.setText(f(tot));
@@ -880,17 +1997,26 @@ public class MainActivity extends Activity {
         private double parse(EditText e) { try { return Double.parseDouble(e.getText().toString().replace(",", "")); } catch (Exception ex) { return 0; } }
         private double parse(String s) { try { return Double.parseDouble(s.replace(",", "")); } catch (Exception ex) { return 0; } }
         private String f(double v) { return String.format(Locale.US, "%.2f", v); }
+        boolean isBlank() { return desc.getText().toString().trim().isEmpty() && qtyVal() == 0 && rateVal() == 0 && parse(totalIncl) == 0; }
         double amountVal() { return parse(taxable); }
         double qtyVal() { return parse(qty); }
         double rateVal() { return parse(rate); }
         String amountText() { return taxable.getText().toString(); }
     }
 
+    // Seller's state code comes from the first two digits of their GSTIN
+    private String sellerStateCode() {
+        String g = sellerGstinStr == null ? "" : sellerGstinStr.trim();
+        return g.length() >= 2 && Character.isDigit(g.charAt(0)) && Character.isDigit(g.charAt(1)) ? g.substring(0, 2) : "37";
+    }
+
+    private boolean isIntraState() { return buyerState.getSelectedItem().toString().contains("(" + sellerStateCode() + ")"); }
+
     private void recalc() {
-        boolean intra = buyerState.getSelectedItem().toString().contains("(37)");
+        boolean intra = isIntraState();
         double tTaxable = 0, tC = 0, tS = 0, tI = 0;
         for (ItemRow r : rows) {
-            double tx = r.amountVal(), g = Double.parseDouble(r.gst.getSelectedItem().toString());
+            double tx = r.amountVal(), g = !chargesGst() ? 0 : Double.parseDouble(r.gst.getSelectedItem().toString());
             tTaxable += tx; if (intra) { tC += tx * (g/2.0) / 100.0; tS += tx * (g/2.0) / 100.0; } else { tI += tx * g / 100.0; }
         }
         taxableValue.setText(money(tTaxable)); cgstAmount.setText(money(tC)); sgstAmount.setText(money(tS)); igstAmount.setText(money(tI));
@@ -900,7 +2026,7 @@ public class MainActivity extends Activity {
 
     private void exportData() {
         try {
-            JSONObject rootJson = new JSONObject(); String[] tables = {"contacts", "history", "users", "invoices", "invoice_items"};
+            JSONObject rootJson = new JSONObject(); String[] tables = BACKUP_TABLES;
             SQLiteDatabase db = dbHelper.getReadableDatabase();
             for (String t : tables) {
                 JSONArray arr = new JSONArray(); Cursor c = db.query(t, null, null, null, null, null, null);
@@ -918,38 +2044,130 @@ public class MainActivity extends Activity {
                 }
                 c.close(); rootJson.put(t, arr);
             }
-            File file = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Vanya_Backup_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".json");
-            FileWriter fw = new FileWriter(file); fw.write(rootJson.toString()); fw.close();
-            Toast.makeText(this, "Backup saved to Downloads", Toast.LENGTH_LONG).show();
-        } catch (Exception e) { Toast.makeText(this, "Export Error: " + e.getMessage(), Toast.LENGTH_SHORT).show(); }
+            // Same MediaStore route as the PDFs: works without storage permission and lands in Downloads/Invoice Book
+            String fileName = "InvoiceBook_Backup_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".json";
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
+            v.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+            v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Invoice Book");
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            if (uri == null) throw new Exception("Could not create the backup file");
+            try (OutputStream out = getContentResolver().openOutputStream(uri)) { out.write(rootJson.toString().getBytes(StandardCharsets.UTF_8)); }
+            new AlertDialog.Builder(this)
+                    .setTitle("Backup Saved")
+                    .setMessage("Saved to Downloads/Invoice Book/" + fileName + "\n\nKeep this file safe. Use Import on the dashboard to restore it on this or another phone.")
+                    .setPositiveButton("Share Backup", (d, w) -> {
+                        Intent i = new Intent(Intent.ACTION_SEND); i.setType("application/json"); i.putExtra(Intent.EXTRA_STREAM, uri);
+                        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); startActivity(Intent.createChooser(i, "Share backup file"));
+                    })
+                    .setNegativeButton("Close", null)
+                    .show();
+        } catch (Exception e) { Toast.makeText(this, "Export Error: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
+    // Dashboard card and drawer entry: choose between taking a backup and restoring one
+    private void showBackupDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Export / Import Data")
+                .setMessage("Export saves your company profile, items, contacts and invoices as a backup file in Downloads/Invoice Book.\n\nImport restores a backup file and replaces the data currently in the app.")
+                .setPositiveButton("Export Backup", (d, w) -> exportData())
+                .setNegativeButton("Import Backup", (d, w) -> confirmImport())
+                .setNeutralButton("Cancel", null)
+                .show();
+    }
+
+    private void confirmImport() {
+        new AlertDialog.Builder(this)
+                .setTitle("Import Backup")
+                .setMessage("Importing replaces all invoices, items, contacts and the company profile in this app with the data from the backup file. This cannot be undone.\n\nTip: take an Export first if you want to keep the current data.")
+                .setPositiveButton("Choose Backup File", (d, w) -> importData())
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void importData() {
-        Intent i = new Intent(Intent.ACTION_GET_CONTENT); i.setType("*/*"); startActivityForResult(Intent.createChooser(i, "Select Backup File"), 100);
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.setType("*/*");
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        // Backups are .json; some file managers report them as text or a generic binary type
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/plain", "application/octet-stream"});
+        try { startActivityForResult(Intent.createChooser(i, "Select Backup File"), 100); }
+        catch (Exception e) { Toast.makeText(this, "No file picker available on this device", Toast.LENGTH_LONG).show(); }
+    }
+
+    private Set<String> tableColumns(SQLiteDatabase db, String table) {
+        Set<String> cols = new LinkedHashSet<>();
+        Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null);
+        while (c.moveToNext()) cols.add(c.getString(c.getColumnIndexOrThrow("name")));
+        c.close();
+        return cols;
     }
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
-        if (req == 100 && res == RESULT_OK && data != null) {
+        if (req == REQ_SIGNATURE && res == RESULT_OK && data != null && data.getData() != null) {
+            saveSignatureImage(data.getData());
+            return;
+        }
+        if (req == 200 && res == RESULT_OK && data != null && data.getData() != null) {
+            importContactsFromUri(data.getData());
+            return;
+        }
+        if (req == 100 && res == RESULT_OK && data != null && data.getData() != null) {
             try {
-                InputStream is = getContentResolver().openInputStream(data.getData()); BufferedReader br = new BufferedReader(new InputStreamReader(is));
-                StringBuilder sb = new StringBuilder(); String line; while ((line = br.readLine()) != null) sb.append(line);
-                JSONObject rootJson = new JSONObject(sb.toString()); SQLiteDatabase db = dbHelper.getWritableDatabase();
+                StringBuilder sb = new StringBuilder();
+                try (InputStream is = getContentResolver().openInputStream(data.getData());
+                     BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                    String line; while ((line = br.readLine()) != null) sb.append(line);
+                }
+                JSONObject rootJson;
+                try { rootJson = new JSONObject(sb.toString()); }
+                catch (Exception e) { Toast.makeText(this, "That is not an Invoice Book backup file", Toast.LENGTH_LONG).show(); return; }
+                boolean recognised = false;
+                for (String t : BACKUP_TABLES) if (rootJson.has(t)) recognised = true;
+                if (!recognised) { Toast.makeText(this, "That is not an Invoice Book backup file", Toast.LENGTH_LONG).show(); return; }
+
+                SQLiteDatabase db = dbHelper.getWritableDatabase();
+                Map<String, Integer> counts = new HashMap<>();
                 db.beginTransaction();
                 try {
-                    String[] tables = {"contacts", "history", "users", "invoices", "invoice_items"};
-                    for (String t : tables) {
-                        db.delete(t, null, null); JSONArray arr = rootJson.getJSONArray(t);
-                        for (int i=0; i<arr.length(); i++) {
+                    for (String t : BACKUP_TABLES) {
+                        JSONArray arr = rootJson.optJSONArray(t);
+                        if (arr == null) continue; // older backups may not have every table
+                        Set<String> cols = tableColumns(db, t);
+                        db.delete(t, null, null);
+                        int n = 0;
+                        for (int i = 0; i < arr.length(); i++) {
                             JSONObject obj = arr.getJSONObject(i); ContentValues cv = new ContentValues();
-                            Iterator<String> keys = obj.keys(); while(keys.hasNext()) { String k = keys.next(); cv.put(k, obj.get(k).toString()); }
-                            db.insert(t, null, cv);
+                            Iterator<String> keys = obj.keys();
+                            while (keys.hasNext()) {
+                                String k = keys.next();
+                                // Columns from a newer app version are skipped instead of failing the whole row
+                                if (!cols.contains(k) || obj.isNull(k)) continue;
+                                cv.put(k, obj.get(k).toString());
+                            }
+                            if (db.insert(t, null, cv) != -1) n++;
                         }
+                        counts.put(t, n);
                     }
-                    db.setTransactionSuccessful(); Toast.makeText(this, "Data Imported!", Toast.LENGTH_SHORT).show();
+                    db.setTransactionSuccessful();
                 } finally { db.endTransaction(); }
-            } catch (Exception e) { Toast.makeText(this, "Import Error: " + e.getMessage(), Toast.LENGTH_SHORT).show(); }
+                itemSuggestionCache = null;
+                loadCompanyMaster();
+                if (buyerBillTo != null) setupAutoComplete(buyerBillTo);
+                if (consignee != null) setupAutoComplete(consignee);
+                // Whatever screen was open showed the old data, so start again from the dashboard
+                showDashboardView();
+                new AlertDialog.Builder(this)
+                        .setTitle("Data Imported")
+                        .setMessage("Restored " + count(counts, "invoices") + " invoices, " + count(counts, "items_master") + " items and "
+                                + count(counts, "contacts") + " contacts" + (counts.containsKey("company_master") ? " along with the company profile." : "."))
+                        .setPositiveButton("OK", null)
+                        .show();
+            } catch (Exception e) { Toast.makeText(this, "Import Error: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
         }
     }
+
+    private int count(Map<String, Integer> counts, String table) { Integer n = counts.get(table); return n == null ? 0 : n; }
 
     /*
      * The HSN source supplied in the request is a Google Drive PDF. The current
@@ -988,7 +2206,17 @@ public class MainActivity extends Activity {
         addColumnIfMissing(db, "invoice_items", "sub_description", "TEXT");
         addColumnIfMissing(db, "invoice_items", "sub_other_info", "TEXT");
         db.execSQL("CREATE TABLE IF NOT EXISTS company_master (id INTEGER PRIMARY KEY AUTOINCREMENT, company_name TEXT, gstin TEXT, address TEXT, phone TEXT, email TEXT, bank_name TEXT, account_no TEXT, ifsc_code TEXT, branch_name TEXT)");
+        addColumnIfMissing(db, "company_master", "gst_reg_type", "TEXT");
+        addColumnIfMissing(db, "company_master", "invoice_format", "TEXT");
+        addColumnIfMissing(db, "company_master", "line_of_activity", "TEXT");
+        addColumnIfMissing(db, "contacts", "email", "TEXT");
+        addColumnIfMissing(db, "contacts", "type", "TEXT");
         db.execSQL("CREATE TABLE IF NOT EXISTS items_master (id INTEGER PRIMARY KEY AUTOINCREMENT, item_name TEXT UNIQUE, hsn TEXT, gst_rate TEXT)");
+        addColumnIfMissing(db, "items_master", "rate", "REAL");
+        addColumnIfMissing(db, "items_master", "category", "TEXT");
+        // hidden=1 marks a built-in quick menu item the user removed or renamed
+        addColumnIfMissing(db, "items_master", "hidden", "INTEGER DEFAULT 0");
+        addColumnIfMissing(db, "company_master", "account_holder", "TEXT");
     }
 
     private void addColumnIfMissing(SQLiteDatabase db, String table, String column, String type) {
@@ -1004,6 +2232,24 @@ public class MainActivity extends Activity {
         if (!exists) db.execSQL("ALTER TABLE " + table + " ADD COLUMN " + column + " " + type);
     }
 
+    // Matches "Andhra Pradesh", "andhra pradesh", "Andhra Pradesh (37)" or "37"; falls back to the GSTIN's
+    // first two digits (state code). Returns -1 when nothing matches, so the dropdown is left unchanged.
+    private int matchStateIndex(String state, String gstin) {
+        String s = state == null ? "" : state.trim();
+        if (!s.isEmpty()) {
+            for (int i = 0; i < STATES.length; i++) {
+                String nameOnly = STATES[i].replaceAll("\\s*\\(\\d+\\)$", "");
+                if (STATES[i].equalsIgnoreCase(s) || nameOnly.equalsIgnoreCase(s) || STATES[i].endsWith("(" + s + ")")) return i;
+            }
+        }
+        String g = gstin == null ? "" : gstin.trim();
+        if (g.length() >= 2 && Character.isDigit(g.charAt(0)) && Character.isDigit(g.charAt(1))) {
+            String code = "(" + g.substring(0, 2) + ")";
+            for (int i = 0; i < STATES.length; i++) if (STATES[i].endsWith(code)) return i;
+        }
+        return -1;
+    }
+
     private int findStateIndex(String stateName) {
         for (int i = 0; i < STATES.length; i++) {
             if (STATES[i].startsWith(stateName + " ") || STATES[i].startsWith(stateName + "(")) return i;
@@ -1011,24 +2257,18 @@ public class MainActivity extends Activity {
         return 0;
     }
 
-    private boolean validPhone(String value, String label) {
-        String s = value == null ? "" : value.trim();
-        if (s.isEmpty()) return true;
-        if (!s.matches("[0-9]{10}")) {
-            Toast.makeText(this, label + " must be exactly 10 digits", Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        return true;
+    private boolean validPhone(EditText e, String label) {
+        if (isValidPhone(e.getText().toString())) return true;
+        Toast.makeText(this, "Enter correct " + label + " phone number", Toast.LENGTH_SHORT).show();
+        e.setError("Enter correct phone number"); e.requestFocus();
+        return false;
     }
 
-    private boolean validEmail(String value, String label) {
-        String s = value == null ? "" : value.trim();
-        if (s.isEmpty()) return true;
-        if (!Patterns.EMAIL_ADDRESS.matcher(s).matches()) {
-            Toast.makeText(this, "Invalid " + label + " format", Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        return true;
+    private boolean validEmail(EditText e, String label) {
+        if (isValidEmail(e.getText().toString())) return true;
+        Toast.makeText(this, "Enter correct " + label + " email address", Toast.LENGTH_SHORT).show();
+        e.setError("Enter correct email address"); e.requestFocus();
+        return false;
     }
 
     private String titleCase(String input) {
@@ -1057,28 +2297,36 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String sellerStateName() {
+        String code = "(" + sellerStateCode() + ")";
+        for (String s : STATES) if (s.endsWith(code)) return s.replace(" " + code, "");
+        return "your state";
+    }
+
     private boolean isSpecialEwayState() {
-        String s = SELLER_STATE;
+        String s = sellerStateName();
         return s.startsWith("Maharashtra") || s.startsWith("Delhi") ||
                 s.startsWith("Tamil Nadu") || s.startsWith("Bihar");
     }
 
-    private void checkEwayBillWarningThenGenerate(boolean share) {
+    private void checkEwayBillWarningThenGenerate(boolean challan) {
         if (!validateFieldsBool()) return;
         double amount = parseValue(roundedTotal);
         double threshold = isSpecialEwayState() ? 100000.0 : 50000.0;
         if (amount > threshold) {
-            String state = SELLER_STATE;
+            String state = sellerStateName();
             new AlertDialog.Builder(this)
                     .setTitle("E-Way Bill Warning")
                     .setMessage("Invoice value is " + money(amount) + ".\n\nFor " + state +
                             ", the configured warning threshold is " + money(threshold) +
                             ". Please generate/verify the E-Way Bill before proceeding.")
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Continue", (d, w) -> createInvoicePdf(share))
+                    .setPositiveButton("Continue", (d, w) -> { if (challan) createChallanPdf(); else createInvoicePdf(); })
                     .show();
+        } else if (challan) {
+            createChallanPdf();
         } else {
-            createInvoicePdf(share);
+            createInvoicePdf();
         }
     }
 
@@ -1216,7 +2464,7 @@ public class MainActivity extends Activity {
                 .setMessage("Do you want to logout?")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Logout", (d, w) -> {
-                    prefs.edit().putBoolean("is_logged_in", false).apply();
+                    prefs.edit().putBoolean("is_logged_in", false).remove("user_id").apply();
                     Intent i = new Intent(MainActivity.this, LoginActivity.class);
                     i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(i);
@@ -1281,7 +2529,13 @@ public class MainActivity extends Activity {
                 masterIv.put("item_name", itemText);
                 masterIv.put("hsn", r.hsnSac.getText().toString().trim());
                 masterIv.put("gst_rate", r.gst.getSelectedItem().toString());
-                db.insertWithOnConflict("items_master", null, masterIv, SQLiteDatabase.CONFLICT_REPLACE);
+                masterIv.put("hidden", 0);
+                // Update in place so a customised price/category on the master item is kept
+                if (db.update("items_master", masterIv, "item_name=?", new String[]{itemText}) == 0) {
+                    masterIv.put("rate", r.rateVal());
+                    db.insert("items_master", null, masterIv);
+                    itemSuggestionCache = null;
+                }
             }
             ContentValues iv = new ContentValues(); iv.put("invoice_id", id); iv.put("sl_no", Integer.parseInt(r.slNo.getText().toString()));
             iv.put("particulars", r.desc.getText().toString()); iv.put("hsn", r.hsnSac.getText().toString()); iv.put("gst_rate", r.gst.getSelectedItem().toString());
@@ -1293,25 +2547,124 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void createInvoicePdf(boolean share) {
+    private float calculatePdfRowHeight(Paint p, ItemRow r, float descWidth, boolean noGst) {
+        String mainDesc = titleCase(r.desc.getText().toString().trim());
+        p.setTextSize(9.5f);
+        p.setTypeface(pdfTypeface(false));
+        int mainLines = Math.max(1, countTextLines(p, mainDesc, descWidth));
+        float mainTextH = mainLines * 10;
+
+        StringBuilder extra = new StringBuilder();
+        if (r.hasSubDetails()) {
+            if (!r.subSerialNo.isEmpty()) extra.append("S/N: ").append(r.subSerialNo).append(" ");
+            if (!r.subDescription.isEmpty()) extra.append(r.subDescription).append(" ");
+            if (!r.subOtherInfo.isEmpty()) extra.append("Info: ").append(r.subOtherInfo);
+        }
+        String subText = extra.toString().trim();
+        int subLines = 0;
+        if (!subText.isEmpty()) {
+            p.setTextSize(8f);
+            subLines = countTextLines(p, subText, descWidth - 4);
+        }
+        float subTextH = subLines * 9;
+        return Math.max(22f, 10 + mainTextH + (subLines > 0 ? (subTextH + 4) : 0));
+    }
+
+    // Height of the totals / GST breakdown / bank details / signature block drawn under the last page's items.
+    // Mirrors the y increments in drawInvoiceBody.
+    private float invoiceFooterHeight() {
+        boolean noGst = !chargesGst();
+        float h = 20 + 14 + (noGst ? 0 : isIntraState() ? 24 : 12) + 28;
+        if (noGst) {
+            h += 25;
+        } else {
+            Set<String> rates = new LinkedHashSet<>();
+            for (ItemRow r : rows) if (r.amountVal() > 0) rates.add(r.gst.getSelectedItem().toString());
+            h += 25 + 12 + 18 + 16 * rates.size();
+        }
+        h += 25;
+        if (othersCb != null && othersCb.isChecked() && !otherInfo.getText().toString().trim().isEmpty()) h += 20;
+        h += 15 + 85 + 25 + 45;
+        return h + 6;
+    }
+
+    // Splits the items across as many A4 pages as needed. Every page is filled down to the table bottom;
+    // the last page also has to hold the footer block, so if it does not fit the final item is carried
+    // to a new page (a closing page never shows totals without at least one item above them).
+    private List<List<ItemRow>> pdfPages(boolean challan) {
+        List<List<ItemRow>> pgs = new ArrayList<>();
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        boolean noGst = !chargesGst();
+        // PARTICULARS column width minus padding, matching the column layouts in drawInvoiceBody / drawChallanPage
+        float descWidth = challan ? 225 - 8 : noGst ? 250 - 8 : 190 - 8;
+        // Items start below the header block plus the 25pt column heading row
+        final float firstTop = 238 + 25, nextTop = 77 + 25, itemsBottom = 780, footerBottom = 815;
+        float footerH = challan ? 180 : invoiceFooterHeight();
+
+        List<ItemRow> cur = new ArrayList<>();
+        float y = firstTop;
+        for (ItemRow r : rows) {
+            float h = calculatePdfRowHeight(p, r, descWidth, noGst);
+            if (!cur.isEmpty() && y + h > itemsBottom) {
+                pgs.add(cur);
+                cur = new ArrayList<>();
+                y = nextTop;
+            }
+            cur.add(r);
+            y += h;
+        }
+        if (y + footerH > footerBottom) {
+            List<ItemRow> last = new ArrayList<>();
+            if (cur.size() > 1) last.add(cur.remove(cur.size() - 1));
+            pgs.add(cur);
+            cur = last;
+        }
+        pgs.add(cur);
+        return pgs;
+    }
+
+    private Uri writePdfToDownloads(PdfDocument pdf, String fileName) throws Exception {
+        ContentValues v = new ContentValues(); v.put(MediaStore.Downloads.DISPLAY_NAME, fileName); v.put(MediaStore.Downloads.MIME_TYPE, "application/pdf"); v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Invoice Book");
+        Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+        if (uri != null) { try (OutputStream out = getContentResolver().openOutputStream(uri)) { pdf.writeTo(out); } }
+        pdf.close();
+        return uri;
+    }
+
+    // Delivery challan uses the same form data but is not a sale, so it is not saved to the sales register
+    private void createChallanPdf() {
+        try {
+            String no = invoiceNo.getText().toString().trim(); PdfDocument pdf = new PdfDocument();
+            List<List<ItemRow>> pgs = pdfPages(true);
+            for (int i = 0; i < pgs.size(); i++) {
+                PdfDocument.Page p = pdf.startPage(new PdfDocument.PageInfo.Builder(595, 842, i + 1).create());
+                drawChallanPage(p.getCanvas(), i + 1, pgs.size(), pgs.get(i), i == 0, i == pgs.size() - 1);
+                pdf.finishPage(p);
+            }
+            Uri uri = writePdfToDownloads(pdf, "DC_" + no.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
+            if (uri != null) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Delivery Challan " + no + " Saved")
+                        .setMessage("Delivery challan PDF saved to Downloads/Invoice Book.")
+                        .setPositiveButton("Print / Share PDF", (dialog, which) -> sharePdf(uri))
+                        .setNegativeButton("Close", null)
+                        .show();
+            }
+        } catch (Exception e) { Toast.makeText(this, "PDF error: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
+    private void createInvoicePdf() {
         if (!validateFieldsBool()) return;
         try {
             saveFullInvoice(); String invoice = invoiceNo.getText().toString().trim(); PdfDocument pdf = new PdfDocument();
-            int itemsPerPage = 6; List<List<ItemRow>> pgs = new ArrayList<>();
-            for (int i = 0; i < rows.size(); i += itemsPerPage) pgs.add(new ArrayList<>(rows.subList(i, Math.min(i + itemsPerPage, rows.size()))));
-            if (pgs.isEmpty()) pgs.add(new ArrayList<>());
+            List<List<ItemRow>> pgs = pdfPages(false);
             for (int i=0; i<pgs.size(); i++) {
                 PdfDocument.Page p = pdf.startPage(new PdfDocument.PageInfo.Builder(595, 842, i + 1).create());
                 drawPdfPage(p.getCanvas(), i + 1, pgs.size(), pgs.get(i), i == 0, i == pgs.size() - 1);
                 pdf.finishPage(p);
             }
-            String fn = invoice.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf";
-            ContentValues v = new ContentValues(); v.put(MediaStore.Downloads.DISPLAY_NAME, fn); v.put(MediaStore.Downloads.MIME_TYPE, "application/pdf"); v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Vanya GST Invoices");
-            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            Uri uri = writePdfToDownloads(pdf, invoice.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
             if (uri != null) {
-                try (OutputStream out = getContentResolver().openOutputStream(uri)) { pdf.writeTo(out); }
-                pdf.close();
-                prefs.edit().putInt(COUNTER, prefs.getInt(COUNTER, 1) + 1).apply();
                 logHistory(invoice, parseValue(roundedTotal), parseValue(taxableValue), parseValue(cgstAmount)+parseValue(sgstAmount)+parseValue(igstAmount));
 
                 new AlertDialog.Builder(this)
@@ -1350,21 +2703,45 @@ public class MainActivity extends Activity {
 
     private void drawPdfPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setTextSize(9.5f); p.setColor(Color.BLACK); p.setTypeface(pdfTypeface(false));
-        final float L=45, R=550, W=R-L; float y = 35;
+        final float L=45, R=550, W=R-L; float y = 35; final boolean noGst = !chargesGst();
         if (isFirst) {
-            p.setTypeface(pdfTypeface(true)); p.setTextSize(15); p.setUnderlineText(true); center(c,p,"TAX INVOICE",297.5f,y, true); p.setUnderlineText(false); y+=14;
+            y = drawDocHeader(c, p, isComposition() ? "BILL OF SUPPLY" : noGst ? "INVOICE" : "TAX INVOICE", "Invoice No:", true);
+        } else {
+            p.setColor(0xFFF0F4F8);
+            c.drawRect(L, y, R, y + 32, p);
+            p.setColor(Color.BLACK);
+            box(c, p, L, y, W, 32);
+
+            p.setTextSize(10f);
+            p.setTypeface(pdfTypeface(true));
+            text(c, p, (isComposition() ? "BILL OF SUPPLY" : noGst ? "INVOICE" : "TAX INVOICE") + " (Continued)", L + 8, y + 14, true);
+            p.setTextSize(9f);
+            text(c, p, "Invoice #: " + invoiceNo.getText().toString() + "  |  Date: " + invoiceDate.getText().toString(), R - 8, y + 14, true, true, false);
+            text(c, p, "Seller: " + sellerNameStr, L + 8, y + 26, false);
+            text(c, p, "Page " + pageNum + " of " + totalPages, R - 8, y + 26, false, true, false);
+
+            y += 42;
+        }
+        drawInvoiceBody(c, p, pageNum, totalPages, items, isLast, y);
+    }
+
+    // Title, seller block, document number/date and the Bill To / Ship To / Other Details boxes. Returns the y below them.
+    private float drawDocHeader(Canvas c, Paint p, String title, String noLabel, boolean showPayment) {
+        final float L=45, R=550, W=R-L; float y = 35; final boolean noGst = !chargesGst();
+        {
+            p.setTypeface(pdfTypeface(true)); p.setTextSize(15); p.setUnderlineText(true); center(c,p,title,297.5f,y, true); p.setUnderlineText(false); y+=14;
             p.setStrokeWidth(1.2f); p.setStyle(Paint.Style.STROKE); c.drawLine(L,y,R,y,p); p.setStyle(Paint.Style.FILL);
 
             float sy = 62;
             p.setTextSize(12f); text(c,p,sellerNameStr,L,sy,true);
             p.setTextSize(8.5f); drawMultiline(c,p,sellerAddressStr,L,sy+13,240,10);
-            p.setTextSize(8.5f); text(c,p,"GSTIN: " + sellerGstinStr,L,sy+38,true);
+            p.setTextSize(8.5f); text(c,p,isComposition() ? "GSTIN: " + sellerGstinStr + "  (Composition Dealer)" : noGst ? "GSTIN: Not Registered under GST" : "GSTIN: " + sellerGstinStr,L,sy+38,true);
             text(c,p,"Phone: " + sellerPhoneStr + " | Email: " + sellerEmailStr,L,sy+49,true);
 
             p.setTextSize(9.5f); float rlX = R - 120; float metaY = 62;
-            text(c,p,"Invoice No:", rlX, metaY, true); text(c,p,invoiceNo.getText().toString(), R, metaY, true, true, false); metaY += 13;
+            text(c,p,noLabel, rlX, metaY, true); text(c,p,invoiceNo.getText().toString(), R, metaY, true, true, false); metaY += 13;
             text(c,p,"Date:", rlX, metaY, true); text(c,p,invoiceDate.getText().toString(), R, metaY, true, true, false); metaY += 13;
-            text(c,p,"Payment:", rlX, metaY, true); text(c,p,paymentSpinner.getSelectedItem().toString(), R, metaY, false, true, false);
+            if (showPayment) { text(c,p,"Payment:", rlX, metaY, true); text(c,p,paymentSpinner.getSelectedItem().toString(), R, metaY, false, true, false); }
 
             y = 125; float boxH = 100; float hdrH = 18;
             box(c,p,L,y,W,boxH);
@@ -1412,13 +2789,23 @@ public class MainActivity extends Activity {
             if (!otherInfo.getText().toString().trim().isEmpty()) { text(c, p, "Info:", L+356, oy, true); text(c, p, titleCase(otherInfo.getText().toString()), L+356+vOff, oy, false); }
 
             y = 238;
-        } else { text(c,p,"Invoice #: " + invoiceNo.getText().toString(),L,y,true); text(c,p,"Date: " + invoiceDate.getText().toString(),R,y,true,true, false); y+=35; }
-        float[] xs = {L, L+25, L+215, L+275, L+340, L+385, L+440, R};
-        p.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 25, p); p.setColor(Color.BLACK);
-        box(c,p,L,y,W,25); for(int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+25,p);
-        p.setTextSize(10f); String[] hds={"Sl", "PARTICULARS", "HSN/SAC", "GST RATE", "Qty", "Rate", "Amount"};
-        for(int j=0;j<hds.length;j++) center(c,p,hds[j],(xs[j]+xs[j+1])/2,y+17, true);
-        y+=25; float itemH = 22;
+        }
+        return y;
+    }
+
+    private void drawInvoiceBody(Canvas c, Paint p, int pageNum, int totalPages, List<ItemRow> items, boolean isLast, float y) {
+        final float L=45, R=550, W=R-L; final boolean noGst = !chargesGst();
+        // Composition dealers cannot charge GST, so the GST RATE column is dropped and PARTICULARS takes its width
+        float[] xs = noGst ? new float[]{L, L+25, L+275, L+340, L+385, L+440, R} : new float[]{L, L+25, L+215, L+275, L+340, L+385, L+440, R};
+        final int qtyCol = noGst ? 3 : 4;
+        // A page that only carries the totals (the items filled the previous page) gets no empty table heading
+        if (!items.isEmpty()) {
+            p.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 25, p); p.setColor(Color.BLACK);
+            box(c,p,L,y,W,25); for(int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+25,p);
+            p.setTextSize(10f); String[] hds = noGst ? new String[]{"Sl", "PARTICULARS", "HSN/SAC", "Qty", "Rate", "Amount"} : new String[]{"Sl", "PARTICULARS", "HSN/SAC", "GST RATE", "Qty", "Rate", "Amount"};
+            for(int j=0;j<hds.length;j++) center(c,p,hds[j],(xs[j]+xs[j+1])/2,y+17, true);
+            y+=25;
+        }
         for (ItemRow r : items) {
             String mainDesc = titleCase(r.desc.getText().toString().trim());
             float descWidth = xs[2] - xs[1] - 8;
@@ -1451,10 +2838,10 @@ public class MainActivity extends Activity {
             p.setTextSize(9.5f);
             center(c, p, r.slNo.getText().toString(), (xs[0] + xs[1]) / 2, midY, false);
             center(c, p, r.hsnSac.getText().toString(), (xs[2] + xs[3]) / 2, midY, false);
-            center(c, p, r.gst.getSelectedItem().toString() + "%", (xs[3] + xs[4]) / 2, midY, false);
-            center(c, p, r.qty.getText().toString(), (xs[4] + xs[5]) / 2, midY, false);
-            center(c, p, indianNumber(r.rateVal()), (xs[5] + xs[6]) / 2, midY, false);
-            center(c, p, indianNumber(r.amountVal()), (xs[6] + xs[7]) / 2, midY, false);
+            if (!noGst) center(c, p, r.gst.getSelectedItem().toString() + "%", (xs[3] + xs[4]) / 2, midY, false);
+            center(c, p, r.qty.getText().toString(), (xs[qtyCol] + xs[qtyCol + 1]) / 2, midY, false);
+            center(c, p, indianNumber(r.rateVal()), (xs[qtyCol + 1] + xs[qtyCol + 2]) / 2, midY, false);
+            center(c, p, indianNumber(r.amountVal()), (xs[qtyCol + 2] + xs[qtyCol + 3]) / 2, midY, false);
 
             p.setTextSize(9.5f);
             drawMultiline(c, p, mainDesc, xs[1] + 4, y + 13, descWidth, 10);
@@ -1466,13 +2853,22 @@ public class MainActivity extends Activity {
 
             y += dynamicRowH;
         }
-        if (!isLast) { p.setTextSize(10); text(c, p, "Page " + pageNum + " of " + totalPages + " ... Continued", R, 820, false, true, false); }
+        if (!isLast) {
+            // The table closes after the last item on this page; no empty filler grid down to the footer
+            p.setTextSize(9f);
+            text(c, p, "Continued on next page...", R, y + 14, false, true, false);
+        }
         if (isLast) {
-            y+=20; boolean intra = buyerState.getSelectedItem().toString().contains("(37)"); float lX = 410, vX = R; p.setTextSize(10.5f);
-            text(c,p,"Taxable Value:",lX,y,true); text(c,p,money(parseValue(taxableValue)),vX,y,true,true, false); y+=14;
-            if(intra){ text(c,p,"CGST Amount:",lX,y,true); text(c,p,money(parseValue(cgstAmount)),vX,y,false,true, false); y+=12; text(c,p,"SGST Amount:",lX,y,true); text(c,p,money(parseValue(sgstAmount)),vX,y,false,true, false); y+=12; }
+            y+=20; boolean intra = isIntraState(); float lX = 410, vX = R; p.setTextSize(10.5f);
+            text(c,p,noGst ? "Total Value:" : "Taxable Value:",lX,y,true); text(c,p,money(parseValue(taxableValue)),vX,y,true,true, false); y+=14;
+            if(noGst){ /* no tax lines when the seller cannot charge GST */ }
+            else if(intra){ text(c,p,"CGST Amount:",lX,y,true); text(c,p,money(parseValue(cgstAmount)),vX,y,false,true, false); y+=12; text(c,p,"SGST Amount:",lX,y,true); text(c,p,money(parseValue(sgstAmount)),vX,y,false,true, false); y+=12; }
             else { text(c,p,"IGST Amount:",lX,y,true); text(c,p,money(parseValue(igstAmount)),vX,y,false,true, false); y+=12; }
             c.drawLine(lX-5,y+2,R,y+2,p); y+=14; text(c,p,"Grand Total:",lX,y,true); text(c,p,money(parseValue(grandTotal)),vX,y,true,true, false); y+=14; text(c,p,"Rounding:",lX,y,true); text(c,p,money(parseValue(roundedTotal)),vX,y,true,true, false);
+            if (noGst) {
+                y+=25; p.setTextSize(9.5f); text(c,p,isComposition() ? "Declaration: Composition taxable person, not eligible to collect tax on supplies."
+                        : "Declaration: Supplier not registered under GST. No GST charged on this invoice.",L,y,true);
+            } else {
             y+=25; p.setTextSize(9f); text(c,p,"GST Breakdown:",L,y,true); y+=12;
             Map<String, Double> breakdown = new TreeMap<>();
             for(ItemRow r : rows) { double a = r.amountVal(); if(a>0) { String rt = r.gst.getSelectedItem().toString(); Double current = breakdown.get(rt); breakdown.put(rt, (current != null ? current : 0.0) + a); } }
@@ -1495,19 +2891,116 @@ public class MainActivity extends Activity {
                 } else { double t = tx * rt/100.0; center(c,p,String.format(Locale.US, "%.1f%%",rt),(sxs[2]+sxs[3])/2,y+13, false); center(c,p,money(t).replace("₹ ",""),(sxs[3]+sxs[4])/2,y+13, false); center(c,p,money(t).replace("₹ ",""),(sxs[4]+sxs[5])/2,y+13, false); }
                 y+=16;
             }
+            }
             y+=25; p.setTextSize(9.5f); text(c,p,"Amount in Words: "+amountWords.getText(),L,y,true);
             if (othersCb != null && othersCb.isChecked()) { String oi = otherInfo.getText().toString().trim(); if (!oi.isEmpty()) { text(c,p,"Other Info: " + titleCase(oi),L,y+13,false); y+=20; } }
             y+=15; box(c,p,L,y,W,85); p.setTextSize(10f); p.setUnderlineText(true); text(c,p,"BANK DETAILS", L+8, y+14, true); p.setUnderlineText(false);
             p.setTextSize(9f);
-            text(c,p,"Account Name: " + sellerNameStr,L+8,y+28,true); text(c,p,"Account Number: " + bankAccountNoStr,L+8,y+40,true);
-            text(c,p,"Bank Name: " + bankNameStr,L+8,y+54,true); text(c,p,"IFSC Code: " + bankIfscStr,L+8,y+66,true); text(c,p,"Branch Name: " + bankBranchStr,L+8,y+78,true);
+            text(c,p,"Account Number: " + bankAccountNoStr,L+8,y+28,true); text(c,p,"Account Holder Name: " + (bankAccountHolderStr.isEmpty() ? sellerNameStr : bankAccountHolderStr),L+8,y+40,true);
+            text(c,p,"IFSC Code: " + bankIfscStr.toUpperCase(Locale.ROOT),L+8,y+52,true); text(c,p,"Bank Name: " + bankNameStr,L+8,y+64,true); text(c,p,"Branch Name: " + bankBranchStr,L+8,y+76,true);
             float signY = y + 85 + 25; p.setTextSize(10.5f); text(c,p,"For " + sellerNameStr,R,signY,true,true, false);
-            try { InputStream is = getAssets().open("signature.png"); Bitmap bitmap = BitmapFactory.decodeStream(is);
-                if (bitmap != null) { Bitmap scB = Bitmap.createScaledBitmap(bitmap, 90, 40, true); c.drawBitmap(scB, R - 100, signY + 5, p); }
-            } catch (Exception e) {}
+            Bitmap sig = loadSignature();
+            if (sig != null) {
+                // Fit inside a 120x36 area above "Authorised Signatory", right-aligned, keeping aspect ratio
+                float scale = Math.min(120f / sig.getWidth(), 36f / sig.getHeight());
+                float sw = sig.getWidth() * scale, sh = sig.getHeight() * scale;
+                RectF dst = new RectF(R - sw, signY + 4 + (36 - sh), R, signY + 40);
+                c.drawBitmap(sig, null, dst, new Paint(Paint.FILTER_BITMAP_FLAG));
+            }
             p.setTextSize(10.5f); text(c,p,"Authorised Signatory",R,signY+45,false,true, false);
         }
-        p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, R, 825, false, true, false); text(c,p,"Computer-generated document. No signature required.",L, 825, false);
+        p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, R, 825, false, true, false); if (isLast && loadSignature() == null) text(c,p,"Computer-generated document. No signature required.",L, 825, false);
+    }
+
+    private void drawChallanPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setTextSize(9.5f); p.setColor(Color.BLACK); p.setTypeface(pdfTypeface(false));
+        final float L=45, R=550, W=R-L; float y = 35;
+        if (isFirst) {
+            y = drawDocHeader(c, p, "DELIVERY CHALLAN", "Challan No:", false);
+        } else {
+            p.setColor(0xFFF0F4F8);
+            c.drawRect(L, y, R, y + 32, p);
+            p.setColor(Color.BLACK);
+            box(c, p, L, y, W, 32);
+
+            p.setTextSize(10f);
+            p.setTypeface(pdfTypeface(true));
+            text(c, p, "DELIVERY CHALLAN (Continued)", L + 8, y + 14, true);
+            p.setTextSize(9f);
+            text(c, p, "Challan #: " + invoiceNo.getText().toString() + "  |  Date: " + invoiceDate.getText().toString(), R - 8, y + 14, true, true, false);
+            text(c, p, "Seller: " + sellerNameStr, L + 8, y + 26, false);
+            text(c, p, "Page " + pageNum + " of " + totalPages, R - 8, y + 26, false, true, false);
+
+            y += 42;
+        }
+
+        float[] xs = {L, L+25, L+250, L+305, L+350, L+395, L+445, R};
+        String[] hds = {"Sl", "DESCRIPTION OF GOODS", "HSN/SAC", "Qty", "UQC", "Rate", "Value"};
+        if (!items.isEmpty()) {
+            p.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 25, p); p.setColor(Color.BLACK);
+            box(c,p,L,y,W,25); for (int j=1;j<xs.length-1;j++) c.drawLine(xs[j],y,xs[j],y+25,p);
+            p.setTextSize(10f); for (int j=0;j<hds.length;j++) center(c,p,hds[j],(xs[j]+xs[j+1])/2,y+17, true);
+            y += 25;
+        }
+        for (ItemRow r : items) {
+            String mainDesc = titleCase(r.desc.getText().toString().trim());
+            float descWidth = xs[2] - xs[1] - 8;
+            p.setTextSize(9.5f);
+            int mainLines = Math.max(1, countTextLines(p, mainDesc, descWidth));
+            StringBuilder extra = new StringBuilder();
+            if (!r.subSerialNo.isEmpty()) extra.append("S/N: ").append(r.subSerialNo).append(" ");
+            if (!r.subDescription.isEmpty()) extra.append(r.subDescription).append(" ");
+            if (!r.subOtherInfo.isEmpty()) extra.append("Info: ").append(r.subOtherInfo);
+            String subText = extra.toString().trim();
+            p.setTextSize(8f);
+            int subLines = subText.isEmpty() ? 0 : countTextLines(p, subText, descWidth - 4);
+            float rowH = Math.max(22f, 10 + mainLines * 10 + (subLines > 0 ? subLines * 9 + 4 : 0));
+
+            box(c, p, L, y, W, rowH);
+            for (int j = 1; j < xs.length - 1; j++) c.drawLine(xs[j], y, xs[j], y + rowH, p);
+            float midY = y + 14;
+            p.setTextSize(9.5f);
+            center(c, p, r.slNo.getText().toString(), (xs[0]+xs[1])/2, midY, false);
+            drawMultiline(c, p, mainDesc, xs[1] + 4, y + 13, descWidth, 10);
+            center(c, p, r.hsnSac.getText().toString(), (xs[2]+xs[3])/2, midY, false);
+            center(c, p, r.qty.getText().toString(), (xs[3]+xs[4])/2, midY, false);
+            center(c, p, r.uqc.getSelectedItem().toString(), (xs[4]+xs[5])/2, midY, false);
+            center(c, p, indianNumber(r.rateVal()), (xs[5]+xs[6])/2, midY, false);
+            center(c, p, indianNumber(r.amountVal()), (xs[6]+xs[7])/2, midY, false);
+            if (!subText.isEmpty()) { p.setTextSize(8f); drawMultiline(c, p, subText, xs[1] + 6, y + 13 + mainLines * 10 + 2, descWidth - 4, 9); }
+            y += rowH;
+        }
+
+        if (isLast) {
+            double totalQty = 0, totalValue = 0;
+            for (ItemRow r : rows) { totalQty += r.qtyVal(); totalValue += r.amountVal(); }
+            box(c, p, L, y, W, 20);
+            c.drawLine(xs[3], y, xs[3], y + 20, p); c.drawLine(xs[4], y, xs[4], y + 20, p); c.drawLine(xs[6], y, xs[6], y + 20, p);
+            p.setTextSize(9.5f);
+            text(c, p, "Total", xs[2] - 6, y + 14, true, true, false);
+            center(c, p, String.format(Locale.US, "%.2f", totalQty), (xs[3]+xs[4])/2, y + 14, true);
+            center(c, p, indianNumber(totalValue), (xs[6]+xs[7])/2, y + 14, true);
+            y += 38;
+            p.setTextSize(9.5f); text(c, p, "Value of Goods: " + toIndianWords(Math.round(totalValue)), L, y, true);
+            y += 16; p.setTextSize(8.5f);
+            text(c, p, "Note: This is a delivery challan for transport of goods and not a bill of supply / tax invoice.", L, y, false);
+
+            y += 30; box(c, p, L, y, W, 90);
+            c.drawLine(L + W / 2, y, L + W / 2, y + 90, p);
+            p.setTextSize(9.5f);
+            text(c, p, "Received the above goods in good condition.", L + 8, y + 16, false);
+            text(c, p, "Receiver's Signature", L + 8, y + 82, true);
+            text(c, p, "For " + sellerNameStr, R - 8, y + 16, true, true, false);
+            Bitmap sig = loadSignature();
+            if (sig != null) {
+                float scale = Math.min(120f / sig.getWidth(), 40f / sig.getHeight());
+                float sw = sig.getWidth() * scale, sh = sig.getHeight() * scale;
+                RectF dst = new RectF(R - 8 - sw, y + 26 + (40 - sh), R - 8, y + 66);
+                c.drawBitmap(sig, null, dst, new Paint(Paint.FILTER_BITMAP_FLAG));
+            }
+            text(c, p, "Authorised Signatory", R - 8, y + 82, false, true, false);
+        }
+        p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages + (isLast ? "" : " ... Continued"), R, 825, false, true, false);
     }
 
     private void showSalesReport() {
@@ -1524,24 +3017,104 @@ public class MainActivity extends Activity {
         }).show();
     }
 
+    private void showAddContactDialog(String defaultType) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+        EditText eName = edit("Name / Company Name *", false);
+        EditText ePhone = edit("Phone Number (10 digits)", false); ePhone.setInputType(InputType.TYPE_CLASS_PHONE);
+        EditText eEmail = edit("Email Address", false); eEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        EditText eGstin = edit("GSTIN Number", false);
+        EditText eAddr = edit("Address", false);
+        Spinner sType = spinner(new String[]{"Customer", "Supplier"});
+        if ("Supplier".equalsIgnoreCase(defaultType)) sType.setSelection(1);
+        Spinner sState = spinner(STATES);
+
+        box.addView(field("Contact Type *", sType));
+        box.addView(field("Name / Company Name *", eName));
+        box.addView(field("Phone (10 digits)", ePhone));
+        box.addView(field("Email Address", eEmail));
+        box.addView(field("GSTIN Number", eGstin));
+        box.addView(field("State", sState));
+        box.addView(field("Address", eAddr));
+
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Create Contact (" + ("Supplier".equalsIgnoreCase(defaultType) ? "Supplier" : "Customer") + ")")
+                .setView(sc)
+                .setPositiveButton("Save Contact", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+
+        dialog.setOnShowListener(d -> {
+            Button b = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            b.setOnClickListener(v -> {
+                String name = eName.getText().toString().trim();
+                String phone = ePhone.getText().toString().trim();
+                String email = eEmail.getText().toString().trim();
+                String gstin = eGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
+                String addr = eAddr.getText().toString().trim().toUpperCase(Locale.ROOT);
+                String type = (String) sType.getSelectedItem();
+                String state = (String) sState.getSelectedItem();
+
+                if (name.isEmpty()) { eName.setError("Name is required"); eName.requestFocus(); return; }
+                if (!phone.isEmpty() && !phone.matches("[0-9]{10}")) { ePhone.setError("Phone must be 10 digits"); ePhone.requestFocus(); return; }
+                if (!email.isEmpty() && !Patterns.EMAIL_ADDRESS.matcher(email).matches()) { eEmail.setError("Invalid email address"); eEmail.requestFocus(); return; }
+
+                SQLiteDatabase db = dbHelper.getWritableDatabase();
+                ContentValues cv = new ContentValues();
+                cv.put("name", name);
+                cv.put("phone", phone);
+                cv.put("email", email.toLowerCase(Locale.ROOT));
+                cv.put("gstin", gstin);
+                cv.put("address", addr);
+                cv.put("state", state);
+                cv.put("type", type);
+
+                db.insert("contacts", null, cv);
+                Toast.makeText(this, type + " Contact Saved Successfully!", Toast.LENGTH_SHORT).show();
+                setupAutoComplete(buyerBillTo);
+                setupAutoComplete(consignee);
+                dialog.dismiss();
+            });
+        });
+        dialog.show();
+    }
+
     private void showContactList() {
+        showContactListFiltered("Customer");
+    }
+
+    private void showContactListFiltered(String filterType) {
         SQLiteDatabase db = dbHelper.getReadableDatabase();
-        Cursor c = db.query("contacts", null, null, null, null, null, "name ASC");
+        Cursor c = "Supplier".equalsIgnoreCase(filterType) ?
+                db.query("contacts", null, "type=?", new String[]{"Supplier"}, null, null, "name ASC") :
+                db.query("contacts", null, "type=? OR type IS NULL OR type=''", new String[]{"Customer"}, null, null, "name ASC");
+
         LinearLayout rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
         rootBox.setPadding(dp(12), dp(12), dp(12), dp(12));
 
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setPadding(0, 0, 0, dp(10));
+        LinearLayout topBtns = new LinearLayout(this);
+        topBtns.setOrientation(LinearLayout.HORIZONTAL);
+        topBtns.setPadding(0, 0, 0, dp(10));
+
+        Button addContactBtn = new Button(this);
+        addContactBtn.setText("+ Add " + filterType);
+        styleButton(addContactBtn, GREEN);
+        addContactBtn.setTextSize(12);
+        addContactBtn.setOnClickListener(v -> showAddContactDialog(filterType));
 
         Button uploadBtn = new Button(this);
-        uploadBtn.setText("Upload CSV/Excel");
+        uploadBtn.setText("Upload CSV");
         styleButton(uploadBtn, BLUE);
         uploadBtn.setTextSize(12);
 
         Button templateBtn = new Button(this);
-        templateBtn.setText("Download Template");
+        templateBtn.setText("Template");
         styleButton(templateBtn, NAVY);
         templateBtn.setTextSize(12);
 
@@ -1553,9 +3126,10 @@ public class MainActivity extends Activity {
 
         templateBtn.setOnClickListener(v -> downloadContactsTemplate());
 
-        btnRow.addView(uploadBtn, weightLp());
-        btnRow.addView(templateBtn, weightLp());
-        rootBox.addView(btnRow);
+        topBtns.addView(addContactBtn, weightLp());
+        topBtns.addView(uploadBtn, weightLp());
+        topBtns.addView(templateBtn, weightLp());
+        rootBox.addView(topBtns);
 
         LinearLayout listContainer = new LinearLayout(this);
         listContainer.setOrientation(LinearLayout.VERTICAL);
@@ -1566,11 +3140,12 @@ public class MainActivity extends Activity {
         int phoneIdx = c.getColumnIndex("phone");
         int gstinIdx = c.getColumnIndex("gstin");
         int stateIdx = c.getColumnIndex("state");
+        int typeIdx = c.getColumnIndex("type");
 
         if (!c.moveToFirst()) {
             c.close();
             TextView emptyTv = new TextView(this);
-            emptyTv.setText("No saved contacts found.\n\nExcel/CSV Format:\nName, Phone, Email, GSTIN, Address, State");
+            emptyTv.setText("No " + filterType + " contacts found.\nClick '+ Add " + filterType + "' to create one.");
             emptyTv.setTextSize(13);
             emptyTv.setPadding(dp(8), dp(16), dp(8), dp(16));
             listContainer.addView(emptyTv);
@@ -1581,6 +3156,8 @@ public class MainActivity extends Activity {
                 String phone = phoneIdx >= 0 ? c.getString(phoneIdx) : "";
                 String gstin = gstinIdx >= 0 ? c.getString(gstinIdx) : "";
                 String state = stateIdx >= 0 ? c.getString(stateIdx) : "";
+                String type = typeIdx >= 0 ? c.getString(typeIdx) : "Customer";
+                if (type == null || type.isEmpty()) type = "Customer";
 
                 LinearLayout row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1588,7 +3165,7 @@ public class MainActivity extends Activity {
                 row.setPadding(0, dp(8), 0, dp(8));
 
                 TextView tv = new TextView(this);
-                tv.setText(String.format(Locale.US, "%s\nPh: %s | GST: %s\nState: %s", name, phone, gstin, state));
+                tv.setText(String.format(Locale.US, "%s (%s)\nPh: %s | GST: %s\nState: %s", name, type, phone, gstin, state));
                 tv.setTextSize(13);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
 
@@ -1613,12 +3190,15 @@ public class MainActivity extends Activity {
         sc.addView(listContainer);
         rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(320)));
 
-        new AlertDialog.Builder(this)
-                .setTitle("Contact List")
+        if (contactListDialog != null && contactListDialog.isShowing()) contactListDialog.dismiss();
+        contactListDialog = new AlertDialog.Builder(this)
+                .setTitle(filterType + " Contacts List")
                 .setView(rootBox)
                 .setPositiveButton("Close", null)
                 .show();
     }
+
+    private AlertDialog contactListDialog;
 
     private void confirmDeleteContact(long contactId, String contactName) {
         new AlertDialog.Builder(this)
@@ -1649,49 +3229,178 @@ public class MainActivity extends Activity {
                 sellerEmailStr = getString(c, "email");
                 bankNameStr = getString(c, "bank_name");
                 bankAccountNoStr = getString(c, "account_no");
+                bankAccountHolderStr = getString(c, "account_holder");
                 bankIfscStr = getString(c, "ifsc_code");
                 bankBranchStr = getString(c, "branch_name");
+                String regType = getString(c, "gst_reg_type");
+                sellerGstTypeStr = !regType.isEmpty() ? regType : (sellerGstinStr.isEmpty() ? "Unregistered" : "Regular");
+                String fmt = getString(c, "invoice_format");
+                invoiceFormatStr = fmt.contains("#") ? fmt : DEFAULT_INVOICE_FORMAT;
+                String act = getString(c, "line_of_activity");
+                lineOfActivityStr = !act.isEmpty() ? act : "General";
             }
             c.close();
             if (sellerName != null) sellerName.setText(sellerNameStr);
-            if (sellerAddress != null) sellerAddress.setText(sellerAddressStr);
-            if (sellerGstin != null) sellerGstin.setText("GSTIN: " + sellerGstinStr);
-            if (sellerContact != null) sellerContact.setText("Phone: " + sellerPhoneStr + "   |   Email: " + sellerEmailStr);
+            // Registration type decides whether GST is charged, so refresh amounts already on screen
+            applyGstVisibility();
+            for (ItemRow r : rows) r.updateAmounts();
+            if (taxableValue != null) recalc();
+            // Show the next number in the owner's format unless a saved invoice is open
+            if (invoiceNo != null && !invoiceExists(invoiceNo.getText().toString().trim())) {
+                loadingInvoice = true;
+                invoiceNo.setText(nextInvoicePreview());
+                loadingInvoice = false;
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
+    private LinearLayout createPastelCard(String title, int bgColor, int borderColor) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(6), 0, dp(6));
+        card.setLayoutParams(lp);
+
+        GradientDrawable gd = new GradientDrawable();
+        gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setColor(bgColor);
+        gd.setStroke(dp(1), borderColor);
+        gd.setCornerRadius(dp(8));
+        card.setBackground(gd);
+
+        if (title != null && !title.isEmpty()) {
+            TextView hdr = new TextView(this);
+            hdr.setText(title);
+            hdr.setTextSize(13);
+            hdr.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            hdr.setTextColor(0xFF37474F);
+            hdr.setPadding(0, 0, 0, dp(8));
+            card.addView(hdr);
+        }
+        return card;
+    }
+
     private void showCompanyMasterDialog() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(12), dp(16), dp(12));
+        box.setPadding(dp(12), dp(8), dp(12), dp(8));
 
+        // Card 1: Company Details (Pastel Blue)
+        LinearLayout compCard = createPastelCard("Company & Contact Details", 0xFFF0F4F8, 0xFFCFD8DC);
         EditText eName = edit("Company Name *", false); eName.setText(sellerNameStr);
         EditText eGstin = edit("GSTIN Number *", false); eGstin.setText(sellerGstinStr);
         EditText eAddress = edit("Company Address *", false); eAddress.setText(sellerAddressStr);
         EditText ePhone = edit("Phone Number (10 digits) *", false); ePhone.setInputType(InputType.TYPE_CLASS_PHONE); ePhone.setText(sellerPhoneStr);
         EditText eEmail = edit("Email Address *", false); eEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS); eEmail.setText(sellerEmailStr);
-        EditText eBank = edit("Bank Name", false); eBank.setText(bankNameStr);
-        EditText eAcc = edit("Account Number", false); eAcc.setText(bankAccountNoStr);
-        EditText eIfsc = edit("IFSC Code", false); eIfsc.setText(bankIfscStr);
-        EditText eBranch = edit("Branch Name", false); eBranch.setText(bankBranchStr);
+        Spinner sGstType = spinner(GST_REG_TYPES);
+        sGstType.setSelection(Math.max(0, Arrays.asList(GST_REG_TYPES).indexOf(sellerGstTypeStr)));
 
-        box.addView(field("Company Name *", eName));
-        box.addView(field("GSTIN *", eGstin));
-        box.addView(field("Address *", eAddress));
-        box.addView(field("Phone *", ePhone));
-        box.addView(field("Email *", eEmail));
-        box.addView(field("Bank Name", eBank));
-        box.addView(field("Account Number", eAcc));
-        box.addView(field("IFSC Code", eIfsc));
-        box.addView(field("Branch Name", eBranch));
+        Spinner sActivity = spinner(LINE_OF_ACTIVITIES);
+        int actIdx = Arrays.asList(LINE_OF_ACTIVITIES).indexOf(lineOfActivityStr);
+        sActivity.setSelection(actIdx >= 0 ? actIdx : 0);
+
+        eGstin.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) {
+                boolean hasGstin = s.toString().trim().length() > 0;
+                String cur = (String) sGstType.getSelectedItem();
+                if (!hasGstin) sGstType.setSelection(2);
+                else if ("Unregistered".equals(cur)) sGstType.setSelection(0);
+            }
+        });
+
+        compCard.addView(field("Company Name *", eName));
+        compCard.addView(field("GSTIN *", eGstin));
+        compCard.addView(field("GST Registration Type *", sGstType));
+        compCard.addView(field("Line of Activity (Optional)", sActivity));
+        compCard.addView(field("Address *", eAddress));
+        compCard.addView(field("Phone (10 digits) *", ePhone));
+        compCard.addView(field("Email *", eEmail));
+        box.addView(compCard);
+
+        // Card 2: Bank Details (Pastel Mint Green)
+        LinearLayout bankCard = createPastelCard("Bank Account Details", 0xFFF1F8E9, 0xFFC5E1A5);
+        EditText eAcc = edit("Account Number", false); eAcc.setInputType(InputType.TYPE_CLASS_NUMBER); eAcc.setText(bankAccountNoStr);
+        EditText eHolder = edit("Account Holder Name", false);
+        eHolder.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        eHolder.setText(bankAccountHolderStr.isEmpty() ? sellerNameStr : bankAccountHolderStr);
+        EditText eIfsc = edit("IFSC Code (e.g. UTIB0001234)", false);
+        eIfsc.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        eIfsc.setFilters(new InputFilter[]{new InputFilter.AllCaps(), new InputFilter.LengthFilter(11)});
+        eIfsc.setText(bankIfscStr.toUpperCase(Locale.ROOT));
+        EditText eBank = edit("Filled automatically from IFSC", false); eBank.setText(bankNameStr);
+        EditText eBranch = edit("Filled automatically from IFSC", false); eBranch.setText(bankBranchStr);
+        TextView ifscStatus = new TextView(this);
+        ifscStatus.setTextSize(11); ifscStatus.setPadding(dp(6), 0, dp(6), dp(2)); ifscStatus.setVisibility(View.GONE);
+
+        eIfsc.addTextChangedListener(new SimpleTextWatcher() {
+            @Override public void changed() {
+                String ifscVal = eIfsc.getText().toString().trim();
+                if (ifscVal.length() < 11) { eIfsc.setError(null); ifscStatus.setVisibility(View.GONE); return; }
+                if (!isValidIfsc(ifscVal)) { eIfsc.setError("Invalid IFSC code format (e.g. UTIB0001234)"); return; }
+                eIfsc.setError(null);
+                if (ifscVal.equals(bankIfscStr.toUpperCase(Locale.ROOT)) && !bankBranchStr.isEmpty()) return;
+                String bank = getBankNameFromIfsc(ifscVal);
+                if (!bank.isEmpty()) eBank.setText(bank);
+                ifscStatus.setTextColor(0xFF607D8B); ifscStatus.setText("Looking up bank & branch…"); ifscStatus.setVisibility(View.VISIBLE);
+                lookupIfsc(ifscVal, (bankName, branch) -> {
+                    // Ignore a late reply if the user has since changed the code
+                    if (!ifscVal.equals(eIfsc.getText().toString().trim())) return;
+                    if (branch == null) {
+                        ifscStatus.setTextColor(RED);
+                        ifscStatus.setText(bankName == null ? "Could not reach IFSC lookup. Enter bank & branch manually." : "IFSC not found. Please check the code.");
+                        return;
+                    }
+                    if (!bankName.isEmpty()) eBank.setText(bankName);
+                    eBranch.setText(branch);
+                    ifscStatus.setTextColor(GREEN); ifscStatus.setText("✓ Bank & branch filled from IFSC");
+                });
+            }
+        });
+
+        bankCard.addView(field("Account Number", eAcc));
+        bankCard.addView(field("Account Holder Name", eHolder));
+        bankCard.addView(field("IFSC Code", eIfsc));
+        bankCard.addView(ifscStatus);
+        bankCard.addView(field("Bank Name", eBank));
+        bankCard.addView(field("Branch Name", eBranch));
+        box.addView(bankCard);
+
+        // Card 3: Authorised Signature (Pastel Lavender)
+        LinearLayout sigCard = createPastelCard("Authorised Signature", 0xFFF3E5F5, 0xFFE1BEE7);
+        LinearLayout sigBox = new LinearLayout(this); sigBox.setOrientation(LinearLayout.VERTICAL);
+        signatureStatus = new TextView(this); signatureStatus.setTextSize(12); signatureStatus.setPadding(dp(2), dp(2), dp(2), dp(4));
+        signaturePreview = new ImageView(this); signaturePreview.setAdjustViewBounds(true); signaturePreview.setScaleType(ImageView.ScaleType.FIT_START);
+        applyBoxBackground(signaturePreview); signaturePreview.setPadding(dp(4), dp(4), dp(4), dp(4));
+        LinearLayout sigBtns = new LinearLayout(this); sigBtns.setOrientation(LinearLayout.HORIZONTAL);
+        Button attachSig = new Button(this); attachSig.setText("Attach Signature"); styleButton(attachSig, BLUE); attachSig.setTextSize(12);
+        Button removeSig = new Button(this); removeSig.setText("Remove"); styleButton(removeSig, RED); removeSig.setTextSize(12);
+        attachSig.setOnClickListener(v -> {
+            Intent intent = new Intent(Intent.ACTION_GET_CONTENT); intent.setType("image/*");
+            startActivityForResult(Intent.createChooser(intent, "Select Signature Image"), REQ_SIGNATURE);
+        });
+        removeSig.setOnClickListener(v -> {
+            if (signatureFile().delete()) Toast.makeText(this, "Signature removed", Toast.LENGTH_SHORT).show();
+            refreshSignaturePreview();
+        });
+        sigBtns.addView(attachSig, weightLp()); sigBtns.addView(removeSig, weightLp());
+        sigBox.addView(signatureStatus);
+        sigBox.addView(signaturePreview, new LinearLayout.LayoutParams(-1, dp(70)));
+        sigBox.addView(sigBtns);
+        sigCard.addView(field("Authorised Signature", sigBox));
+        box.addView(sigCard);
+
+        refreshSignaturePreview();
 
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Company Master Details")
+                .setTitle("Company Master Profile")
                 .setView(sc)
                 .setPositiveButton("Save Profile", null)
                 .setNegativeButton("Cancel", null)
@@ -1705,6 +3414,7 @@ public class MainActivity extends Activity {
                 String phone = ePhone.getText().toString().trim();
                 String email = eEmail.getText().toString().trim();
                 String gstin = eGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
+                String ifsc = eIfsc.getText().toString().trim().toUpperCase(Locale.ROOT);
 
                 if (name.isEmpty()) { eName.setError("Company Name is required"); eName.requestFocus(); return; }
                 if (addr.isEmpty()) { eAddress.setError("Address is required"); eAddress.requestFocus(); return; }
@@ -1712,6 +3422,10 @@ public class MainActivity extends Activity {
                 if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) { eEmail.setError("Invalid email address"); eEmail.requestFocus(); return; }
                 String pattern = "^[0-9]{2}[A-Z]{3}[PCHFATLJG][A-Z][0-9]{4}[A-Z][A-Z0-9]{3}$";
                 if (!gstin.isEmpty() && !gstin.matches(pattern)) { eGstin.setError("Invalid GSTIN format"); eGstin.requestFocus(); return; }
+                String gstType = (String) sGstType.getSelectedItem();
+                if (!gstin.isEmpty() && "Unregistered".equals(gstType)) { Toast.makeText(MainActivity.this, "GSTIN given: select Regular or Composition", Toast.LENGTH_LONG).show(); return; }
+                if (gstin.isEmpty() && !"Unregistered".equals(gstType)) { eGstin.setError("GSTIN is required for " + gstType + " dealer"); eGstin.requestFocus(); return; }
+                if (!ifsc.isEmpty() && !isValidIfsc(ifsc)) { eIfsc.setError("Invalid IFSC Code format (e.g. UTIB0001234)"); eIfsc.requestFocus(); return; }
 
                 SQLiteDatabase db = dbHelper.getWritableDatabase();
                 ContentValues cv = new ContentValues();
@@ -1722,8 +3436,11 @@ public class MainActivity extends Activity {
                 cv.put("email", email.toLowerCase(Locale.ROOT));
                 cv.put("bank_name", eBank.getText().toString().trim());
                 cv.put("account_no", eAcc.getText().toString().trim());
-                cv.put("ifsc_code", eIfsc.getText().toString().trim().toUpperCase(Locale.ROOT));
+                cv.put("account_holder", eHolder.getText().toString().trim());
+                cv.put("ifsc_code", ifsc);
                 cv.put("branch_name", eBranch.getText().toString().trim());
+                cv.put("gst_reg_type", gstType);
+                cv.put("line_of_activity", (String) sActivity.getSelectedItem());
 
                 db.delete("company_master", null, null);
                 db.insert("company_master", null, cv);
@@ -1732,12 +3449,20 @@ public class MainActivity extends Activity {
                 dialog.dismiss();
             });
         });
+        dialog.setOnDismissListener(d -> showDashboardView());
         dialog.show();
     }
 
+    private AlertDialog itemMasterDialog;
+
     private void showItemMasterDialog() {
         SQLiteDatabase db = dbHelper.getReadableDatabase();
-        Cursor c = db.query("items_master", null, null, null, null, null, "item_name ASC");
+        List<String> categories = new ArrayList<>();
+        Cursor cc = db.rawQuery("SELECT DISTINCT category FROM items_master WHERE IFNULL(category,'')<>'' AND IFNULL(hidden,0)=0 ORDER BY category", null);
+        while (cc.moveToNext()) categories.add(cc.getString(0));
+        cc.close();
+
+        Cursor c = db.query("items_master", null, "IFNULL(hidden,0)=0", null, null, null, "item_name ASC");
         LinearLayout rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
         rootBox.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -1746,7 +3471,7 @@ public class MainActivity extends Activity {
         addBtn.setText("+ Add New Item to Master");
         styleButton(addBtn, BLUE);
         addBtn.setTextSize(12);
-        addBtn.setOnClickListener(v -> showEditItemMasterDialog(null, "", ""));
+        addBtn.setOnClickListener(v -> showQuickItemEditor(null, categories, this::showItemMasterDialog));
         rootBox.addView(addBtn);
 
         LinearLayout listContainer = new LinearLayout(this);
@@ -1771,6 +3496,10 @@ public class MainActivity extends Activity {
                 String name = nameCol >= 0 ? c.getString(nameCol) : "";
                 String hsn = hsnCol >= 0 ? c.getString(hsnCol) : "";
                 String gst = gstCol >= 0 ? c.getString(gstCol) : "";
+                int rateCol = c.getColumnIndex("rate");
+                int catCol = c.getColumnIndex("category");
+                double price = rateCol >= 0 && !c.isNull(rateCol) ? c.getDouble(rateCol) : 0;
+                String cat = catCol >= 0 && c.getString(catCol) != null ? c.getString(catCol) : "";
 
                 LinearLayout row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1778,9 +3507,20 @@ public class MainActivity extends Activity {
                 row.setPadding(0, dp(6), 0, dp(6));
 
                 TextView tv = new TextView(this);
-                tv.setText(String.format(Locale.US, "%s\nHSN: %s | GST: %s%%", name, hsn, gst));
+                tv.setText(String.format(Locale.US, "%s\nHSN: %s | GST: %s%% | ₹ %.2f%s", name, hsn == null ? "" : hsn, gst, price, cat.isEmpty() ? "" : " | " + cat));
                 tv.setTextSize(13);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+
+                Button editBtn = new Button(this);
+                editBtn.setText("Edit");
+                styleButton(editBtn, BLUE);
+                editBtn.setTextSize(11);
+                editBtn.setPadding(dp(6), 0, dp(6), 0);
+                QuickMenuItem editable = new QuickMenuItem(name, hsn == null ? "" : hsn, cat, gst == null || gst.isEmpty() ? "18" : gst, price);
+                editBtn.setOnClickListener(v -> showQuickItemEditor(editable, categories, this::showItemMasterDialog));
+                LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(-2, dp(36));
+                editLp.setMargins(dp(4), 0, dp(4), 0);
+                row.addView(editBtn, editLp);
 
                 Button delBtn = new Button(this);
                 delBtn.setText("Delete");
@@ -1791,6 +3531,7 @@ public class MainActivity extends Activity {
                 delBtn.setOnClickListener(v -> {
                     SQLiteDatabase writable = dbHelper.getWritableDatabase();
                     writable.delete("items_master", "id=?", new String[]{String.valueOf(targetId)});
+                    itemSuggestionCache = null;
                     Toast.makeText(this, "Item deleted from Master", Toast.LENGTH_SHORT).show();
                     showItemMasterDialog();
                 });
@@ -1808,45 +3549,11 @@ public class MainActivity extends Activity {
         sc.addView(listContainer);
         rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(320)));
 
-        new AlertDialog.Builder(this)
+        if (itemMasterDialog != null && itemMasterDialog.isShowing()) itemMasterDialog.dismiss();
+        itemMasterDialog = new AlertDialog.Builder(this)
                 .setTitle("Item Master List")
                 .setView(rootBox)
                 .setPositiveButton("Close", null)
-                .show();
-    }
-
-    private void showEditItemMasterDialog(String nameVal, String hsnVal, String gstVal) {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(12), dp(16), dp(12));
-
-        EditText eName = edit("Item Name *", false); if (nameVal != null) eName.setText(nameVal);
-        EditText eHsn = edit("HSN / SAC Code", false); if (hsnVal != null) eHsn.setText(hsnVal);
-        Spinner sGst = spinner(GST_RATES); if (gstVal != null) selectSpinner(sGst, gstVal);
-
-        box.addView(field("Item Particulars *", eName));
-        box.addView(field("HSN / SAC Code", eHsn));
-        box.addView(field("GST Rate %", sGst));
-
-        new AlertDialog.Builder(this)
-                .setTitle("Add Item to Master")
-                .setView(box)
-                .setPositiveButton("Save Item", (d, w) -> {
-                    String name = eName.getText().toString().trim();
-                    if (name.isEmpty()) {
-                        Toast.makeText(this, "Item Particulars is required", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    SQLiteDatabase db = dbHelper.getWritableDatabase();
-                    ContentValues cv = new ContentValues();
-                    cv.put("item_name", name);
-                    cv.put("hsn", eHsn.getText().toString().trim());
-                    cv.put("gst_rate", sGst.getSelectedItem().toString());
-                    db.insertWithOnConflict("items_master", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
-                    Toast.makeText(this, "Item saved to Master!", Toast.LENGTH_SHORT).show();
-                    showItemMasterDialog();
-                })
-                .setNegativeButton("Cancel", null)
                 .show();
     }
 
@@ -1855,7 +3562,7 @@ public class MainActivity extends Activity {
             String csv = "Name,Phone,Email,GSTIN,Address,State\n" +
                     "Ramesh Traders,9876543210,ramesh@gmail.com,37ABCDE1234F1Z5,100 Feet Road Vijayawada,Andhra Pradesh\n" +
                     "Suresh Enterprises,9123456789,suresh@gmail.com,36XYZAB5678G2Z1,MG Road Hyderabad,Telangana\n";
-            String fn = "Vanya_Contacts_Template.csv";
+            String fn = "InvoiceBook_Contacts_Template.csv";
             ContentValues v = new ContentValues();
             v.put(MediaStore.Downloads.DISPLAY_NAME, fn);
             v.put(MediaStore.Downloads.MIME_TYPE, "text/csv");
@@ -1872,50 +3579,152 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void importContactsFromCsvStream(InputStream is) {
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            SQLiteDatabase db = dbHelper.getWritableDatabase();
-            String line;
-            int count = 0;
-            boolean firstLine = true;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) continue;
-                String[] parts = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
-                if (firstLine) {
-                    firstLine = false;
-                    if (parts[0].replace("\"", "").trim().equalsIgnoreCase("name")) continue;
-                }
-                String name = parts.length > 0 ? parts[0].replace("\"", "").trim() : "";
-                if (name.isEmpty()) continue;
-                String phone = parts.length > 1 ? parts[1].replace("\"", "").trim() : "";
-                String email = parts.length > 2 ? parts[2].replace("\"", "").trim() : "";
-                String gstin = parts.length > 3 ? parts[3].replace("\"", "").trim() : "";
-                String address = parts.length > 4 ? parts[4].replace("\"", "").trim() : "";
-                String state = parts.length > 5 ? parts[5].replace("\"", "").trim() : "";
-
-                ContentValues cv = new ContentValues();
-                cv.put("name", name);
-                cv.put("phone", phone);
-                cv.put("email", email);
-                cv.put("gstin", gstin);
-                cv.put("address", address);
-                cv.put("state", state);
-                db.insertWithOnConflict("contacts", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
-                count++;
+    // Accepts CSV or Excel .xlsx (first sheet). Columns: Name, Phone, Email, GSTIN, Address, State
+    private void importContactsFromUri(Uri uri) {
+        try {
+            byte[] bytes;
+            try (InputStream is = getContentResolver().openInputStream(uri)) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192]; int n;
+                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                bytes = bos.toByteArray();
             }
-            Toast.makeText(this, count + " Contacts imported successfully!", Toast.LENGTH_LONG).show();
-            setupAutoComplete(buyerBillTo);
-            setupAutoComplete(consignee);
-            showContactList();
+            List<String[]> rowsIn;
+            if (bytes.length > 1 && bytes[0] == 'P' && bytes[1] == 'K') {
+                rowsIn = readXlsxRows(bytes);
+            } else if (bytes.length > 3 && (bytes[0] & 0xFF) == 0xD0 && (bytes[1] & 0xFF) == 0xCF) {
+                Toast.makeText(this, "Old Excel (.xls) format is not supported. Save the file as .xlsx or .csv and try again.", Toast.LENGTH_LONG).show();
+                return;
+            } else {
+                rowsIn = readCsvRows(new String(bytes, StandardCharsets.UTF_8));
+            }
+            importContactRows(rowsIn);
         } catch (Exception e) {
             Toast.makeText(this, "Import Contacts Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
+    private List<String[]> readCsvRows(String text) {
+        List<String[]> out = new ArrayList<>();
+        if (text != null && text.startsWith("\uFEFF")) text = text.substring(1);
+        for (String line : text.split("\r?\n")) {
+            if (line.trim().isEmpty()) continue;
+            String[] parts = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
+            for (int i = 0; i < parts.length; i++) parts[i] = parts[i].trim().replaceAll("^\"|\"$", "").replace("\"\"", "\"").trim();
+            out.add(parts);
+        }
+        return out;
+    }
+
+    // Minimal .xlsx reader: shared strings + first worksheet, no external library needed
+    private List<String[]> readXlsxRows(byte[] bytes) throws Exception {
+        byte[] sharedXml = null, sheetXml = null;
+        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(bytes))) {
+            ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                String nm = e.getName();
+                if (!nm.equals("xl/sharedStrings.xml") && !nm.equals("xl/worksheets/sheet1.xml")) continue;
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192]; int n;
+                while ((n = zis.read(buf)) > 0) bos.write(buf, 0, n);
+                if (nm.equals("xl/sharedStrings.xml")) sharedXml = bos.toByteArray(); else sheetXml = bos.toByteArray();
+            }
+        }
+        if (sheetXml == null) throw new Exception("No worksheet found in Excel file");
+
+        List<String> shared = new ArrayList<>();
+        if (sharedXml != null) {
+            XmlPullParser xp = Xml.newPullParser();
+            xp.setInput(new ByteArrayInputStream(sharedXml), "UTF-8");
+            StringBuilder cur = null; boolean inT = false;
+            for (int ev = xp.getEventType(); ev != XmlPullParser.END_DOCUMENT; ev = xp.next()) {
+                if (ev == XmlPullParser.START_TAG) {
+                    if ("si".equals(xp.getName())) cur = new StringBuilder(); else if ("t".equals(xp.getName())) inT = true;
+                } else if (ev == XmlPullParser.TEXT && inT && cur != null) {
+                    cur.append(xp.getText());
+                } else if (ev == XmlPullParser.END_TAG) {
+                    if ("t".equals(xp.getName())) inT = false; else if ("si".equals(xp.getName()) && cur != null) { shared.add(cur.toString()); cur = null; }
+                }
+            }
+        }
+
+        List<String[]> out = new ArrayList<>();
+        XmlPullParser xp = Xml.newPullParser();
+        xp.setInput(new ByteArrayInputStream(sheetXml), "UTF-8");
+        TreeMap<Integer, String> row = null; int col = 0; String type = null; StringBuilder val = null; boolean inVal = false;
+        for (int ev = xp.getEventType(); ev != XmlPullParser.END_DOCUMENT; ev = xp.next()) {
+            if (ev == XmlPullParser.START_TAG) {
+                String tag = xp.getName();
+                if ("row".equals(tag)) { row = new TreeMap<>(); col = 0; }
+                else if ("c".equals(tag)) {
+                    String ref = xp.getAttributeValue(null, "r");
+                    if (ref != null) { int ci = 0; for (char ch : ref.toCharArray()) { if (!Character.isLetter(ch)) break; ci = ci * 26 + (Character.toUpperCase(ch) - 'A' + 1); } col = ci - 1; }
+                    type = xp.getAttributeValue(null, "t"); val = new StringBuilder();
+                }
+                else if ("v".equals(tag) || "t".equals(tag)) inVal = true;
+            } else if (ev == XmlPullParser.TEXT && inVal && val != null) {
+                val.append(xp.getText());
+            } else if (ev == XmlPullParser.END_TAG) {
+                String tag = xp.getName();
+                if ("v".equals(tag) || "t".equals(tag)) inVal = false;
+                else if ("c".equals(tag) && row != null && val != null) {
+                    String s = val.toString();
+                    if ("s".equals(type)) { try { s = shared.get(Integer.parseInt(s.trim())); } catch (Exception ex) { s = ""; } }
+                    else if (type == null || "n".equals(type)) s = s.replaceAll("\\.0+$", ""); // phone numbers stored as numbers
+                    row.put(col, s.trim()); col++; val = null;
+                } else if ("row".equals(tag) && row != null) {
+                    if (!row.isEmpty()) {
+                        String[] arr = new String[row.lastKey() + 1];
+                        Arrays.fill(arr, "");
+                        for (Map.Entry<Integer, String> en : row.entrySet()) arr[en.getKey()] = en.getValue();
+                        out.add(arr);
+                    }
+                    row = null;
+                }
+            }
+        }
+        return out;
+    }
+
+    private void importContactRows(List<String[]> rowsIn) {
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        int added = 0, updated = 0;
+        db.beginTransaction();
+        try {
+            for (int i = 0; i < rowsIn.size(); i++) {
+                String[] parts = rowsIn.get(i);
+                String name = parts.length > 0 ? parts[0].trim() : "";
+                if (name.isEmpty() || (i == 0 && name.equalsIgnoreCase("name"))) continue;
+                ContentValues cv = new ContentValues();
+                cv.put("name", name);
+                cv.put("phone", parts.length > 1 ? parts[1].trim() : "");
+                cv.put("email", parts.length > 2 ? parts[2].trim().toLowerCase(Locale.ROOT) : "");
+                cv.put("gstin", parts.length > 3 ? parts[3].trim().toUpperCase(Locale.ROOT) : "");
+                cv.put("address", parts.length > 4 ? parts[4].trim() : "");
+                cv.put("state", parts.length > 5 ? parts[5].trim() : "");
+                // Same name (ignoring case) updates the existing contact instead of creating a duplicate
+                if (db.update("contacts", cv, "LOWER(name)=LOWER(?)", new String[]{name}) > 0) updated++;
+                else if (db.insert("contacts", null, cv) != -1) added++;
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        if (added + updated == 0) { Toast.makeText(this, "No contacts found in file. Use the template format.", Toast.LENGTH_LONG).show(); return; }
+        Toast.makeText(this, added + " contacts added, " + updated + " updated", Toast.LENGTH_LONG).show();
+        setupAutoComplete(buyerBillTo);
+        setupAutoComplete(consignee);
+        showContactList();
+    }
+
     private void stepInvoiceNumber(int delta) {
         String s = invoiceNo.getText().toString().trim();
         if (s.isEmpty()) return;
+        long current = parseInvoiceCounter(invoiceFormatStr, s);
+        if (current >= 0) {
+            invoiceNo.setText(formatInvoiceNo(invoiceFormatStr, Math.max(1, current + delta)));
+            return;
+        }
         int idx = s.length() - 1;
         while (idx >= 0 && Character.isDigit(s.charAt(idx))) {
             idx--;
@@ -1977,7 +3786,47 @@ public class MainActivity extends Activity {
     private void center(Canvas c, Paint p, String s,float x,float y, boolean bold){ p.setTypeface(pdfTypeface(bold)); c.drawText(s,x-p.measureText(s)/2,y,p); }
     private void drawMultiline(Canvas c, Paint p, String s,float x,float y,float maxW,float leading){ if(s==null)return; String[] words=s.replace("\n"," ").split(" "); String line=""; float yy=y; for(String word:words){ if(word.isEmpty())continue; String test=line.isEmpty()?word:line+" "+word; if(p.measureText(test)>maxW){c.drawText(line,x,yy,p);yy+=leading;line=word;} else line=test;} if(!line.isEmpty())c.drawText(line,x,yy,p); }
     private String formatState(String s) { return s.replace(" (", " - ").replace(")", ""); }
-    private String nextInvoicePreview() { return String.format(Locale.US, "V-%04d", prefs.getInt(COUNTER, 1)); }
+    // Indian financial year, e.g. "2026-27"
+    private String currentFinancialYear() {
+        Calendar n = Calendar.getInstance();
+        int y = n.get(Calendar.MONTH) < Calendar.APRIL ? n.get(Calendar.YEAR) - 1 : n.get(Calendar.YEAR);
+        return y + "-" + String.format(Locale.US, "%02d", (y + 1) % 100);
+    }
+
+    // Owner-defined format: the first run of # is the zero-padded running number, {FY} is the financial year
+    private String formatInvoiceNo(String format, long n) {
+        String f = format.replace("{FY}", currentFinancialYear());
+        Matcher m = Pattern.compile("#+").matcher(f);
+        if (!m.find()) return f + n;
+        return f.substring(0, m.start()) + String.format(Locale.US, "%0" + m.group().length() + "d", n) + f.substring(m.end());
+    }
+
+    // Running number of an invoice number written in the given format, or -1 if it doesn't follow it
+    private long parseInvoiceCounter(String format, String no) {
+        String f = format.replace("{FY}", currentFinancialYear());
+        Matcher m = Pattern.compile("#+").matcher(f);
+        if (!m.find()) return -1;
+        String regex = Pattern.quote(f.substring(0, m.start())) + "(\\d+)" + Pattern.quote(f.substring(m.end()));
+        Matcher nm = Pattern.compile(regex).matcher(no);
+        try { return nm.matches() ? Long.parseLong(nm.group(1)) : -1; } catch (NumberFormatException e) { return -1; }
+    }
+
+    private boolean invoiceExists(String no) {
+        if (no.isEmpty()) return false;
+        Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"invoice_no"}, "invoice_no=?", new String[]{no}, null, null, null);
+        boolean exists = c.getCount() > 0;
+        c.close();
+        return exists;
+    }
+
+    // Next number = highest saved invoice in the current format + 1 (restarts each FY when the format uses {FY})
+    private String nextInvoicePreview() {
+        long max = 0;
+        Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"invoice_no"}, null, null, null, null, null);
+        while (c.moveToNext()) max = Math.max(max, parseInvoiceCounter(invoiceFormatStr, c.isNull(0) ? "" : c.getString(0)));
+        c.close();
+        return formatInvoiceNo(invoiceFormatStr, max + 1);
+    }
     private String toIndianWords(long val) {
         if(val==0) return "INR Zero only."; String s="INR "; long n = val; if(n>=10000000){s+=twoDigits(n/10000000)+" Crore "; n%=10000000;} if(n>=100000){s+=twoDigits(n/100000)+" Lakh "; n%=100000;} if(n>=1000){s+=twoDigits(n/1000)+" Thousand "; n%=1000;} if(n>=100){s+=ones(n/100)+" Hundred "; n%=100;} if(n>0){ if(!s.equals("INR "))s+="And "; s+=twoDigits(n)+" "; } return s+"only.";
     }
@@ -2003,29 +3852,19 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Invoice No and Date are required", Toast.LENGTH_SHORT).show();
             return false;
         }
-        if (rows.isEmpty()) {
-            Toast.makeText(this, "Please add at least one item before saving PDF", Toast.LENGTH_SHORT).show();
+        String paymentMode = paymentSpinner != null && paymentSpinner.getSelectedItem() != null ? paymentSpinner.getSelectedItem().toString() : "Cash";
+        boolean isCredit = "Credit".equalsIgnoreCase(paymentMode) || "Cheque".equalsIgnoreCase(paymentMode);
+        if (isCredit && buyerBillTo.getText().toString().trim().isEmpty()) {
+            Toast.makeText(this, "Buyer details are mandatory for Credit sales", Toast.LENGTH_SHORT).show();
+            buyerBillTo.setError("Enter buyer name & address for credit sale");
+            buyerBillTo.requestFocus();
             return false;
         }
-        boolean hasValidItem = false;
-        for (int i = 0; i < rows.size(); i++) {
-            ItemRow r = rows.get(i);
-            String itemText = r.desc.getText().toString().trim();
-            if (itemText.isEmpty()) {
-                Toast.makeText(this, "Item Particulars is required for row #" + (i + 1), Toast.LENGTH_SHORT).show();
-                r.desc.requestFocus();
-                return false;
-            }
-            if (r.amountVal() <= 0 && r.rateVal() <= 0) {
-                Toast.makeText(this, "Please enter rate or amount for item #" + (i + 1), Toast.LENGTH_SHORT).show();
-                r.rate.requestFocus();
-                return false;
-            }
-            hasValidItem = true;
-        }
-        if (!hasValidItem) {
-            Toast.makeText(this, "Item details are mandatory to save PDF", Toast.LENGTH_SHORT).show();
-            return false;
+        if (!validPhone(buyerPhone, "buyer")) return false;
+        if (!validEmail(buyerEmail, "buyer")) return false;
+        if (!sameAsBilling.isChecked()) {
+            if (!validPhone(consigneePhone, "Ship To")) return false;
+            if (!validEmail(consigneeEmail, "Ship To")) return false;
         }
         String pattern = "^[0-9]{2}[A-Z]{3}[PCHFATLJG][A-Z][0-9]{4}[A-Z][A-Z0-9]{3}$";
         String g = buyerGstin.getText().toString().trim().toUpperCase();
@@ -2033,10 +3872,36 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Invalid GSTIN format", Toast.LENGTH_SHORT).show();
             return false;
         }
-        if (!validPhone(buyerPhone.getText().toString(), "Buyer phone")) return false;
-        if (!validPhone(consigneePhone.getText().toString(), "Ship To phone")) return false;
-        if (!validEmail(buyerEmail.getText().toString(), "Buyer email")) return false;
-        if (!validEmail(consigneeEmail.getText().toString(), "Ship To email")) return false;
+
+        // Completely blank rows are dropped; any row with an item needs both quantity and rate
+        for (int i = rows.size() - 1; i >= 0 && rows.size() > 1; i--) {
+            ItemRow r = rows.get(i);
+            if (r.isBlank()) { rows.remove(i); itemsContainer.removeView(r.view); }
+        }
+        renumberRows();
+        for (int i = 0; i < rows.size(); i++) {
+            ItemRow r = rows.get(i);
+            String itemText = r.desc.getText().toString().trim();
+            if (itemText.isEmpty()) {
+                Toast.makeText(this, rows.size() == 1 && r.isBlank() ? "Please add at least one item" : "Item Particulars is required for row #" + (i + 1), Toast.LENGTH_SHORT).show();
+                r.desc.requestFocus();
+                return false;
+            }
+            if (r.qtyVal() <= 0) {
+                Toast.makeText(this, "Quantity is required for item #" + (i + 1), Toast.LENGTH_SHORT).show();
+                r.qty.setError("Enter quantity");
+                r.qty.requestFocus();
+                return false;
+            }
+            if (r.rateVal() <= 0) {
+                Toast.makeText(this, "Rate is required for item #" + (i + 1), Toast.LENGTH_SHORT).show();
+                EditText target = r.incToggle.isChecked() ? r.totalIncl : r.rate;
+                target.setError("Enter rate");
+                target.requestFocus();
+                return false;
+            }
+        }
+        recalc();
         return true;
     }
 
@@ -2205,11 +4070,11 @@ public class MainActivity extends Activity {
             c.close();
             html.append("</table></body></html>");
 
-            String fn = "Vanya_Sales_Report_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".xls";
+            String fn = "InvoiceBook_Sales_Report_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".xls";
             ContentValues v = new ContentValues();
             v.put(MediaStore.Downloads.DISPLAY_NAME, fn);
             v.put(MediaStore.Downloads.MIME_TYPE, "application/vnd.ms-excel");
-            v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Vanya GST Reports");
+            v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Invoice Book");
             Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
             if (uri != null) {
                 try (OutputStream out = getContentResolver().openOutputStream(uri)) {
@@ -2269,23 +4134,15 @@ public class MainActivity extends Activity {
                     consigneePhone.setText(cPhone);
                     consigneeEmail.setText(cEmail);
                     consigneeGstin.setText(cGstin);
-                    for (int i = 0; i < STATES.length; i++) {
-                        if (STATES[i].equalsIgnoreCase(cState) || STATES[i].startsWith(cState)) {
-                            consigneeState.setSelection(i);
-                            break;
-                        }
-                    }
+                    int si = matchStateIndex(cState, cGstin);
+                    if (si >= 0) consigneeState.setSelection(si);
                 } else {
                     buyerBillTo.setText(fullDetails);
                     buyerPhone.setText(cPhone);
                     buyerEmail.setText(cEmail);
                     buyerGstin.setText(cGstin);
-                    for (int i = 0; i < STATES.length; i++) {
-                        if (STATES[i].equalsIgnoreCase(cState) || STATES[i].startsWith(cState)) {
-                            buyerState.setSelection(i);
-                            break;
-                        }
-                    }
+                    int si = matchStateIndex(cState, cGstin);
+                    if (si >= 0) buyerState.setSelection(si);
                     if (sameAsBilling.isChecked()) {
                         syncConsignee();
                     }

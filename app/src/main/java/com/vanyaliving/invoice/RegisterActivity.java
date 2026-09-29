@@ -5,21 +5,26 @@ import android.app.AlertDialog;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.text.InputFilter;
 import android.text.InputType;
+import android.util.Patterns;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.Random;
 
 public class RegisterActivity extends Activity {
-    private EditText nameInput, emailInput, passwordInput, otpInput;
+    private EditText nameInput, phoneInput, emailInput, passwordInput, otpInput;
     private Button sendOtpBtn, registerBtn;
+    private TextView resendLink;
     private String generatedOtp = "";
+    private String otpPhone = "";
     private DatabaseHelper dbHelper;
 
     @Override
@@ -53,9 +58,16 @@ public class RegisterActivity extends Activity {
         applyBoxBackground(nameInput);
         root.addView(nameInput, inputParams);
 
+        phoneInput = new EditText(this);
+        phoneInput.setHint("Mobile Number (10 digits)");
+        phoneInput.setInputType(InputType.TYPE_CLASS_PHONE);
+        phoneInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(10)});
+        applyBoxBackground(phoneInput);
+        root.addView(phoneInput, inputParams);
+
         emailInput = new EditText(this);
-        emailInput.setHint("Email Address");
-        emailInput.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        emailInput.setHint("Email Address (optional)");
+        emailInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
         applyBoxBackground(emailInput);
         root.addView(emailInput, inputParams);
 
@@ -78,6 +90,7 @@ public class RegisterActivity extends Activity {
         otpInput = new EditText(this);
         otpInput.setHint("Enter 6-digit OTP");
         otpInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        otpInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(6)});
         otpInput.setVisibility(View.GONE);
         applyBoxBackground(otpInput);
         root.addView(otpInput, inputParams);
@@ -88,7 +101,16 @@ public class RegisterActivity extends Activity {
         registerBtn.setOnClickListener(v -> handleRegister());
         root.addView(registerBtn, btnParams);
 
-        setContentView(root);
+        resendLink = new TextView(this);
+        resendLink.setText("Resend OTP");
+        resendLink.setTextColor(0xFF0000FF);
+        resendLink.setVisibility(View.GONE);
+        resendLink.setOnClickListener(v -> handleSendOtp());
+        root.addView(resendLink);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(root);
+        setContentView(scroll);
     }
 
     private void applyBoxBackground(EditText editText) {
@@ -100,44 +122,92 @@ public class RegisterActivity extends Activity {
         editText.setPadding(dp(12), dp(12), dp(12), dp(12));
     }
 
+    public static boolean isValidPassword(String password) {
+        if (password == null || password.length() < 6) return false;
+        boolean hasLetter = false;
+        boolean hasDigit = false;
+        boolean hasSpecial = false;
+        for (char c : password.toCharArray()) {
+            if (Character.isLetter(c)) hasLetter = true;
+            else if (Character.isDigit(c)) hasDigit = true;
+            else hasSpecial = true;
+        }
+        return hasLetter && hasDigit && hasSpecial;
+    }
+
     private void handleSendOtp() {
         String name = nameInput.getText().toString().trim();
+        String phone = phoneInput.getText().toString().trim();
         String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString().trim();
 
-        if (name.isEmpty() || email.isEmpty() || password.isEmpty()) {
-            Toast.makeText(this, "Please fill all fields", Toast.LENGTH_SHORT).show();
+        if (name.isEmpty() || phone.isEmpty() || password.isEmpty()) {
+            Toast.makeText(this, "Name, mobile number and password are required", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isValidPassword(password)) {
+            passwordInput.setError("Password must be at least 6 characters and include letters, numbers, and a special character");
+            passwordInput.requestFocus();
+            return;
+        }
+        if (!phone.matches("[6-9][0-9]{9}")) {
+            phoneInput.setError("Enter correct phone number");
+            phoneInput.requestFocus();
+            return;
+        }
+        if (!email.isEmpty() && !Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            emailInput.setError("Enter correct email address");
+            emailInput.requestFocus();
+            return;
+        }
+        if (dbHelper.phoneExists(phone)) {
+            phoneInput.setError("This mobile number is already registered");
+            phoneInput.requestFocus();
+            return;
+        }
+        if (!email.isEmpty() && dbHelper.emailExists(email)) {
+            emailInput.setError("This email is already registered");
+            emailInput.requestFocus();
             return;
         }
 
-        // Mock OTP generation
         generatedOtp = String.valueOf(new Random().nextInt(900000) + 100000);
-        
-        // TODO: Integrate real Email API (e.g., SendGrid, Firebase Auth) here.
-        // For demonstration, we show the OTP in an AlertDialog.
-        new AlertDialog.Builder(this)
-                .setTitle("Mock OTP Sent")
-                .setMessage("OTP Sent to " + email + "\n\nYour 6-digit OTP is: " + generatedOtp)
-                .setPositiveButton("OK", null)
-                .show();
+        otpPhone = phone;
+        sendOtpSms(phone, generatedOtp);
 
         otpInput.setVisibility(View.VISIBLE);
         registerBtn.setVisibility(View.VISIBLE);
+        resendLink.setVisibility(View.VISIBLE);
         sendOtpBtn.setVisibility(View.GONE);
     }
 
+    // Delivery point for the OTP SMS. Replace the dialog with a real SMS provider
+    // (Firebase Phone Auth, MSG91, Twilio, ...) once its credentials are available.
+    private void sendOtpSms(String phone, String otp) {
+        new AlertDialog.Builder(this)
+                .setTitle("OTP Sent")
+                .setMessage("OTP sent to +91 " + phone + "\n\n(Test mode) Your 6-digit OTP is: " + otp)
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
     private void handleRegister() {
+        String phone = phoneInput.getText().toString().trim();
+        if (!phone.equals(otpPhone)) {
+            Toast.makeText(this, "Mobile number changed. Please request a new OTP.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         String enteredOtp = otpInput.getText().toString().trim();
         if (enteredOtp.equals(generatedOtp)) {
             String name = nameInput.getText().toString().trim();
             String email = emailInput.getText().toString().trim();
             String password = passwordInput.getText().toString().trim();
 
-            if (dbHelper.registerUser(name, email, password)) {
+            if (dbHelper.registerUser(name, phone, email, password)) {
                 Toast.makeText(this, "Registration Successful", Toast.LENGTH_SHORT).show();
                 finish();
             } else {
-                Toast.makeText(this, "Email already registered", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Mobile number or email already registered", Toast.LENGTH_SHORT).show();
             }
         } else {
             Toast.makeText(this, "Invalid OTP", Toast.LENGTH_SHORT).show();
