@@ -1,0 +1,20 @@
+# systemd unit for running the sync server without Docker (Ubuntu / Debian).
+#   sudo cp server/deploy/blitzbook.service /etc/systemd/system/
+#   sudo systemctl enable --now blitzbook
+# Put a reverse proxy with https in front of port 8080 (see README.md: Caddy needs two lines).
+[Unit]
+Description=BlitzBook sync server
+After=network.target
+
+[Service]
+Type=simple
+User=blitzbook
+WorkingDirectory=/opt/blitzbook
+Environment=PORT=8080
+Environment=BLITZBOOK_DATA=/var/lib/blitzbook
+ExecStart=/usr/bin/node server/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

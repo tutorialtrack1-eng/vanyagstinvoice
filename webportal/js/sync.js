@@ -6,9 +6,9 @@
    Without a reachable server the portal simply works on its own, as before. */
 (function (global) {
   'use strict';
-  // Address of the sync server. Blank means "the server this page was loaded from", which is the case when
-  // the portal is opened through server/server.js. Set it when the portal is hosted somewhere else.
-  const DEFAULT_SERVER_URL = '';
+  // Address of the sync server for the published portal (blitzbook.co.in). When the portal is opened through
+  // server/server.js on this machine or the local network, that server is used instead.
+  const DEFAULT_SERVER_URL = 'https://api.blitzbook.co.in';
   const POLL_MS = 10000, PUSH_DELAY_MS = 1200, TIMEOUT_MS = 20000;
   const URL_KEY = 'blitzbook.sync_url', SEEN_KEY = 'blitzbook.sync_seen';
 
@@ -39,8 +39,12 @@
     serverUrl() {
       let u = '';
       try { u = localStorage.getItem(URL_KEY) || ''; } catch (e) { /* storage blocked */ }
+      // Opened from a server on this machine or the local network (development): that server is the sync server
+      const loc = global.location;
+      const local = !!loc && /^https?:$/.test(loc.protocol) && /^(localhost|127.|10.|192.168.|172.(1[6-9]|2d|3[01]).)/.test(loc.hostname);
+      if (!u && local) u = loc.origin;
       if (!u) u = DEFAULT_SERVER_URL;
-      if (!u && global.location && /^https?:$/.test(global.location.protocol)) u = global.location.origin;
+      if (!u && loc && /^https?:$/.test(loc.protocol)) u = loc.origin;
       return u.replace(/\/+$/, '');
     },
     customUrl() { try { return localStorage.getItem(URL_KEY) || ''; } catch (e) { return ''; } },

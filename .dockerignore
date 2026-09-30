@@ -1,0 +1,11 @@
+app/
+build/
+.gradle/
+.idea/
+.git/
+.tmp_pdf/
+.tmp.driveupload/
+server/data/
+webportal/tools/
+tools/
+*.apk

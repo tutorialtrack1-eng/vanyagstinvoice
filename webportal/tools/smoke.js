@@ -50,7 +50,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await register(page, 'Local User', '9000000001', 'Test@123');
   await page.click('.modal .mf .btn.outline'); // company profile: Later
   await page.waitForSelector('.hero');
-  check('works without a server', (await page.textContent('#syncTx')) === 'This device only', await page.textContent('#syncTx'));
+  check('works without a reachable server', ['This device only', 'Not connected'].includes(await page.textContent('#syncTx')), await page.textContent('#syncTx'));
   const trial = await page.textContent('#subChip');
   check('trial runs for a day', /^Trial: (24 hr|23 hr \d+ min) left$/.test(trial), trial);
   await page.context().close();

@@ -64,7 +64,7 @@ import java.util.UUID;
 final class Sync {
     /** Address of the sync server, e.g. "https://books.example.com". Blank: sync stays off until an
      *  address is entered under Sync in the app (kept in the preferences). */
-    static final String SERVER_URL = "";
+    static final String SERVER_URL = "https://api.blitzbook.co.in";
 
     private static final long POLL_MILLIS = 10_000, WATCH_MILLIS = 1_500;
     private static final String PREFS = "invoice_prefs";

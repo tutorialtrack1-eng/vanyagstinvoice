@@ -1,0 +1,6 @@
+# https for the sync API. Caddy gets the certificate from Let's Encrypt automatically
+# once api.blitzbook.co.in points at this machine.
+api.blitzbook.co.in {
+	reverse_proxy blitzbook:8080
+	encode gzip
+}

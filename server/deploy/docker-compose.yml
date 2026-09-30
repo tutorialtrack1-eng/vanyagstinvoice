@@ -1,0 +1,28 @@
+# The sync server behind Caddy, which obtains and renews the https certificate for api.blitzbook.co.in by itself.
+# On the server:  docker compose -f server/deploy/docker-compose.yml up -d
+services:
+  blitzbook:
+    build:
+      context: ../..
+      dockerfile: server/deploy/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - blitzbook-data:/data
+    expose:
+      - "8080"
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - blitzbook
+volumes:
+  blitzbook-data:
+  caddy-data:
+  caddy-config:
