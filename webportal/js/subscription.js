@@ -17,10 +17,7 @@
   const ACTIVATION_SERVER_URL = '';
   const DAY = 24 * 60 * 60 * 1000;
 
-  async function sha256Hex(s) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-  }
+  async function sha256Hex(s) { return (await U.sha256Hex(s)).toUpperCase(); }
   async function makeCode(identity, days) {
     const id = String(identity || '').trim().toLowerCase();
     const hex = await sha256Hex(SECRET + '|' + id + '|' + days);

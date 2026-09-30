@@ -242,7 +242,7 @@
 
   // ------------------------------------------------------------ auth
   // The password never leaves this browser as typed: this hash is what is kept here and what the sync server receives
-  async function hash(s) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('bb|' + s)); return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join(''); }
+  function hash(s) { return U.sha256Hex('bb|' + s); }
   function otp() { return String(Math.floor(100000 + Math.random() * 900000)); }
   const FEATURES = [['receipt', 'GST invoices with CGST, SGST and IGST worked out for you'], ['box', 'Sales, purchases, expenses, journal and stock in one place'], ['pie', 'Profit & Loss and Balance Sheet whenever you need them'], ['sync', 'The same books in the BlitzBook app and here, kept in step']];
   const Auth = {
