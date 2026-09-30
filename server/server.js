@@ -225,6 +225,10 @@ function main(argv) {
     console.log('Password changed for ' + (u.phone || u.email) + '. Every device must log in again.');
     return;
   }
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') { console.error('Port ' + PORT + ' is already in use by another program. Start with a free port, e.g.  PORT=8090 node server/server.js'); process.exit(1); }
+    throw e;
+  });
   server.listen(PORT, () => {
     console.log('BlitzBook sync server on port ' + server.address().port);
     console.log('  web portal : http://localhost:' + server.address().port + '/   (' + WEB + ')');
