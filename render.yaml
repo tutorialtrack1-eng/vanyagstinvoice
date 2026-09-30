@@ -1,0 +1,28 @@
+# One-click hosting of the sync server on Render (https://render.com), deployed from this GitHub repository
+# and redeployed on every push to master:
+#   Render dashboard -> New -> Blueprint -> connect tutorialtrack1-eng/vanyagstinvoice -> Apply.
+# Then at GoDaddy add  CNAME  api  ->  blitzbook-api.onrender.com  and Render issues the https certificate
+# for api.blitzbook.co.in by itself. The "starter" plan is needed for the persistent disk that keeps the
+# books across restarts and deploys (the free plan has no disk and would lose the data).
+services:
+  - type: web
+    name: blitzbook-api
+    runtime: node
+    plan: starter
+    region: singapore
+    branch: master
+    buildCommand: ""
+    startCommand: node server/server.js
+    healthCheckPath: /api/ping
+    autoDeploy: true
+    envVars:
+      - key: BLITZBOOK_DATA
+        value: /var/data
+      - key: NODE_VERSION
+        value: "20"
+    disk:
+      name: blitzbook-data
+      mountPath: /var/data
+      sizeGB: 1
+    domains:
+      - api.blitzbook.co.in

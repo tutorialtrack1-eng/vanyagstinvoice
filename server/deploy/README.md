@@ -4,7 +4,18 @@ The app (`Sync.SERVER_URL`) and the published portal (`DEFAULT_SERVER_URL` in `w
 to `https://api.blitzbook.co.in`. Whatever machine answers there with `server/server.js` becomes the sync
 server for everyone. It must be reachable from the internet, stay on, and keep `server/data` safe.
 
-## 1. A machine
+## Quickest: Render, deployed from the GitHub repository
+
+`render.yaml` at the repository root describes the service. In the Render dashboard choose **New -> Blueprint**,
+connect `tutorialtrack1-eng/vanyagstinvoice`, and Apply: Render builds from `master`, redeploys on every push,
+keeps the books on a persistent disk and issues the https certificate. Then add at GoDaddy:
+`CNAME  api  ->  blitzbook-api.onrender.com` (Render shows the exact target under the service's Custom Domains).
+Check with `curl https://api.blitzbook.co.in/api/ping`. The persistent disk needs the paid Starter plan;
+the free plan has no disk and loses the data.
+
+## Your own machine instead
+
+### 1. A machine
 
 Any small Linux VPS works (1 vCPU, 1 GB RAM is plenty): Hostinger, DigitalOcean, Linode, AWS Lightsail,
 Hetzner... Pick Ubuntu 22.04 or 24.04 and note its public IP.
