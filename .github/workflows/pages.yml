@@ -1,0 +1,41 @@
+# Publishes the web portal (webportal/) to GitHub Pages at https://blitzbook.co.in on every push to master.
+# The sync server (server/) cannot run on GitHub Pages; host it separately and set DEFAULT_SERVER_URL in
+# webportal/js/sync.js to its https address so the published portal syncs with the app.
+name: Publish web portal
+
+on:
+  push:
+    branches: [master]
+    paths: [webportal/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site (portal only, without its test tooling)
+        run: |
+          mkdir -p site
+          cp -r webportal/. site/
+          rm -rf site/tools site/node_modules
+          echo blitzbook.co.in > site/CNAME
+          touch site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
