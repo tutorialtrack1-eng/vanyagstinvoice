@@ -21,6 +21,18 @@ To reach it from a phone on the same Wi-Fi during testing, use the PC's address,
 For real use put it behind **https** (any reverse proxy or a Node host that terminates TLS) and give both
 the app and the portal that address.
 
+## Keep it running on a Windows PC
+
+```
+powershell -ExecutionPolicy Bypass -File server\windows\install-task.ps1 -Port 8090
+```
+
+creates a scheduled task that runs the server without a window, starts it now and at every sign-in, and
+restarts it if it stops (log: `server\data\server.log`). Run it once from an **administrator** PowerShell
+to also open the port in Windows Firewall, otherwise phones on the Wi-Fi are blocked and the app shows
+"Not connected". `server\windows\uninstall-task.ps1` removes it again. Port 8080 is often taken by other
+software (Jenkins, Tomcat...), hence 8090 here.
+
 ## Point the app and the portal at it
 
 - **App**: set `SERVER_URL` at the top of `app/src/main/java/com/vanyaliving/invoice/Sync.java` before
