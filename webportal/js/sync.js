@@ -41,7 +41,7 @@
       try { u = localStorage.getItem(URL_KEY) || ''; } catch (e) { /* storage blocked */ }
       // Opened from a server on this machine or the local network (development): that server is the sync server
       const loc = global.location;
-      const local = !!loc && /^https?:$/.test(loc.protocol) && /^(localhost|127.|10.|192.168.|172.(1[6-9]|2d|3[01]).)/.test(loc.hostname);
+      const local = !!loc && /^https?:$/.test(loc.protocol) && /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(loc.hostname);
       if (!u && local) u = loc.origin;
       if (!u) u = DEFAULT_SERVER_URL;
       if (!u && loc && /^https?:$/.test(loc.protocol)) u = loc.origin;
