@@ -129,16 +129,17 @@
   };
   function icon(name) { return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
 
+  // Day-to-day work first (sell, who you deal with, buy), then the books. Same order in the app.
   const TILES = [
     { key: 'invoice', t: 'Invoice', d: 'Create a GST bill', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
     { key: 'sales', t: 'Sales', d: 'Invoices and credit notes', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
-    { key: 'items', t: 'Items', d: 'Products, HSN and prices', ic: 'grid', a: '#15803D', b: '#22C55E' },
     { key: 'customers', t: 'Customer', d: 'People you sell to', ic: 'user', a: '#7E22CE', b: '#A855F7' },
     { key: 'suppliers', t: 'Supplier', d: 'People you buy from', ic: 'truck', a: '#C2410C', b: '#F97316' },
     { key: 'purchases', t: 'Purchase', d: 'Bills and quotations', ic: 'cart', a: '#B45309', b: '#F59E0B' },
+    { key: 'items', t: 'Stock', d: 'Items, prices, stock in hand', ic: 'box', a: '#15803D', b: '#22C55E' },
     { key: 'expenses', t: 'Expense', d: 'Rent, salaries and more', ic: 'wallet', a: '#BE123C', b: '#F43F5E' },
     { key: 'journal', t: 'Journal', d: 'Manual ledger entries', ic: 'book', a: '#6D28D9', b: '#8B5CF6' },
-    { key: 'reports', t: 'Reports', d: 'P&L, balance sheet, stock', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
+    { key: 'reports', t: 'Reports', d: 'Sales, P&L, balance sheet', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
   ];
   // Top navigation. dlg entries open a dialog over the current screen, so they never become the active link.
   const NAV = [

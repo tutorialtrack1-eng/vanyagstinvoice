@@ -34,6 +34,7 @@
     if (it.subInfo) p.push('Info: ' + it.subInfo);
     return p.join(' ');
   }
+  const POWERED = '<div class="pw">Powered by BlitzBook</div>';
   function partyLines(p) { return String(p.name || '').split('\n').concat(String(p.address || '').split('\n')).map(s => s.trim()).filter(Boolean); }
 
   // HSN-wise groups: key hsn|rate -> {hsn, rate, taxable}
@@ -108,7 +109,7 @@
         (inv.kind === 'quotation' ? '<div class="note">This quotation is valid for 30 days from the date above unless stated otherwise.</div>' : '')) +
       '<div class="foot"><div class="bank"><div class="bt">BANK DETAILS</div>' + bank.map(b => '<div><span>' + b[0] + '</span><span>:</span><span>' + esc(b[1]) + '</span></div>').join('') + '</div>' + totals + '</div>' +
       '<div class="sign"><div>For ' + esc(company.name) + '</div>' + (company.signature ? '<img src="' + company.signature + '" alt="">' : '<div class="sp"></div>') + '<div>Authorised Signatory</div></div>' +
-      (company.signature ? '' : '<div class="cg">Computer-generated document. No signature required.</div>') +
+      (company.signature ? '' : '<div class="cg">Computer-generated document. No signature required.</div>') + POWERED +
       '</div>';
   }
 
@@ -180,7 +181,7 @@
       '<div class="foot"><div class="bank"><b>Company\'s Bank Details</b>' + bank.map(b => '<div><span>' + b[0] + '</span><span>:</span><b>' + esc(b[1]) + '</b></div>').join('') + '</div>' +
       '<div class="decl"><div class="dh">Declaration</div><b>for ' + esc(company.name) + '</b><div class="dt">We declare that this ' + (inv.kind === 'invoice' ? 'invoice' : 'document') + ' shows the actual price of the goods described and that all particulars are true and correct.</div>' +
       (company.signature ? '<img src="' + company.signature + '" alt="">' : '') + '<div class="as">Authorised Signatory</div></div></div>' +
-      '</div><div class="cg">' + (company.signature ? 'This is a Computer Generated ' : 'This is a Computer Generated ') + (inv.kind === 'invoice' ? 'Invoice' : 'Document') + (company.signature ? '' : '. No signature required.') + '</div></div>';
+      '</div><div class="cg">' + (company.signature ? 'This is a Computer Generated ' : 'This is a Computer Generated ') + (inv.kind === 'invoice' ? 'Invoice' : 'Document') + (company.signature ? '' : '. No signature required.') + '</div>' + POWERED + '</div>';
   }
 
   const CSS = `
@@ -193,6 +194,8 @@
     .c { text-align: center; } .r { text-align: right; white-space: nowrap; }
     .sub { font-size: 8pt; margin-top: 2px; }
     .cg { text-align: center; font-size: 8pt; margin-top: 6px; }
+    .pw { text-align: center; font-size: 7.5pt; color: #555; margin-top: 10px; letter-spacing: .3px; }
+    .env .env-pw { position: absolute; right: 0; bottom: 0; margin: 0; }
     img { max-width: 120px; max-height: 40px; display: block; margin-left: auto; }
     /* Standard */
     .std .title { text-align: center; font-size: 15pt; font-weight: bold; text-decoration: underline; padding-bottom: 6px; border-bottom: 1.5px solid #000; margin-bottom: 8px; }
@@ -246,7 +249,7 @@
     return page(inv.no, p.css, '8mm 10mm', '<div class="env"><div class="from"><b>From: ' + esc(String(company.name || '').toUpperCase()) + '</b><div>' + nl2br(company.address) + '</div><div>Ph: ' + esc(company.phone) + (company.gstin ? '   GSTIN: ' + esc(company.gstin) : '') + '</div></div>' +
       '<div class="to"><div>To,</div><div class="nm">' + esc(lines[0] || '') + '</div>' + lines.slice(1).map(l => '<div>' + esc(l) + '</div>').join('') + '<div>' + esc(formatState(b.state)) + '</div>' +
       (b.phone ? '<div>Ph: ' + esc(b.phone) + '</div>' : '') + (b.gstin ? '<div>GSTIN: ' + esc(String(b.gstin).toUpperCase()) + '</div>' : '') + '</div>' +
-      '<div class="ref">Ref: Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + '</div></div>');
+      '<div class="ref">Ref: Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + '</div><div class="pw env-pw">Powered by BlitzBook</div></div>');
   }
 
   // ------------------------------------------------------------ purchase record / quotation, in the invoice style
@@ -267,7 +270,7 @@
       '<div class="line"><span><b>' + (p.rcm ? 'Payable to Supplier:' : 'Total:') + '</b></span><b>' + money(p.total) + '</b></div></div></div>' +
       (p.rcm ? '<div class="note">GST of ' + money(p.gst) + ' payable under reverse charge by ' + esc(company.name) + '.</div>' : '') +
       '<div class="sect words">Amount in Words: ' + esc(U.toIndianWords(Math.round(num(p.total)))) + '</div>' +
-      (quotation ? '<div class="note" style="font-weight:normal">This quotation is valid for 30 days from the date above unless stated otherwise.</div>' : '') + signBlock(company) + '</div>';
+      (quotation ? '<div class="note" style="font-weight:normal">This quotation is valid for 30 days from the date above unless stated otherwise.</div>' : '') + signBlock(company) + POWERED + '</div>';
     return page(p.no, sheet.css, '12mm 10mm', body, sheet.scale);
   }
 
@@ -281,7 +284,7 @@
       rows.map(r => '<tr><td>' + r[0] + '</td><td class="c">' + (r[1] === '' ? '' : esc(r[1]) + '%') + '</td><td class="r">' + indianNumber(r[2]) + '</td></tr>').join('') +
       '<tr><td colspan="2" class="r"><b>TOTAL</b></td><td class="r"><b>' + money(n.total) + '</b></td></tr></table>' +
       '<div class="sect words">Amount in Words: ' + esc(U.toIndianWords(Math.round(num(n.total)))) + '</div>' +
-      '<div>Settlement: ' + (n.settle === 'Credit' ? (credit ? "Adjusted against the customer's account" : "Adjusted against the supplier's account") : (credit ? 'Refunded by ' : 'Received back by ') + esc(n.settle)) + '</div>' + signBlock(company) + '</div>';
+      '<div>Settlement: ' + (n.settle === 'Credit' ? (credit ? "Adjusted against the customer's account" : "Adjusted against the supplier's account") : (credit ? 'Refunded by ' : 'Received back by ') + esc(n.settle)) + '</div>' + signBlock(company) + POWERED + '</div>';
     return page(n.no, PAPERS.A4.css, '12mm 10mm', body);
   }
 

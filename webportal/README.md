@@ -28,7 +28,7 @@ the account made in the app logs in here and vice versa, and the trial and activ
 | `js/subscription.js` | Trial, plans, UPI link, activation server and codes (same SHA-256 scheme as the app, so `tools/LicenceKeyGen.java` codes work) |
 | `js/print.js` | Printable documents: Standard (BlitzBook) and Classic boxed (Tally style) invoices, delivery challan, envelopes, purchase record / quotation, credit and debit notes |
 | `js/app.js` | Shell, login / register / reset (with the sync server when there is one), dashboard, top navigation, company profile, backup, subscription, sync dialogs |
-| `js/invoice.js` | New Invoice editor, quick item picker, print flow (layout, paper, e-way bill warning), Sales list, Credit / Debit notes |
+| `js/invoice.js` | New Invoice editor, quick item picker, Save and Print / PDF, Print Settings (layout previews, paper, envelopes), e-way bill warning, Sales list, Credit / Debit notes |
 | `js/ledger.js` | Books (Profit & Loss, Balance Sheet and stock figures, a port of Ledger.java), Customers / Suppliers, Item master, Purchases & Quotations, Expenses, Journal, Stock in hand |
 | `js/reports.js` | Sales report, Profit & Loss, Balance sheet, period picker, Excel export |
 
@@ -48,10 +48,12 @@ Everything the app has:
 - Quick items: starter items for the line of activity plus the item master, with search, category chips
   (rename / remove), list or grid view, quantity steppers, per-invoice price and GST, add / customise /
   remove items.
-- Printing: Standard and Classic invoice layouts, delivery challan (composition dealers), envelopes
+- Printing: Save keeps the invoice, Print / PDF prints straight away with the layout picked from previews under Print Settings (A4 unless changed); delivery challan (composition dealers), envelopes
   (DL, C5, #10), purchase record / quotation, credit and debit notes; paper sizes A4 / A5 / Letter / Legal;
   e-way bill warning above ₹50,000 (₹1,00,000 in Maharashtra, Delhi, Tamil Nadu and Bihar). The browser's
-  print dialog saves the PDF.
+  print dialog saves the PDF. Every printout ends with "Powered by BlitzBook".
+- Credit notes must name their invoice and cannot exceed what is left of its value; an invoice with credit
+  notes against it cannot be deleted until they are.
 - Customers / suppliers with TDS settings, CSV or Excel upload in the app's template, bulk delete.
 - Item master with codes, categories, bulk category / GST / delete; items invoiced or bought as stock join
   it automatically; removed starter items stay hidden.

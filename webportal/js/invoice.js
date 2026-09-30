@@ -31,6 +31,23 @@
     const m = /(\d+)\s*$/.exec(s); if (!m) return s;
     const n = Math.max(0, parseInt(m[1], 10) + delta); return s.slice(0, m.index) + String(n).padStart(m[1].length, '0');
   }
+  // Credit notes against an invoice cannot return more than the invoice; debit notes likewise against a purchase.
+  // Returns what is still open on the referenced document (before GST), or -1 when the reference is unknown.
+  function noteCap(kind, ref, exceptId) {
+    ref = String(ref || '').trim(); if (!ref) return -1;
+    let base;
+    if (kind === 'CN') { const inv = Store.list('invoices').find(i => i.kind === 'invoice' && i.no === ref); if (!inv) return -1; base = num(inv.totals.taxable); }
+    else { const p = Store.list('purchases').find(x => x.kind === 'PUR' && x.no === ref); if (!p) return -1; base = num(p.taxable); }
+    const used = Store.list('notes').filter(x => x.kind === kind && x.ref === ref && x.id !== exceptId).reduce((s, x) => s + num(x.taxable), 0);
+    return U.round2(base - used);
+  }
+  function creditNotesFor(invoiceNo) { return Store.list('notes').filter(x => x.kind === 'CN' && x.ref === invoiceNo).map(x => x.no); }
+  // An invoice with credit notes against it stays until those are deleted
+  function deleteInvoice(inv, then) {
+    const cns = creditNotesFor(inv.no);
+    if (cns.length) { UI.alert('Cannot Delete Invoice', 'Credit note' + (cns.length > 1 ? 's ' : ' ') + cns.join(', ') + ' ' + (cns.length > 1 ? 'were' : 'was') + ' issued against invoice ' + inv.no + '. Delete ' + (cns.length > 1 ? 'them' : 'it') + ' first.'); return; }
+    UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice ' + inv.no + ' deleted'); then(); }, 'Delete');
+  }
   function newInvoice() {
     return { id: null, kind: 'invoice', no: nextInvoiceNo(), date: U.today(), payment: 'Cash', rcm: false, buyer: blankParty(), sameShip: true, consignee: blankParty(),
       other: { destination: '', vehicleType: '', vehicleNo: '', transporter: '', deliveryNote: '', orderNo: '', orderDate: '', reference: '', info: '' }, items: [blankItem(1)], totals: {} };
@@ -204,7 +221,7 @@
       if (params.quickItem) { const m = findMaster(params.quickItem); Object.assign(inv.items[0], { desc: params.quickItem, hsn: m && !m.hidden ? m.hsn : U.hsnFor(params.quickItem), gst: m && !m.hidden ? m.gst : '18', qty: 1, rate: m && !m.hidden && num(m.rate) > 0 ? m.rate : '' }); }
       this.inv = inv;
       this.render();
-      if (params.print) this.printFlow('invoice');
+      if (params.print) this.print('invoice');
     },
     render() {
       const inv = this.inv, c = Store.company(), gst = chargesGst();
@@ -233,7 +250,7 @@
         UI.datalist('itemsDl', itemLabels()) +
         '<div class="btnrow"><button class="btn sm" id="addRow">+ Add Particular / Row</button></div></div></div>' +
         '<div class="card"><div class="hd">Totals Summary</div><div class="bd"><div class="totals" id="totals"></div><div class="words" id="words"></div></div></div>' +
-        '<div class="btnrow end"><button class="btn red outline" id="iDel" ' + (inv.id ? '' : 'disabled') + '>🗑 Delete</button><button class="btn outline" id="iNew">+ New</button>' + (isComposition() ? '<button class="btn" id="iChallan">Delivery Challan</button>' : '') + '<button class="btn green" id="iPrint">Print / Save PDF</button></div>');
+        '<div class="btnrow end"><button class="btn red outline" id="iDel" ' + (inv.id ? '' : 'disabled') + '>🗑 Delete</button><button class="btn outline" id="iNew">+ New</button><button class="btn outline" id="iSettings">Print Settings</button>' + (isComposition() ? '<button class="btn" id="iChallan">Delivery Challan</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print / PDF</button></div>');
       App.wireBack(root);
       const bind = (id, fn) => { const el = $('#' + id); if (el) el.addEventListener('input', fn), el.addEventListener('change', fn); };
       bind('iNo', e => { inv.no = e.target.value.trim(); const ex = Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id); if (ex && !$('#dialogs').children.length) UI.confirm('Load invoice', 'Invoice ' + ex.no + ' already exists. Open it?', () => Invoice.open({ id: ex.id }), 'Open'); });
@@ -265,9 +282,11 @@
       };
       $('#quickBtn').onclick = () => Quick.open(inv, (menu) => this.applyQuick(menu));
       $('#iNew').onclick = () => Invoice.open({});
-      $('#iDel').onclick = () => UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice ' + inv.no + ' deleted'); Invoice.open({}); }, 'Delete');
-      $('#iPrint').onclick = () => this.printFlow('invoice');
-      if ($('#iChallan')) $('#iChallan').onclick = () => this.printFlow('challan');
+      $('#iDel').onclick = () => deleteInvoice(inv, () => Invoice.open({}));
+      $('#iSave').onclick = () => this.saveOnly();
+      $('#iPrint').onclick = () => this.print('invoice');
+      $('#iSettings').onclick = () => this.printSettings();
+      if ($('#iChallan')) $('#iChallan').onclick = () => this.print('challan');
       this.renderRows();
     },
     renderRows() {
@@ -376,33 +395,54 @@
       if (bn) { const first = bn.split('\n')[0].trim(); const contacts = Store.list('contacts'); if (!contacts.find(x => x.name.toLowerCase() === first.toLowerCase())) { contacts.push({ id: U.uid(), createdAt: Date.now(), type: 'Customer', name: first, address: bn.split('\n').slice(1).join('\n').trim().toUpperCase(), phone: inv.buyer.phone, email: inv.buyer.email.toLowerCase(), gstin: inv.buyer.gstin, state: inv.buyer.state, tds: false }); Store.saveList('contacts', contacts); } }
       return inv;
     },
-    // Print / Save PDF: invoices pick the layout first, then everything picks the paper, then the document is made
-    printFlow(kind) {
-      const c = Store.company(), challan = kind === 'challan';
-      const paperStep = (layout) => {
-        const papers = Object.keys(Print.PAPERS);
-        UI.menu(challan ? 'Print Delivery Challan' : 'Print / Save Invoice', papers.map(p => Print.PAPERS[p].label), (pi) => {
-          const paper = papers[pi];
-          if (Print.PAPERS[paper].envelope) { // addresses only; nothing is saved
-            if (!this.inv.buyer.name.trim()) { UI.toast('Enter the buyer name & address first'); UI.mark('bName', true); return; }
-            Print.show(Print.envelope(this.inv, Store.company(), paper)); return;
-          }
-          if (!this.validate()) return;
-          c.paper = paper; Store.saveCompany(Object.assign(Store.company(), { pdfLayout: layout, paper }));
-          const go = () => {
-            if (challan) { Print.open(Object.assign(JSON.parse(JSON.stringify(this.inv)), { kind: 'challan', consignee: this.inv.sameShip ? this.inv.buyer : this.inv.consignee }), Store.company(), 0, paper); return; }
-            const inv = this.save();
-            Print.open(inv, Store.company(), layout, paper);
-            UI.modal({ title: 'Invoice ' + inv.no + ' Saved', body: '<p>The print dialog is open: choose "Save as PDF" or a printer.</p><p>Choose an action:</p>', buttons: [
-              { label: 'Stay Here', cls: 'outline', onClick: () => { $('#iDel').disabled = false; } }, { label: 'Next Invoice (Just Save)', onClick: () => Invoice.open({}) }, { label: 'Print again', cls: 'green', onClick: () => { Print.open(inv, Store.company(), layout, paper); return false; } }] });
-          };
-          const amount = this.inv.totals.rounded, special = ['Maharashtra', 'Delhi', 'Tamil Nadu', 'Bihar'].some(s => sellerStateName().startsWith(s));
-          const threshold = special ? 100000 : 50000;
-          if (amount > threshold) UI.modal({ title: 'E-Way Bill Warning', body: '<p>Invoice value is ' + money(amount) + '.</p><p>For ' + esc(sellerStateName()) + ', the configured warning threshold is ' + money(threshold) + '. Please generate/verify the E-Way Bill before proceeding.</p>', buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Continue', cls: 'green', onClick: go }] });
-          else go();
-        }, papers.indexOf(c.paper || 'A4'));
+    // Save only: the invoice is kept, nothing is printed
+    saveOnly() {
+      if (!this.validate()) return;
+      const inv = this.save();
+      $('#iDel').disabled = false;
+      UI.toast('Invoice ' + inv.no + ' saved');
+    },
+    // Print / PDF: saves, then prints with the layout and paper chosen under Print Settings (A4 unless changed)
+    print(kind) {
+      if (!this.validate()) return;
+      const c = Store.company(), challan = kind === 'challan', layout = c.pdfLayout || 0, paper = Print.PAPERS[c.paper] && !Print.PAPERS[c.paper].envelope ? c.paper : 'A4';
+      const go = () => {
+        if (challan) { Print.open(Object.assign(JSON.parse(JSON.stringify(this.inv)), { kind: 'challan', consignee: this.inv.sameShip ? this.inv.buyer : this.inv.consignee }), c, 0, paper); return; }
+        const inv = this.save();
+        $('#iDel').disabled = false;
+        Print.open(inv, c, layout, paper);
+        UI.modal({ title: 'Invoice ' + inv.no + ' Saved', body: '<p>The print dialog is open: choose "Save as PDF" or a printer.</p><p>Choose an action:</p>', buttons: [
+          { label: 'Stay Here', cls: 'outline' }, { label: 'Next Invoice', onClick: () => Invoice.open({}) }, { label: 'Print again', cls: 'green', onClick: () => { Print.open(inv, c, layout, paper); return false; } }] });
       };
-      if (challan) paperStep(0); else UI.menu('Invoice Format', Print.LAYOUTS, paperStep, c.pdfLayout || 0);
+      const amount = this.inv.totals.rounded, special = ['Maharashtra', 'Delhi', 'Tamil Nadu', 'Bihar'].some(s => sellerStateName().startsWith(s));
+      const threshold = special ? 100000 : 50000;
+      if (amount > threshold) UI.modal({ title: 'E-Way Bill Warning', body: '<p>Invoice value is ' + money(amount) + '.</p><p>For ' + esc(sellerStateName()) + ', the configured warning threshold is ' + money(threshold) + '. Please generate/verify the E-Way Bill before proceeding.</p>', buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Continue', cls: 'green', onClick: go }] });
+      else go();
+    },
+    // The two layouts shown as they will print, with the one in use marked; also paper size and envelopes
+    printSettings() {
+      const c = Store.company(), inv = this.inv;
+      computeTotals(inv);
+      const sample = Object.assign(JSON.parse(JSON.stringify(inv)), { consignee: inv.sameShip ? inv.buyer : inv.consignee });
+      if (!sample.items.some(it => String(it.desc).trim())) sample.items = [Object.assign(blankItem(1), { desc: 'Sample item', hsn: '9999', qty: 1, rate: 100 })];
+      if (!sample.buyer.name.trim()) sample.buyer.name = 'Buyer name\nAddress';
+      computeTotals(sample);
+      const current = c.pdfLayout || 0;
+      const bg = UI.modal({ title: 'Print Settings', wide: true, focus: false,
+        body: '<div class="hint">Tap the layout you want to print with. It is used for every invoice until changed.</div><div class="previews">' +
+          [0, 1].map(l => '<label class="pv' + (l === current ? ' on' : '') + '"><span class="frame"><iframe sandbox="" title="Layout ' + (l + 1) + '" srcdoc="' + esc(Print.html(sample, c, l, 'A4')) + '"></iframe></span><span class="pick"><input type="radio" name="pvLayout" value="' + l + '"' + (l === current ? ' checked' : '') + '> ' + (l === current ? 'In use' : 'Use this layout') + '</span></label>').join('') + '</div>' +
+          '<div class="grid2 keep2">' + UI.field('Paper size', UI.select('pvPaper', Print.SHEETS.map(p => [p, Print.PAPERS[p].label]), Print.PAPERS[c.paper] && !Print.PAPERS[c.paper].envelope ? c.paper : 'A4')) +
+          '<div class="field"><label>Envelope (addresses only)</label><div class="btnrow" style="margin:0">' + Object.keys(Print.PAPERS).filter(k => Print.PAPERS[k].envelope).map(k => '<button class="btn sm outline" data-env="' + k + '">' + esc(Print.PAPERS[k].label.split('  ')[0]) + '</button>').join('') + '</div></div></div>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
+          const picked = $('input[name=pvLayout]:checked', bg);
+          Store.saveCompany(Object.assign(Store.company(), { pdfLayout: picked ? +picked.value : current, paper: UI.val('pvPaper', bg) }));
+          UI.toast('Print settings saved');
+        } }] });
+      // Each preview is a full A4 page scaled to the width it gets
+      const fit = () => $$('.pv .frame', bg).forEach(f => { $('iframe', f).style.transform = 'scale(' + (f.clientWidth / 794) + ')'; });
+      setTimeout(fit, 0); window.addEventListener('resize', fit);
+      $$('input[name=pvLayout]', bg).forEach(r => r.addEventListener('change', () => $$('.pv', bg).forEach(p => { const on = $('input', p).checked; p.classList.toggle('on', on); $('.pick', p).lastChild.textContent = ' ' + (on ? 'In use' : 'Use this layout'); })));
+      $$('[data-env]', bg).forEach(b => b.onclick = () => { if (!inv.buyer.name.trim()) { UI.toast('Enter the buyer name & address first'); return; } Print.show(Print.envelope(inv, Store.company(), b.dataset.env)); });
     }
   };
   App.routes.invoice = (p) => Invoice.open(p);
@@ -419,7 +459,7 @@
     $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRep').onclick = () => App.go('salesReport');
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
     $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));
-    $$('[data-del]', root).forEach(b => b.onclick = () => { const inv = Store.find('invoices', b.dataset.del); UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice ' + inv.no + ' deleted'); App.go('sales'); }, 'Delete'); });
+    $$('[data-del]', root).forEach(b => b.onclick = () => deleteInvoice(Store.find('invoices', b.dataset.del), () => App.go('sales')));
   };
 
   // ------------------------------------------------------------ credit / debit notes
@@ -451,7 +491,7 @@
       const bg = UI.modal({ title: (n.id ? 'Edit ' : 'New ') + (isCN ? 'Credit Note' : 'Debit Note'), body: '<div class="grid2">' +
         UI.field('Note No', UI.input('nNo', n.no)) + UI.field('Date', UI.dateInput('nDate', n.date), { req: true }) +
         UI.field(isCN ? 'Customer' : 'Supplier', UI.input('nParty', n.party, { list: 'nPartyDl' }) + UI.datalist('nPartyDl', parties.map(x => x.name)), { req: true, span: true }) +
-        UI.field(isCN ? 'Against Invoice' : 'Against Purchase', UI.input('nRef', n.ref, { list: 'nRefDl', placeholder: isCN ? 'Invoice No' : 'Purchase No' }) + UI.datalist('nRefDl', refs)) +
+        UI.field(isCN ? 'Against Invoice' : 'Against Purchase', UI.input('nRef', n.ref, { list: 'nRefDl', placeholder: isCN ? 'Invoice No' : 'Purchase No' }) + UI.datalist('nRefDl', refs), { req: true, hint: isCN ? 'A credit note cannot exceed the invoice value' : 'A debit note cannot exceed the purchase value' }) +
         UI.field('Party GSTIN', UI.input('nGstin', n.partyGstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) +
         UI.field('Reason', UI.input('nReason', n.reason, { placeholder: isCN ? 'e.g. Goods returned, rate difference' : 'e.g. Shortage, damaged goods' }), { span: true }) +
         UI.field('Taxable Value', UI.input('nTax', n.taxable, { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' }), { req: true }) + (chargesGst() ? UI.field('GST Rate %', UI.select('nRate', U.GST_RATES, n.rate)) : '') +
@@ -462,6 +502,9 @@
           Object.assign(n, { no: v('nNo').trim(), date: UI.dateVal('nDate', bg), party: (parties.find(x => x.name.toLowerCase() === v('nParty').trim().toLowerCase()) || { name: U.nameCase(v('nParty')) }).name, ref: v('nRef').trim(), partyGstin: v('nGstin').trim().toUpperCase(), reason: v('nReason').trim(), taxable: num(v('nTax')), rate: chargesGst() ? v('nRate') : '0', settle: v('nSettle') });
           if (!n.date) { UI.toast('Date is required'); return false; } if (!n.party) { UI.mark('nParty', true, bg); UI.toast('Party is required'); return false; }
           if (n.taxable <= 0) { UI.mark('nTax', true, bg); UI.toast('Enter the taxable value'); return false; } if (!U.isValidGstin(n.partyGstin)) { UI.mark('nGstin', true, bg); UI.toast('Enter a valid party GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)'); return false; }
+          const cap = noteCap(kind, n.ref, n.id);
+          if (cap < 0) { UI.mark('nRef', true, bg); UI.toast(isCN ? 'Choose the invoice this credit note is against' : 'Choose the purchase this debit note is against'); return false; }
+          if (n.taxable > cap + 0.005) { UI.mark('nTax', true, bg); UI.toast('Cannot exceed the remaining value of ' + n.ref + ': ' + money(cap), 4000); return false; }
           noteTotals(n); if (n.id) Store.update('notes', n); else Store.add('notes', n); UI.toast((isCN ? 'Credit Note ' : 'Debit Note ') + n.no + ' saved'); Notes.open({ kind });
         } }] });
       const recalc = () => { const t = noteTotals({ taxable: UI.val('nTax', bg), rate: chargesGst() ? UI.val('nRate', bg) : 0, partyGstin: UI.val('nGstin', bg) }); $('#nTotal', bg).textContent = 'GST ' + money(t.gst) + '   Total ' + money(t.total); };
@@ -473,6 +516,6 @@
   App.routes.notes = (p) => Notes.open(p);
 
   global.Invoice = Invoice; global.Notes = Notes; global.Quick = Quick;
-  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, contactsOf, computeTotals, noteTotals, invoices,
+  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, contactsOf, computeTotals, noteTotals, invoices, noteCap, creditNotesFor,
     findMaster, upsertMaster, hideMaster, categories, itemLabels, itemFromLabel };
 })(window);

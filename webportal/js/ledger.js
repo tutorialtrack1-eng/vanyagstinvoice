@@ -245,12 +245,13 @@
     select: false,
     open() {
       const list = Store.items().sort(byName);
-      const root = App.view(App.header(Items.select ? 'Select Items' : 'Item Master List', '<div class="btnrow" style="margin:0"><button class="btn sm" id="itAdd">+ Add Item</button><button class="btn sm outline" id="itSel">' + (Items.select ? 'Done' : 'Select') + '</button></div>') +
+      const root = App.view(App.header(Items.select ? 'Select Items' : 'Stock - Item Master', '<div class="btnrow" style="margin:0"><button class="btn sm" id="itAdd">+ Add Item</button><button class="btn sm outline" id="itStock">Stock in Hand</button><button class="btn sm outline" id="itSel">' + (Items.select ? 'Done' : 'Select') + '</button></div>') +
         (Items.select ? '<div class="btnrow"><label class="check"><input type="checkbox" id="selAll"> Select all</label><button class="btn sm outline" id="bCat">Set category</button><button class="btn sm outline" id="bGst">Set GST %</button><button class="btn sm red" id="bDel">Delete</button></div>' : '') +
         listTable(['', 'Item', 'Code', 'Category', 'HSN/SAC', 'GST %', '#Unit Price', ''], list.map(i => '<tr>' + td('', Items.select ? '<input type="checkbox" class="selbox" data-id="' + esc(i.id) + '">' : '') + td('Item', '<b>' + esc(i.name) + '</b>') + td('Code', esc(i.code || '')) + td('Category', esc(i.category || '')) + td('HSN/SAC', esc(i.hsn || '')) + td('GST %', esc(i.gst || '0') + '%') + td('Unit Price', money(i.rate), 'num') +
           '<td class="actions">' + (Items.select ? '' : '<button class="btn sm outline" data-e="' + esc(i.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(i.id) + '">Delete</button>') + '</td></tr>'), 'No master items found. Invoiced items will appear here automatically.'));
       App.wireBack(root);
       $('#itAdd').onclick = () => Quick.editItem(null, () => Items.open());
+      $('#itStock').onclick = () => App.go('stock');
       $('#itSel').onclick = () => { Items.select = !Items.select; Items.open(); };
       if (Items.select) {
         const picked = () => $$('.selbox:checked', root).map(b => b.dataset.id);

@@ -75,6 +75,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
   check('sync is on', (await page.textContent('#syncTx')) === 'Synced');
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
+  check('dashboard tiles in the agreed order', await page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join()) === 'Invoice,Sales,Customer,Supplier,Purchase,Stock,Expense,Journal,Reports');
 
   // invoice
   await page.click('.tiles [data-go=invoice]');
@@ -111,13 +112,18 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('quick items land on the invoice', (await page.inputValue(row(3) + '[data-k=desc]')) === 'Freight Charges' && (await page.inputValue(row(3) + '[data-k=qty]')) === '2');
   await page.click(row(3) + '[data-del]');
 
-  // print flow: layout -> paper -> saved
+  // print settings: both layouts previewed, the second one made the default, A4 stays the paper
+  await page.click('#iSettings'); await page.waitForSelector('.previews');
+  check('layout previews shown', (await page.$$('.pv iframe')).length === 2 && (await page.$$('[data-env]')).length === 3 && (await page.inputValue('#pvPaper')) === 'A4');
+  await page.click('.pv:nth-child(2) input'); await page.waitForTimeout(400); await page.screenshot({ path: OUT + '/03d-print-settings.png' }); await page.click('.modal .mf .btn.green');
+  check('layout remembered', await page.evaluate(() => Store.company().pdfLayout === 1 && Store.company().paper === 'A4'));
+  // save without printing, then print without any questions
+  await page.click('#iSave'); await page.waitForSelector('.toast');
+  check('save keeps the invoice without printing', (await toast(page)).includes('saved') && (await page.evaluate(() => Store.list('invoices').length)) === 1 && (await page.evaluate(() => window.__printed || 0)) === 0);
   await page.click('#iPrint');
-  await page.click('.menu-list button:nth-child(2)'); // classic
-  await page.waitForSelector('.menu-list');
-  check('paper list includes envelopes', (await page.textContent('.menu-list')).includes('Envelope DL'));
-  await page.click('.menu-list button:nth-child(1)'); // A4
   await page.waitForSelector('.modal .mh');
+  await page.waitForFunction(() => { const f = document.getElementById('printFrame'); return f && f.srcdoc.includes('OFFSI27-00001') && f.srcdoc.includes('classic'); });
+  check('print asks nothing and prints with the chosen layout', true);
   check('invoice saved', (await page.textContent('.modal .mh')).includes('OFFSI27-00001 Saved'), await page.textContent('.modal .mh'));
   await page.click('.modal .mf .btn.outline');
   const inv = await page.evaluate(() => Store.list('invoices')[0]);
@@ -154,6 +160,15 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.evaluate(() => App.go('notes', { kind: 'CN' })); await page.click('#nNew'); await page.fill('#nParty', 'The Chef Store - Banjara Hills'); await page.fill('#nRef', 'OFFSI27-00001'); await page.fill('#nTax', '1000'); await page.selectOption('#nRate', '18');
   check('credit note total', (await page.textContent('#nTotal')).includes('1,180.00'), await page.textContent('#nTotal'));
   await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  await page.click('#nNew'); await page.fill('#nParty', 'The Chef Store'); await page.fill('#nRef', 'OFFSI27-00001'); await page.fill('#nTax', '26500'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('.toast');
+  check('a credit note cannot exceed what is left on the invoice', (await toast(page)).includes('Cannot exceed the remaining value') && (await toast(page)).includes('26,319.83'), await toast(page));
+  await page.fill('#nRef', 'NO-SUCH'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('.toast');
+  check('a credit note needs its invoice', (await toast(page)).includes('Choose the invoice'), await toast(page));
+  await page.click('.modal .mf .btn.outline');
+  await page.evaluate(() => App.go('sales')); await page.click('[data-del]'); await page.waitForSelector('.modal .mh');
+  check('an invoice with a credit note cannot be deleted', (await page.textContent('.modal .mh')) === 'Cannot Delete Invoice' && (await page.textContent('.modal .mb')).includes('CN-0001'), await page.textContent('.modal .mb'));
+  await page.click('.modal .mf .btn');
+  check('print carries the footer', htmlStd.includes('Powered by BlitzBook') && htmlEnv.includes('Powered by BlitzBook') && fs.readFileSync(OUT + '/print-purchase.html', 'utf8').includes('Powered by BlitzBook'));
   fs.writeFileSync(OUT + '/print-note.html', await page.evaluate(() => Print.note(Store.list('notes')[0], Store.company())));
   await pp.setViewportSize({ width: 794, height: 1123 }); await pp.setContent(fs.readFileSync(OUT + '/print-note.html', 'utf8')); await pp.screenshot({ path: OUT + '/05c-print-note.png', fullPage: true });
   await pp.setContent(fs.readFileSync(OUT + '/print-purchase.html', 'utf8')); await pp.screenshot({ path: OUT + '/05d-print-purchase.png', fullPage: true });
@@ -228,7 +243,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await B.waitForFunction((n) => Store.list('contacts').length === n, gone, { timeout: 25000 });
   check('a delete travels too', true);
   await B.evaluate(() => App.go('invoice', { id: Store.list('invoices')[0].id })); await B.waitForSelector('#rows');
-  await B.fill(row(0) + '[data-k=qty]', '6'); await B.click('#iPrint'); await B.click('.menu-list button:nth-child(1)'); await B.click('.menu-list button:nth-child(1)'); await B.waitForSelector('.modal .mh'); await B.click('.modal .mf .btn.outline');
+  await B.fill(row(0) + '[data-k=qty]', '6'); await B.click('#iPrint'); await B.waitForSelector('.modal .mh'); await B.click('.modal .mf .btn.outline');
   await page.waitForFunction(() => +Store.list('invoices')[0].items[0].qty === 6, null, { timeout: 25000 });
   check('an invoice edited there is the same invoice here', await same(() => Store.list('invoices').map(i => [i.no, i.totals.rounded, i.items.length])));
 

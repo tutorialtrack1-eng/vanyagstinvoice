@@ -23,10 +23,12 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.graphics.pdf.PdfDocument;
+import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.text.Editable;
 import android.text.InputFilter;
@@ -1591,9 +1593,6 @@ public class MainActivity extends Activity implements Sync.Listener {
         banner.addView(chips2);
         root.addView(banner);
 
-        // At-a-glance figures for the month
-        root.addView(statsRow());
-
         // Items from the latest invoices, one tap away for the next bill
         View recent = recentItemsStrip();
         if (recent != null) root.addView(recent);
@@ -1606,19 +1605,30 @@ public class MainActivity extends Activity implements Sync.Listener {
         secTitle.setPadding(dp(4), dp(16), dp(4), dp(8));
         root.addView(secTitle);
 
-        // Three compact square tiles per row with an icon badge. Company profile, reports and backup live in the sidebar.
+        // Three compact tiles per row with an icon badge, day-to-day work first (sell, who you deal with, buy),
+        // then the books; the same order as the web portal. Company profile, reports and backup live in the sidebar.
         DashboardTile[] tiles = {
                 new DashboardTile("Invoice", R.drawable.ic_invoice, 0xFF1E88E5, 0xFFE3F2FD, v -> showInvoiceView()),
                 new DashboardTile("Sales", R.drawable.ic_reports, 0xFF00897B, 0xFFE0F2F1, v -> showSalesDialog()),
-                new DashboardTile("Items", R.drawable.ic_items, 0xFF43A047, 0xFFE8F5E9, v -> showItemMasterDialog()),
                 new DashboardTile("Customer", R.drawable.ic_customer, 0xFF8E24AA, 0xFFF3E5F5, v -> showContactListFiltered("Customer")),
                 new DashboardTile("Supplier", R.drawable.ic_supplier, 0xFFFB8C00, 0xFFFFF3E0, v -> showContactListFiltered("Supplier")),
                 new DashboardTile("Purchase", R.drawable.ic_purchase, 0xFFF9A825, 0xFFFFFDE7, v -> showPurchasesDialog()),
+                new DashboardTile("Stock", R.drawable.ic_items, 0xFF43A047, 0xFFE8F5E9, v -> showItemMasterDialog()),
                 new DashboardTile("Expense", R.drawable.ic_expense, 0xFFE53935, 0xFFFBE9E7, v -> showExpensesDialog()),
                 new DashboardTile("Journal", R.drawable.ic_journal, 0xFF5E35B1, 0xFFEDE7F6, v -> showJournalDialog()),
                 new DashboardTile("Reports", R.drawable.ic_stock, 0xFF546E7A, 0xFFECEFF1, v -> showReportsMenu()),
         };
-        root.addView(tileGrid(tiles, 3, 13.5f, 11));
+        root.addView(tileGrid(tiles, 3, 13f, 11));
+
+        // At-a-glance figures for the month, under the tiles
+        TextView figures = new TextView(this);
+        figures.setText("This month");
+        figures.setTextSize(15);
+        figures.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        figures.setTextColor(0xFF263238);
+        figures.setPadding(dp(4), dp(18), dp(4), dp(8));
+        root.addView(figures);
+        root.addView(statsRow());
     }
 
     private TextView chip(String text, int bg, int fg) {
@@ -1767,10 +1777,13 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     private View squareTile(DashboardTile tile, float titleSize, float subtitleSize) {
-        SquareTile card = new SquareTile();
+        // Smaller badge and a square shape for the compact sidebar tiles; the dashboard uses a short wide card
+        boolean compact = titleSize < 12;
+        LinearLayout card = compact ? new SquareTile() : new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER);
-        card.setPadding(dp(6), dp(6), dp(6), dp(6));
+        card.setPadding(dp(6), dp(compact ? 6 : 10), dp(6), dp(compact ? 6 : 10));
+        if (!compact) card.setMinimumHeight(dp(86));
         GradientDrawable gd = new GradientDrawable();
         gd.setColor(tile.bg);
         gd.setStroke(dp(1), lightenColor(tile.accent, 0.35f));
@@ -1785,17 +1798,15 @@ public class MainActivity extends Activity implements Sync.Listener {
         card.setElevation(dp(1));
 
         if (tile.icon != 0) {
-            // Smaller badge for the compact sidebar tiles
-            boolean compact = titleSize < 12;
             ImageView iv = new ImageView(this);
             iv.setImageResource(tile.icon);
             iv.setColorFilter(Color.WHITE);
             GradientDrawable badge = new GradientDrawable(); badge.setShape(GradientDrawable.OVAL); badge.setColor(tile.accent);
             iv.setBackground(badge);
-            int pad = dp(compact ? 7 : 10);
+            int pad = dp(compact ? 7 : 8);
             iv.setPadding(pad, pad, pad, pad);
-            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(compact ? 32 : 44), dp(compact ? 32 : 44));
-            ilp.setMargins(0, 0, 0, dp(compact ? 5 : 8));
+            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(compact ? 32 : 36), dp(compact ? 32 : 36));
+            ilp.setMargins(0, 0, 0, dp(compact ? 5 : 6));
             card.addView(iv, ilp);
         }
 
@@ -2109,27 +2120,50 @@ public class MainActivity extends Activity implements Sync.Listener {
         totalsSec.addView(wordsBox);
         root.addView(totalsSec);
 
-        // Print / Save takes the width; "+" starts a new invoice and the bin deletes the open one
+        // Save keeps the invoice; Print / PDF saves it and makes the PDF with the layout and paper chosen under
+        // Layout & Paper. "+" starts a new invoice and the bin deletes the open one.
         LinearLayout bRow = row();
+        Button saveBtn = new Button(this);
+        saveBtn.setText("SAVE");
+        styleButton(saveBtn, BLUE);
+        bRow.addView(saveBtn, new LinearLayout.LayoutParams(0, dp(48), 1f));
         Button save = new Button(this);
-        save.setText("PRINT / SAVE PDF");
+        save.setText("PRINT / PDF");
         styleButton(save, GREEN);
-        bRow.addView(save, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        LinearLayout.LayoutParams printLp = new LinearLayout.LayoutParams(0, dp(48), 1.2f);
+        printLp.setMargins(dp(6), 0, 0, 0);
+        bRow.addView(save, printLp);
         ImageButton newInvoiceBtn = iconButton(R.drawable.ic_add, BLUE, "New invoice");
         bRow.addView(newInvoiceBtn, iconLp(48, 6));
         ImageButton deleteInvoiceBtn = iconButton(R.drawable.ic_delete, RED, "Delete invoice");
         bRow.addView(deleteInvoiceBtn, iconLp(48, 6));
         root.addView(bRow);
 
+        LinearLayout pRow = row();
         challanBtn = new Button(this);
         challanBtn.setText("DELIVERY CHALLAN");
         styleButton(challanBtn, NAVY);
+        challanBtn.setAllCaps(false);
+        challanBtn.setTextSize(12.5f);
         challanBtn.setVisibility(View.GONE);
-        LinearLayout.LayoutParams challanLp = new LinearLayout.LayoutParams(-1, dp(48));
+        LinearLayout.LayoutParams challanLp = new LinearLayout.LayoutParams(0, dp(42), 1f);
         challanLp.setMargins(dp(2), dp(4), dp(2), 0);
-        root.addView(challanBtn, challanLp);
+        pRow.addView(challanBtn, challanLp);
+        Button layoutBtn = new Button(this);
+        layoutBtn.setText("Layout & Paper");
+        styleButton(layoutBtn, SLATE);
+        layoutBtn.setAllCaps(false);
+        layoutBtn.setTextSize(12.5f);
+        pRow.addView(layoutBtn, challanLp);
+        root.addView(pRow);
 
+        saveBtn.setOnClickListener(v -> {
+            if (!validateFieldsBool()) return;
+            saveFullInvoice();
+            Toast.makeText(this, "Invoice " + invoiceNo.getText().toString().trim() + " saved", Toast.LENGTH_SHORT).show();
+        });
         save.setOnClickListener(v -> choosePrintFormat(false));
+        layoutBtn.setOnClickListener(v -> showPrintSettings());
         challanBtn.setOnClickListener(v -> choosePrintFormat(true));
         newInvoiceBtn.setOnClickListener(v -> resetForNewInvoice());
         deleteInvoiceBtn.setOnClickListener(v -> deleteCurrentInvoice());
@@ -2957,25 +2991,109 @@ public class MainActivity extends Activity implements Sync.Listener {
     private float pdfLogicalH = 842f;
     private float pdfScale() { return pdfFormat.w / A4_WIDTH; }
 
-    // Print / Save PDF: invoices pick the layout first, then everything picks the paper, then generate
+    // Print / PDF: the layout and paper chosen under Layout & Paper (A4 unless changed), no questions asked
     private void choosePrintFormat(boolean challan) {
-        if (challan) choosePaperSize(true); else chooseInvoiceLayout(() -> choosePaperSize(false));
+        pdfLayout = prefs.getInt("pdf_layout", 0);
+        pdfFormat = PAGE_FORMATS[Math.max(0, Math.min(3, prefs.getInt("pdf_paper", 0)))];
+        pdfLogicalH = pdfFormat.h / pdfScale();
+        checkEwayBillWarningThenGenerate(challan);
     }
 
-    private void choosePaperSize(boolean challan) {
-        String[] names = new String[PAGE_FORMATS.length];
-        for (int i = 0; i < names.length; i++) names[i] = PAGE_FORMATS[i].name;
-        new AlertDialog.Builder(this)
-                .setTitle(challan ? "Print Delivery Challan" : "Print / Save Invoice")
-                .setItems(names, (d, w) -> {
-                    PageFormat fmt = PAGE_FORMATS[w];
-                    if (fmt.envelope) { createEnvelopePdf(fmt); return; }
-                    pdfFormat = fmt;
-                    pdfLogicalH = fmt.h / pdfScale();
-                    checkEwayBillWarningThenGenerate(challan);
+    // Layout & Paper: the open invoice drawn in both layouts; tapping one makes it the layout for every invoice.
+    // Paper size below it, envelopes (addresses only) from the same place.
+    private void showPrintSettings() {
+        int savedLayout = pdfLayout; PageFormat savedFmt = pdfFormat; float savedH = pdfLogicalH;
+        Bitmap[] previews = new Bitmap[2];
+        int width = getResources().getDisplayMetrics().widthPixels - dp(88);
+        pdfFormat = PAGE_FORMATS[0]; pdfLogicalH = pdfFormat.h / pdfScale();
+        for (int l = 0; l < 2; l++) {
+            pdfLayout = l;
+            try { previews[l] = previewBitmap(renderPages(false), width); } catch (Exception e) { previews[l] = null; }
+        }
+        pdfLayout = savedLayout; pdfFormat = savedFmt; pdfLogicalH = savedH;
+
+        final int[] chosen = {prefs.getInt("pdf_layout", 0)};
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(4));
+        TextView hint = new TextView(this);
+        hint.setText("Tap the layout you want to print with. It is used for every invoice until changed.");
+        hint.setTextSize(12.5f); hint.setTextColor(0xFF607D8B); hint.setPadding(0, 0, 0, dp(8));
+        box.addView(hint);
+        LinearLayout[] cards = new LinearLayout[2];
+        TextView[] captions = new TextView[2];
+        Runnable mark = () -> {
+            for (int l = 0; l < 2; l++) {
+                GradientDrawable gd = new GradientDrawable(); gd.setCornerRadius(dp(8)); gd.setColor(l == chosen[0] ? 0xFFEFF7F1 : 0xFFFAFAFA); gd.setStroke(dp(l == chosen[0] ? 3 : 1), l == chosen[0] ? GREEN : 0xFFD0D6DC);
+                cards[l].setBackground(gd);
+                captions[l].setText(l == chosen[0] ? "\u2713  In use" : "Tap to use this layout");
+                captions[l].setTextColor(l == chosen[0] ? GREEN : 0xFF607D8B);
+            }
+        };
+        for (int l = 0; l < 2; l++) {
+            final int layout = l;
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(8), dp(8), dp(8), dp(8));
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2); clp.setMargins(0, 0, 0, dp(10));
+            if (previews[l] != null) {
+                ImageView iv = new ImageView(this);
+                iv.setImageBitmap(previews[l]);
+                iv.setAdjustViewBounds(true);
+                iv.setBackgroundColor(Color.WHITE);
+                card.addView(iv, new LinearLayout.LayoutParams(-1, -2));
+            } else {
+                TextView none = new TextView(this); none.setText("Preview not available"); none.setPadding(dp(8), dp(24), dp(8), dp(24)); none.setGravity(Gravity.CENTER);
+                card.addView(none);
+            }
+            TextView cap = new TextView(this);
+            cap.setTextSize(13); cap.setTypeface(Typeface.DEFAULT, Typeface.BOLD); cap.setGravity(Gravity.CENTER); cap.setPadding(0, dp(6), 0, 0);
+            card.addView(cap);
+            card.setOnClickListener(v -> { chosen[0] = layout; mark.run(); });
+            cards[l] = card; captions[l] = cap;
+            box.addView(card, clp);
+        }
+        mark.run();
+        String[] papers = new String[4];
+        for (int i = 0; i < 4; i++) papers[i] = PAGE_FORMATS[i].name;
+        Spinner sPaper = spinner(papers);
+        sPaper.setSelection(Math.max(0, Math.min(3, prefs.getInt("pdf_paper", 0))));
+        box.addView(field("Paper size", sPaper));
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+        new AlertDialog.Builder(this).setTitle("Layout & Paper").setView(sc)
+                .setPositiveButton("Save", (d, w) -> {
+                    prefs.edit().putInt("pdf_layout", chosen[0]).putInt("pdf_paper", sPaper.getSelectedItemPosition()).apply();
+                    Toast.makeText(this, "Print settings saved", Toast.LENGTH_SHORT).show();
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNeutralButton("Envelope", (d, w) -> {
+                    String[] names = new String[3];
+                    for (int i = 0; i < 3; i++) names[i] = PAGE_FORMATS[4 + i].name;
+                    new AlertDialog.Builder(this).setTitle("Print Envelope").setItems(names, (d2, w2) -> createEnvelopePdf(PAGE_FORMATS[4 + w2])).setNegativeButton("Cancel", null).show();
+                })
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    // First page of a PDF as a bitmap of the given width, for the layout previews
+    private Bitmap previewBitmap(PdfDocument pdf, int widthPx) throws Exception {
+        File f = new File(getCacheDir(), "preview.pdf");
+        try (FileOutputStream out = new FileOutputStream(f)) { pdf.writeTo(out); }
+        pdf.close();
+        try (ParcelFileDescriptor fd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY); PdfRenderer renderer = new PdfRenderer(fd); PdfRenderer.Page page = renderer.openPage(0)) {
+            int h = Math.round(widthPx * page.getHeight() / (float) page.getWidth());
+            Bitmap bmp = Bitmap.createBitmap(widthPx, h, Bitmap.Config.ARGB_8888);
+            bmp.eraseColor(Color.WHITE);
+            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            return bmp;
+        }
+    }
+
+    // "Powered by BlitzBook" at the foot of every printed page
+    private void poweredBy(Canvas c, Paint p, float centerX, float y) {
+        float size = p.getTextSize(); int color = p.getColor();
+        p.setTextSize(7.5f); p.setColor(0xFF555555);
+        center(c, p, "Powered by BlitzBook", centerX, y, false);
+        p.setTextSize(size); p.setColor(color);
     }
 
     // Signature decoded once per document instead of once per page
@@ -3024,6 +3142,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             String bg = buyerGstin.getText().toString().trim().toUpperCase(Locale.ROOT);
             if (!bg.isEmpty()) text(c, p, "GSTIN: " + bg, toX, toY, false);
             p.setTextSize(8f); text(c, p, "Ref: Invoice " + invoiceNo.getText().toString().trim() + " dated " + invoiceDate.getText().toString().trim(), m, fmt.h - m + 6, false);
+            poweredBy(c, p, fmt.w - m - 40, fmt.h - m + 6);
             pdf.finishPage(page);
             Uri uri = writePdfToDownloads(pdf, "Envelope_" + invoiceNo.getText().toString().trim().replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
             if (uri != null) {
@@ -3228,6 +3347,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
         long id = c.getLong(0);
         c.close();
+        if (blockedByCreditNotes(no)) return;
         new AlertDialog.Builder(this)
                 .setTitle("Delete Invoice")
                 .setMessage("Delete invoice " + no + "? This cannot be undone.")
@@ -3659,6 +3779,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             p.setTextSize(10.5f); text(c,p,"Authorised Signatory",R,signY+45,false,true, false);
         }
         p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, R, pdfLogicalH - 17, false, true, false); if (isLast && pdfSignature == null) text(c,p,"Computer-generated document. No signature required.",L, pdfLogicalH - 17, false);
+        poweredBy(c, p, (L + R) / 2, pdfLogicalH - 6);
     }
 
     // ------------------------------------------------------------------ classic boxed invoice layout
@@ -3666,20 +3787,8 @@ public class MainActivity extends Activity implements Sync.Listener {
     // buyer stacked on the left with the document references in a label-value grid on the right, an items
     // grid whose totals sit inside the grid, the HSN-wise tax summary, then bank details and declaration.
     // The layout picked last is remembered ("pdf_layout"); 0 is the standard BlitzBook layout (drawPdfPage).
-    private static final String[] PDF_LAYOUT_NAMES = {"Standard  (BlitzBook layout)", "Classic boxed  (Tally style)"};
     private int pdfLayout = 0;
     private static final float TL = 40, TR = 555, TW = TR - TL;
-
-    private void chooseInvoiceLayout(Runnable then) {
-        pdfLayout = prefs.getInt("pdf_layout", 0);
-        new AlertDialog.Builder(this).setTitle("Invoice Format")
-                .setSingleChoiceItems(PDF_LAYOUT_NAMES, pdfLayout, (d, w) -> {
-                    pdfLayout = w; prefs.edit().putInt("pdf_layout", w).apply();
-                    d.dismiss(); then.run();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
-    }
 
     private boolean classicLayout() { return pdfLayout == 1; }
 
@@ -3987,6 +4096,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             p.setTextSize(8f); center(c, p, pdfSignature == null ? "This is a Computer Generated Invoice. No signature required." : "This is a Computer Generated Invoice", (TL + TR) / 2, y + 11, false);
         }
         p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages, TR, pdfLogicalH - 17, false, true, false);
+        poweredBy(c, p, (TL + TR) / 2, pdfLogicalH - 6);
     }
 
     private void drawChallanPage(Canvas c, int pageNum, int totalPages, List<ItemRow> items, boolean isFirst, boolean isLast) {
@@ -4078,6 +4188,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             text(c, p, "Authorised Signatory", R - 8, y + 82, false, true, false);
         }
         p.setTextSize(9); text(c, p, "Page " + pageNum + " of " + totalPages + (isLast ? "" : " ... Continued"), R, pdfLogicalH - 17, false, true, false);
+        poweredBy(c, p, (L + R) / 2, pdfLogicalH - 6);
     }
 
     private interface PeriodCallback { void run(String from, String to); }
@@ -5791,6 +5902,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 c.drawBitmap(sig, null, new RectF(R - sw, signY + 4 + (36 - sh), R, signY + 40), new Paint(Paint.FILTER_BITMAP_FLAG));
             }
             text(c, pt, "Authorised Signatory", R, signY + 45, false, true, false);
+            poweredBy(c, pt, (L + R) / 2, logicalH - 12);
             pdf.finishPage(page);
             Uri uri = writePdfToDownloads(pdf, p.docNo.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
             if (uri != null) {
@@ -6190,7 +6302,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             printBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, true); });
             row.addView(printBtn, iconLp(36, 4));
             ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + no);
-            delBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete Invoice")
+            delBtn.setOnClickListener(v -> { if (blockedByCreditNotes(no)) return; new AlertDialog.Builder(this).setTitle("Delete Invoice")
                     .setMessage("Delete invoice " + no + "? This cannot be undone.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Delete", (d, w) -> {
@@ -6201,7 +6313,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                         wdb.delete("invoices", "invoice_no=?", new String[]{no});
                         Toast.makeText(this, "Invoice " + no + " deleted", Toast.LENGTH_SHORT).show();
                         showSalesDialog();
-                    }).show());
+                    }).show(); });
             row.addView(delBtn, iconLp(36, 4));
             listContainer.addView(row);
             listContainer.addView(divider());
@@ -6280,6 +6392,41 @@ public class MainActivity extends Activity implements Sync.Listener {
         return names;
     }
 
+    // What is still open on the referenced document (before GST): -1 when it is not a known invoice / purchase
+    private double noteCap(String kind, String ref, long exceptId) {
+        ref = ref == null ? "" : ref.trim();
+        if (ref.isEmpty()) return -1;
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        Cursor c = Ledger.NOTE_CREDIT.equals(kind)
+                ? db.query("invoices", new String[]{"taxable_value"}, "invoice_no=?", new String[]{ref}, null, null, null)
+                : db.query("purchases", new String[]{"taxable"}, "doc_no=? AND kind=?", new String[]{ref, Ledger.KIND_PURCHASE}, null, null, null);
+        double base = c.moveToFirst() ? c.getDouble(0) : -1;
+        c.close();
+        if (base < 0) return -1;
+        Cursor u = db.rawQuery("SELECT IFNULL(SUM(taxable),0) FROM notes WHERE kind=? AND ref_no=? AND id<>?", new String[]{kind, ref, String.valueOf(exceptId)});
+        double used = u.moveToFirst() ? u.getDouble(0) : 0;
+        u.close();
+        return Math.round((base - used) * 100) / 100.0;
+    }
+
+    // Credit notes issued against an invoice; the invoice stays until they are deleted
+    private String creditNotesAgainst(String invoiceNo) {
+        Cursor c = dbHelper.getReadableDatabase().query("notes", new String[]{"note_no"}, "kind=? AND ref_no=?", new String[]{Ledger.NOTE_CREDIT, invoiceNo}, null, null, "id");
+        StringBuilder sb = new StringBuilder();
+        while (c.moveToNext()) { if (sb.length() > 0) sb.append(", "); sb.append(c.getString(0)); }
+        c.close();
+        return sb.toString();
+    }
+
+    private boolean blockedByCreditNotes(String invoiceNo) {
+        String cns = creditNotesAgainst(invoiceNo);
+        if (cns.isEmpty()) return false;
+        new AlertDialog.Builder(this).setTitle("Cannot Delete Invoice")
+                .setMessage("Credit note(s) " + cns + " were issued against invoice " + invoiceNo + ". Delete them first.")
+                .setPositiveButton("OK", null).show();
+        return true;
+    }
+
     private void showNoteEditor(Ledger.Note existing, String kind) {
         boolean credit = Ledger.NOTE_CREDIT.equals(kind);
         Ledger.Note n = existing == null ? new Ledger.Note() : existing;
@@ -6346,6 +6493,10 @@ public class MainActivity extends Activity implements Sync.Listener {
             if (party.isEmpty()) { eParty.setError("Party is required"); eParty.requestFocus(); return; }
             double taxable = parseNum(eTaxable);
             if (taxable <= 0) { eTaxable.setError("Enter the taxable value"); eTaxable.requestFocus(); return; }
+            // A credit note cannot return more than the invoice it is against; a debit note likewise for its purchase
+            double cap = noteCap(kind, eRef.getText().toString(), n.id);
+            if (cap < 0) { eRef.setError(credit ? "Choose the invoice this credit note is against" : "Choose the purchase this debit note is against"); eRef.requestFocus(); return; }
+            if (taxable > cap + 0.005) { eTaxable.setError("Cannot exceed the remaining value of " + eRef.getText().toString().trim() + ": " + money(cap)); eTaxable.requestFocus(); return; }
             n.noteNo = eNo.getText().toString().trim(); n.date = eDate.getText().toString().trim(); n.party = party;
             if (!validGstin(eGstin, "party")) return;
             n.partyGstin = eGstin.getText().toString().trim().toUpperCase(Locale.ROOT); n.refNo = eRef.getText().toString().trim();
@@ -6421,6 +6572,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 c.drawBitmap(sig, null, new RectF(R - sw, signY + 4 + (36 - sh), R, signY + 40), new Paint(Paint.FILTER_BITMAP_FLAG));
             }
             text(c, pt, "Authorised Signatory", R, signY + 45, false, true, false);
+            poweredBy(c, pt, (L + R) / 2, 830);
             pdf.finishPage(page);
             Uri uri = writePdfToDownloads(pdf, n.noteNo.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
             if (uri != null) {
