@@ -17,6 +17,16 @@
   const GST_REG_TYPES = ['Regular', 'Composition', 'Unregistered'];
   const LINE_OF_ACTIVITIES = ['Food and Beverages', 'Retailer', 'Services', 'Manufacturing', 'Wholesale', 'General'];
   const DEFAULT_INVOICE_FORMAT = '####';
+  // Item names with a well-known HSN code: typing one fills the HSN column, as in the app
+  const HSN_MAP = { 'Sofa': '9401', 'Chair': '9401', 'Bed': '9403', 'Dining Table': '9403', 'Cupboard': '9403', 'Wardrobe': '9403', 'Office Chair': '9401', 'Wooden Table': '9403',
+    'Mattress': '9404', 'Cushion': '9404', 'Cabinet': '9403', 'Center Table': '9403', 'Recliner': '9401', 'Stool': '9401', 'Dressing Table': '9403' };
+  // Bank name from the first four letters of an IFSC code, used when the online lookup cannot be reached
+  const BANK_IFSC = { UTIB: 'Axis Bank Ltd.', SBIN: 'State Bank of India', HDFC: 'HDFC Bank Ltd.', ICIC: 'ICICI Bank Ltd.', PUNB: 'Punjab National Bank', BARB: 'Bank of Baroda', CNRB: 'Canara Bank',
+    UBIN: 'Union Bank of India', KKBK: 'Kotak Mahindra Bank Ltd.', INDB: 'IndusInd Bank Ltd.', YESB: 'Yes Bank Ltd.', IDFB: 'IDFC FIRST Bank Ltd.', MAHB: 'Bank of Maharashtra', IOBA: 'Indian Overseas Bank',
+    CBIN: 'Central Bank of India', BKID: 'Bank of India', PSIB: 'Punjab & Sind Bank', UCOB: 'UCO Bank', IDIB: 'Indian Bank', DBSS: 'DBS Bank India Ltd.', HSBC: 'HSBC Bank', SCBL: 'Standard Chartered Bank',
+    CITI: 'Citibank N.A.', FDRL: 'Federal Bank Ltd.', KARB: 'Karnataka Bank Ltd.', KVBL: 'Karur Vysya Bank', TMBL: 'Tamilnad Mercantile Bank Ltd.', SIBL: 'The South Indian Bank Ltd.', CSBK: 'CSB Bank Ltd.',
+    RBLN: 'RBL Bank Ltd.', AUBL: 'AU Small Finance Bank Ltd.', ESFB: 'Equitas Small Finance Bank Ltd.', UJVN: 'Ujjivan Small Finance Bank Ltd.', JAKA: 'Jammu & Kashmir Bank Ltd.', BAND: 'Bandhan Bank Ltd.',
+    PYTM: 'Paytm Payments Bank', IPPB: 'India Post Payments Bank' };
 
   function num(v) {
     if (typeof v === 'number') return isFinite(v) ? v : 0;
@@ -92,11 +102,26 @@
   function stateByCode(code) { return STATES.find(s => stateCode(s) === code) || ''; }
   function stateName(stateLabel) { return String(stateLabel || '').replace(/\s*\(\d{2}\)\s*$/, ''); }
   function formatState(s) { return String(s || '').replace(' (', ' - ').replace(')', ''); }
+  // "Andhra Pradesh", "andhra pradesh (37)" or "37" to the list entry; falls back to the GSTIN's state code
+  function matchState(state, gstin) {
+    const t = String(state || '').trim().toLowerCase();
+    if (t) { const hit = STATES.find(x => x.toLowerCase() === t || stateName(x).toLowerCase() === t || stateCode(x) === t.padStart(2, '0')); if (hit) return hit; }
+    const g = String(gstin || '').trim();
+    return /^\d{2}/.test(g) ? stateByCode(g.slice(0, 2)) : '';
+  }
+  function hsnFor(name) {
+    const t = String(name || '').trim(); if (!t) return '';
+    if (HSN_MAP[t]) return HSN_MAP[t];
+    const l = t.toLowerCase(), k = Object.keys(HSN_MAP).find(x => l === x.toLowerCase() || l.includes(x.toLowerCase()));
+    return k ? HSN_MAP[k] : '';
+  }
   function stateNameCode(s) { const c = stateCode(s); return c ? stateName(s) + ', Code : ' + c : (s || ''); }
 
   function today() { const d = new Date(); return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(); }
   function pad(n) { return String(n).padStart(2, '0'); }
   function toIso(ddmmyyyy) { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(ddmmyyyy || ''); return m ? m[3] + '-' + m[2] + '-' + m[1] : ''; }
+  // Midnight of a dd/MM/yyyy date in milliseconds, 0 when it cannot be read
+  function dateMs(ddmmyyyy) { const m = /^\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*$/.exec(ddmmyyyy || ''); return m ? new Date(+m[3], +m[2] - 1, +m[1]).getTime() : 0; }
   function fromIso(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '/' + m[2] + '/' + m[1] : ''; }
   function currentFinancialYear(d) {
     d = d || new Date();
@@ -123,14 +148,67 @@
   function titleCase(s) {
     return String(s || '').trim().toLowerCase().replace(/(^|\s|[-/(])([a-z])/g, (m, a, b) => a + b.toUpperCase());
   }
+  // The app's rule for names typed by the user: single spaces, first letter of every word in capitals
+  function nameCase(s) {
+    return String(s || '').trim().split(/\s+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  }
+  // 20260930_142501, for export file names
+  function stamp() { const d = new Date(); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()); }
+
+  // Rows of the first sheet of an Excel .xlsx file (a zip of XML parts), read without a library
+  async function xlsxRows(buffer) {
+    const bytes = new Uint8Array(buffer), view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let eocd = -1;
+    for (let i = bytes.length - 22; i >= 0 && i > bytes.length - 70000; i--) if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error('Not an Excel .xlsx file');
+    const count = view.getUint16(eocd + 10, true); let at = view.getUint32(eocd + 16, true);
+    const files = {};
+    for (let n = 0; n < count && view.getUint32(at, true) === 0x02014b50; n++) {
+      const method = view.getUint16(at + 10, true), size = view.getUint32(at + 20, true), nameLen = view.getUint16(at + 28, true), extra = view.getUint16(at + 30, true), comment = view.getUint16(at + 32, true), local = view.getUint32(at + 42, true);
+      files[new TextDecoder().decode(bytes.subarray(at + 46, at + 46 + nameLen))] = { method, size, local };
+      at += 46 + nameLen + extra + comment;
+    }
+    const text = async (name) => {
+      const e = files[name]; if (!e) return null;
+      const start = e.local + 30 + view.getUint16(e.local + 26, true) + view.getUint16(e.local + 28, true), data = bytes.subarray(start, start + e.size);
+      if (e.method === 0) return new TextDecoder().decode(data);
+      if (e.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('This browser cannot read Excel files. Save the sheet as CSV and upload that.');
+      return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+    };
+    const sheet = await text('xl/worksheets/sheet1.xml');
+    if (sheet == null) throw new Error('No worksheet found in the Excel file');
+    const un = (t) => t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (m, d) => String.fromCharCode(+d)).replace(/&amp;/g, '&');
+    const texts = (xml) => { let out = ''; xml.replace(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g, (m, t) => { out += un(t); return m; }); return out; };
+    const shared = [];
+    ((await text('xl/sharedStrings.xml')) || '').replace(/<si>([\s\S]*?)<\/si>/g, (m, inner) => { shared.push(texts(inner)); return m; });
+    const rows = [];
+    sheet.replace(/<row[^>]*>([\s\S]*?)<\/row>/g, (m, inner) => {
+      const row = []; let col = 0;
+      inner.replace(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g, (m2, attrs, body) => {
+        const ref = /\br="([A-Z]+)\d+"/.exec(attrs), type = (/\bt="([^"]+)"/.exec(attrs) || [])[1];
+        if (ref) col = ref[1].split('').reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+        const v = /<v>([\s\S]*?)<\/v>/.exec(body || '');
+        let val = type === 'inlineStr' ? texts(body || '') : v ? un(v[1]) : '';
+        if (type === 's') val = shared[parseInt(val, 10)] || '';
+        else if (!type || type === 'n') val = val.replace(/\.0+$/, ''); // phone numbers stored as numbers
+        row[col++] = val.trim();
+        return m2;
+      });
+      for (let i = 0; i < row.length; i++) if (row[i] === undefined) row[i] = '';
+      if (row.some(x => x !== '')) rows.push(row);
+      return m;
+    });
+    return rows;
+  }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function nl2br(s) { return esc(s).replace(/\n/g, '<br>'); }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
   global.U = {
-    STATES, UQC_CODES, GST_RATES, PAYMENT_MODES, GST_REG_TYPES, LINE_OF_ACTIVITIES, DEFAULT_INVOICE_FORMAT,
+    STATES, UQC_CODES, GST_RATES, PAYMENT_MODES, GST_REG_TYPES, LINE_OF_ACTIVITIES, DEFAULT_INVOICE_FORMAT, HSN_MAP, BANK_IFSC,
+    matchState, hsnFor, nameCase, stamp, xlsxRows,
     num, round2, indianNumber, money, fmtQty, pct, toIndianWords, rupeesPaiseWords, twoDigits,
     isValidGstin, isValidPhone, isValidEmail, stateCode, stateByCode, stateName, formatState, stateNameCode,
-    today, pad, toIso, fromIso, currentFinancialYear, formatInvoiceNo, parseInvoiceCounter, titleCase, esc, nl2br, uid
+    today, pad, toIso, fromIso, dateMs, currentFinancialYear, formatInvoiceNo, parseInvoiceCounter, titleCase, esc, nl2br, uid
   };
 })(window);

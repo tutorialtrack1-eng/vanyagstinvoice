@@ -44,8 +44,15 @@ public class RegisterActivity extends Activity {
         title.setText("Create Account");
         title.setTextSize(24);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        title.setPadding(0, 0, 0, dp(24));
+        title.setPadding(0, 0, 0, dp(8));
         root.addView(title);
+
+        TextView trial = new TextView(this);
+        trial.setText("Register to start your " + Subscription.TRIAL_LABEL + " trial");
+        trial.setTextSize(13);
+        trial.setTextColor(0xFF607D8B);
+        trial.setPadding(0, 0, 0, dp(20));
+        root.addView(trial);
 
         LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -198,19 +205,42 @@ public class RegisterActivity extends Activity {
             return;
         }
         String enteredOtp = otpInput.getText().toString().trim();
-        if (enteredOtp.equals(generatedOtp)) {
-            String name = nameInput.getText().toString().trim();
-            String email = emailInput.getText().toString().trim();
-            String password = passwordInput.getText().toString().trim();
-
-            if (dbHelper.registerUser(name, phone, email, password)) {
-                Toast.makeText(this, "Registration Successful", Toast.LENGTH_SHORT).show();
-                finish();
-            } else {
-                Toast.makeText(this, "Mobile number or email already registered", Toast.LENGTH_SHORT).show();
-            }
-        } else {
+        if (!enteredOtp.equals(generatedOtp)) {
             Toast.makeText(this, "Invalid OTP", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String name = nameInput.getText().toString().trim();
+        String email = emailInput.getText().toString().trim();
+        String password = passwordInput.getText().toString().trim();
+        if (!Sync.enabled(this)) { registerHere(name, phone, email, password, null); return; }
+
+        // With a sync server the account is created there too, so the web portal can log in to it
+        registerBtn.setEnabled(false);
+        new Thread(() -> {
+            String token = null, problem = null;
+            try { token = Sync.register(this, name, phone, email, password).optString("token", ""); }
+            catch (Sync.SyncException e) {
+                if (e.status == 409) problem = "This mobile number or email already has a BlitzBook account. Please log in.";
+                else if (e.status != 0) problem = e.getMessage();
+                // status 0 = no connection: the account is made on this phone and joins the server at the first sync
+            }
+            final String fToken = token, fProblem = problem;
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                registerBtn.setEnabled(true);
+                if (fProblem != null) { Toast.makeText(this, fProblem, Toast.LENGTH_LONG).show(); return; }
+                registerHere(name, phone, email, password, fToken);
+            });
+        }).start();
+    }
+
+    private void registerHere(String name, String phone, String email, String password, String token) {
+        if (dbHelper.registerUser(name, phone, email, password)) {
+            if (token != null && !token.isEmpty()) Sync.saveToken(this, dbHelper.findUserId(phone), token);
+            Toast.makeText(this, "Registration Successful", Toast.LENGTH_SHORT).show();
+            finish();
+        } else {
+            Toast.makeText(this, "Mobile number or email already registered", Toast.LENGTH_SHORT).show();
         }
     }
 

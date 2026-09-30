@@ -20,6 +20,15 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 - Opens the Android share sheet after PDF creation
 - Bank details pre-filled
 
+## Web portal and sync
+
+- `webportal/` is the browser version with every screen of the app (see `webportal/README.md`).
+- `server/` is a small Node server that keeps the app and the portal on the same books: entries made on
+  one side appear on the other within seconds (see `server/README.md`). Set its address in
+  `app/src/main/java/com/vanyaliving/invoice/Sync.java` (`SERVER_URL`) or under *Sync* in the app.
+- The trial after registering lasts 1 day; trial, validity and activation codes are shared between app and
+  portal when sync is on.
+
 ## Build
 Open this folder in Android Studio and let Gradle sync. Then select:
 `Build > Build Bundle(s) / APK(s) > Build APK(s)`.

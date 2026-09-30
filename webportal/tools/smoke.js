@@ -1,107 +1,260 @@
 // Browser smoke test for the portal. Needs Node and playwright-core (npm i playwright-core, then npx playwright install chromium).
-// Adjust the require() path below to your playwright-core install, then: node tools/smoke.js
+//   PLAYWRIGHT_CORE=/path/to/playwright-core node tools/smoke.js
+// Part 1 opens the portal as a plain file: no sync server, everything stays in the browser.
+// Part 2 serves it through server/server.js and walks every screen, then a second browser signs in to the same
+// account and must show the same books; an edit made there has to come back to the first on its own.
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { chromium } = require(process.env.PLAYWRIGHT_CORE || 'playwright-core');
 const OUT = path.resolve(__dirname, 'shots'); fs.mkdirSync(OUT, { recursive: true });
-const URL = 'file:///D:/Appium/VanyaGSTInvoice_Android_Project/WebPortal/index.html';
+const FILE_URL = require('url').pathToFileURL(path.resolve(__dirname, '..', 'index.html')).href;
+process.env.BLITZBOOK_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'blitzbook-smoke-'));
+const { server } = require('../../server/server.js');
 const errors = [];
+let failures = 0;
+function check(name, cond, detail) { if (cond) console.log('  ok   ' + name); else { failures++; console.log('  FAIL ' + name + (detail === undefined ? '' : '  -> ' + JSON.stringify(detail))); } }
+
+async function newPage(browser, tag, viewport) {
+  const ctx = await browser.newContext({ viewport: viewport || { width: 1280, height: 900 }, reducedMotion: 'reduce' }); // no entrance animations in the shots
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errors.push(tag + ' pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error' && !/ifsc\.razorpay|Failed to load resource|ERR_/.test(m.text())) errors.push(tag + ' console: ' + m.text()); });
+  await page.addInitScript(() => { window.print = () => { window.__printed = (window.__printed || 0) + 1; }; });
+  return page;
+}
+async function register(page, name, phone, pw) {
+  await page.click('#lReg');
+  await page.fill('#rName', name); await page.fill('#rPhone', phone); await page.fill('#rEmail', 'p@example.com'); await page.fill('#rPw', pw);
+  await page.click('#rSend');
+  await page.waitForSelector('.modal .mb');
+  const otp = /OTP is: (\d{6})/.exec(await page.textContent('.modal .mb'))[1];
+  await page.click('.modal .mf .btn');
+  await page.fill('#rOtp', otp); await page.click('#rSend');
+  await page.waitForSelector('#cName');
+}
+const toast = async (page) => (await page.textContent('.toast').catch(() => '')) || '';
+const row = (i) => `#rows tr[data-i="${i}"] `;
+
 (async () => {
   let browser;
   try { browser = await chromium.launch({ headless: true }); }
   catch (e) { browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' }); }
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await ctx.newPage();
-  page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-  page.on('dialog', d => d.accept());
+
+  // ------------------------------------------------------------ part 1: opened as a file, no server
+  console.log('portal opened as a file');
+  let page = await newPage(browser, 'file');
+  await page.goto(FILE_URL);
+  check('register page names the 1-day trial', (await page.click('#lReg'), await page.textContent('.auth .tag')).includes('1-day trial'));
+  await page.click('#rBack');
+  await register(page, 'Local User', '9000000001', 'Test@123');
+  await page.click('.modal .mf .btn.outline'); // company profile: Later
+  await page.waitForSelector('.hero');
+  check('works without a server', (await page.textContent('#syncTx')) === 'This device only', await page.textContent('#syncTx'));
+  const trial = await page.textContent('#subChip');
+  check('trial runs for a day', /^Trial: (24 hr|23 hr \d+ min) left$/.test(trial), trial);
+  await page.context().close();
+
+  // ------------------------------------------------------------ part 2: served by the sync server
+  await new Promise(r => server.listen(0, r));
+  const URL = 'http://127.0.0.1:' + server.address().port + '/';
+  console.log('portal served by the sync server at ' + URL);
+  page = await newPage(browser, 'A');
   await page.goto(URL);
   await page.screenshot({ path: OUT + '/01-login.png' });
-  // register
-  await page.click('#lReg');
-  await page.fill('#rName', 'Pradeep'); await page.fill('#rPhone', '9876543210'); await page.fill('#rEmail', 'p@example.com'); await page.fill('#rPw', 'Test@123');
-  await page.click('#rSend');
-  const otpText = await page.textContent('.modal .mb');
-  const otp = /OTP is (\d{6})/.exec(otpText)[1];
-  await page.click('.modal .mf .btn');
-  await page.fill('#rOtp', otp); await page.click('#rSend');
-  await page.waitForSelector('#cName');
+  await register(page, 'Pradeep', '9876543210', 'Test@123');
   // company profile (first-time dialog)
   await page.fill('#cName', 'Win The Buy Box Private Limited'); await page.fill('#cGstin', '36AADCW0665P1ZS');
   await page.selectOption('#cType', 'Regular'); await page.selectOption('#cAct', 'Wholesale'); await page.fill('#cFmt', 'OFFSI27-#####');
   await page.fill('#cAddr', '16-11-477/6/4, Venu Castle, Gaddianaram, Malakpet,\nHyderabad - 500036'); await page.fill('#cPhone', '9849194056'); await page.fill('#cEmail', 'sales@winthebuybox.in');
-  await page.fill('#cAcc', '120036058590'); await page.fill('#cHolder', 'Win The Buy Box Private Limited'); await page.fill('#cIfsc', 'CNRB0002486'); await page.fill('#cBank', 'Canara Bank'); await page.fill('#cBranch', 'VIVEKANANDA NAGAR');
+  await page.fill('#cAcc', '120036058590'); await page.fill('#cIfsc', 'CNRB0002486');
+  check('bank name comes from the IFSC prefix', (await page.inputValue('#cBank')) === 'Canara Bank');
+  await page.fill('#cHolder', 'Win The Buy Box Private Limited'); await page.fill('#cBank', 'Canara Bank'); await page.fill('#cBranch', 'Vivekananda Nagar');
   await page.click('.modal .mf .btn.green');
   await page.waitForSelector('.hero');
+  await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
+  check('sync is on', (await page.textContent('#syncTx')) === 'Synced');
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
+
   // invoice
   await page.click('.tiles [data-go=invoice]');
   await page.waitForSelector('#rows');
+  check('invoice number follows the format', (await page.inputValue('#iNo')) === 'OFFSI27-00001', await page.inputValue('#iNo'));
   await page.fill('#bName', 'The Chef Store - Banjara Hills\n8-2-287/4/1, Road No 14\nBanjara Hills\nHyderabad, Telangana, 500034');
   await page.fill('#bGstin', '36AAOFT3399K1ZB'); await page.fill('#bPhone', '9849194056'); await page.fill('#bEmail', 'thechefstorehyd@gmail.com');
   await page.selectOption('#iPay', 'Credit');
   await page.fill('#oDest', 'TELANGANA'); await page.fill('#oVNo', 'TS15UD1282');
-  const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.fill(row(0) + '[data-k=desc]', 'Air Fryer 4.5L - Black (See Through)'); await page.fill(row(0) + '[data-k=hsn]', '85167990');
   await page.fill(row(0) + '[data-k=qty]', '5'); await page.fill(row(0) + '[data-k=rate]', '2223.94');
   await page.click('#addRow');
   await page.fill(row(1) + '[data-k=desc]', 'Cold Press Juicer Pro Combo with Cover + Glass Tumbler (Blue Breeze)'); await page.fill(row(1) + '[data-k=hsn]', '85166000');
   await page.fill(row(1) + '[data-k=qty]', '3'); await page.fill(row(1) + '[data-k=rate]', '5084.11');
   await page.click('#addRow');
+  await page.fill(row(2) + '[data-k=desc]', 'Office Chair');
+  check('well-known item name fills the HSN', (await page.inputValue(row(2) + '[data-k=hsn]')) === '9401');
   await page.fill(row(2) + '[data-k=desc]', 'Glass Tumbler w. Sleeve - Black Knight'); await page.fill(row(2) + '[data-k=hsn]', '70139900'); await page.selectOption(row(2) + '[data-k=gst]', '5');
   await page.fill(row(2) + '[data-k=qty]', '4'); await page.fill(row(2) + '[data-k=rate]', '236.95');
-  const totals = await page.textContent('#totals'); const words = await page.textContent('#words');
-  console.log('TOTALS:', totals.replace(/\s+/g, ' ')); console.log('WORDS:', words);
-  await page.screenshot({ path: OUT + '/03-invoice.png', fullPage: true }); await page.locator('table.items').screenshot({ path: OUT + '/03b-items.png' });
-  // print flow: layout -> paper -> save (print dialog is stubbed)
-  await page.evaluate(() => { window.__printed = 0; HTMLIFrameElement.prototype.__proto__ && null; });
-  await page.addInitScript(() => {});
-  await page.evaluate(() => { const f = document.createElement('iframe'); f.id = 'printFrame'; f.style.cssText = 'position:fixed;width:0;height:0;border:0'; document.body.appendChild(f); });
-  await page.evaluate(() => { window.print = () => { window.__printed = (window.__printed || 0) + 1; }; });
+  const totals = (await page.textContent('#totals')).replace(/\s+/g, ' ');
+  check('invoice totals', totals.includes('27,319.83') && totals.includes('32,114'), totals);
+  await page.screenshot({ path: OUT + '/03-invoice.png', fullPage: true });
+
+  // quick picker: samples for the line of activity, add two of one, apply
+  await page.click('#quickBtn');
+  await page.waitForSelector('.qitem');
+  check('quick picker lists the starter items', (await page.textContent('#qList')).includes('Raw Material Pack'));
+  await page.click('.qitem[data-n="Freight Charges"] [data-d="1"]'); await page.click('.qitem[data-n="Freight Charges"] [data-d="1"]');
+  check('quick picker summary', (await page.textContent('#qSum')).includes('Selected: 2 items') && (await page.textContent('#qSum')).includes('2400.00'), await page.textContent('#qSum'));
+  await page.screenshot({ path: OUT + '/03c-quick.png' });
+  await page.click('#qAdd'); await page.fill('#mName', 'packing charge'); await page.fill('#mCat', 'logistics'); await page.fill('#mRate', '50'); await page.click('.modal-bg:last-child .mf .btn.green');
+  check('an added quick item appears, name tidied', (await page.textContent('#qList')).includes('Packing Charge'));
+  await page.click('.modal .mf .btn.green'); // Apply to Invoice
+  check('quick items land on the invoice', (await page.inputValue(row(3) + '[data-k=desc]')) === 'Freight Charges' && (await page.inputValue(row(3) + '[data-k=qty]')) === '2');
+  await page.click(row(3) + '[data-del]');
+
+  // print flow: layout -> paper -> saved
   await page.click('#iPrint');
   await page.click('.menu-list button:nth-child(2)'); // classic
   await page.waitForSelector('.menu-list');
+  check('paper list includes envelopes', (await page.textContent('.menu-list')).includes('Envelope DL'));
   await page.click('.menu-list button:nth-child(1)'); // A4
-  await page.waitForSelector('.modal', { timeout: 5000 });
-  const dlgTitle = await page.textContent('.modal .mh'); console.log('AFTER PRINT DIALOG:', dlgTitle);
+  await page.waitForSelector('.modal .mh');
+  check('invoice saved', (await page.textContent('.modal .mh')).includes('OFFSI27-00001 Saved'), await page.textContent('.modal .mh'));
   await page.click('.modal .mf .btn.outline');
-  // render both layouts to files and screenshot them
   const inv = await page.evaluate(() => Store.list('invoices')[0]);
-  console.log('SAVED INVOICE:', inv.no, inv.totals);
+  check('saved invoice totals', inv.totals.rounded === 32114 && inv.totals.intra === true, inv.totals);
   const htmlStd = await page.evaluate(() => Print.html(Store.list('invoices')[0], Store.company(), 0, 'A4'));
   const htmlCls = await page.evaluate(() => Print.html(Store.list('invoices')[0], Store.company(), 1, 'A4'));
-  fs.writeFileSync(OUT + '/print-standard.html', htmlStd); fs.writeFileSync(OUT + '/print-classic.html', htmlCls);
-  const pp = await ctx.newPage(); await pp.setViewportSize({ width: 794, height: 1123 });
+  const htmlEnv = await page.evaluate(() => Print.envelope(Store.list('invoices')[0], Store.company(), 'EnvDL'));
+  fs.writeFileSync(OUT + '/print-standard.html', htmlStd); fs.writeFileSync(OUT + '/print-classic.html', htmlCls); fs.writeFileSync(OUT + '/print-envelope.html', htmlEnv);
+  const pp = await page.context().newPage(); await pp.setViewportSize({ width: 794, height: 1123 });
   await pp.setContent(htmlStd); await pp.screenshot({ path: OUT + '/04-print-standard.png', fullPage: true });
   await pp.setContent(htmlCls); await pp.screenshot({ path: OUT + '/05-print-classic.png', fullPage: true });
-  await pp.pdf({ path: OUT + '/classic.pdf', format: 'A4', printBackground: true, margin: { top: '12mm', bottom: '12mm', left: '10mm', right: '10mm' } });
+  await pp.setViewportSize({ width: 832, height: 416 }); await pp.setContent(htmlEnv); await pp.screenshot({ path: OUT + '/05b-print-envelope.png' });
+  check('envelope carries both addresses', htmlEnv.includes('From: WIN THE BUY BOX') && htmlEnv.includes('THE CHEF STORE - BANJARA HILLS'));
+
+  // expense, purchase with stock, quotation -> purchase, credit note, journal entry
+  await page.evaluate(() => App.go('expenses')); await page.click('#eNew'); await page.fill('#eCat', 'rent'); await page.selectOption('#eRate', '18'); await page.fill('#eBill', '11800');
+  check('expense: taxable and GST from the bill value', (await page.inputValue('#eTax')) === '10000.00' && (await page.inputValue('#eGst')) === '1800.00', [await page.inputValue('#eTax'), await page.inputValue('#eGst')]);
+  await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  check('expense saved', (await page.textContent('table.list')).includes('Rent') && (await page.textContent('#view')).includes('1 entries'));
+  await page.evaluate(() => App.go('contacts', { type: 'Supplier' })); await page.click('#cAdd');
+  await page.fill('#pName', 'Solara Appliances'); await page.fill('#pGstin', '29AADCW0665P1ZX'); await page.check('#pTds'); await page.fill('#pTdsRate', '2');
+  const gstOk = await page.evaluate(() => { const g = '29AADCW0665P1Z'; const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'; let s = 0; for (let i = 0; i < 14; i++) { const v = chars.indexOf(g[i]) * (i % 2 === 0 ? 1 : 2); s += Math.floor(v / 36) + v % 36; } return g + chars[(36 - s % 36) % 36]; });
+  await page.fill('#pGstin', gstOk); await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  await page.evaluate(() => App.go('purchases')); await page.click('#pNew'); await page.fill('#pSup', 'Solara Appliances'); await page.dispatchEvent('#pSup', 'change');
+  check('supplier fills GSTIN and TDS', (await page.inputValue('#pGstin')) === gstOk && await page.isChecked('#pTds'));
+  await page.fill('#pRows tr [data-k=name]', 'Air Fryer 4.5L - Black (See Through)'); await page.fill('#pRows tr [data-k=qty]', '10'); await page.fill('#pRows tr [data-k=rate]', '1800'); await page.check('#pRows tr [data-k=stock]');
+  const ptot = (await page.textContent('#pTot')).replace(/\s+/g, ' ');
+  check('purchase totals: IGST and TDS', ptot.includes('IGST') && ptot.includes('3,240.00') && ptot.includes('Less TDS') && ptot.includes('360.00') && ptot.includes('20,880.00'), ptot);
+  await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  await page.click('#qNew'); await page.fill('#pRows tr [data-k=name]', 'Wooden Chair'); await page.fill('#pRows tr [data-k=qty]', '2'); await page.fill('#pRows tr [data-k=rate]', '1500'); await page.click('.modal .mf .btn.green');
+  await page.waitForSelector('[data-conv]'); await page.click('[data-conv]'); await page.click('.modal .mf .btn.red');
+  check('quotation becomes a purchase', await page.evaluate(() => Store.list('purchases').map(p => p.no).sort().join()) === 'PUR-0001,PUR-0002');
+  fs.writeFileSync(OUT + '/print-purchase.html', await page.evaluate(() => Print.purchase(Store.list('purchases')[0], Store.company(), 'A4')));
+  await page.evaluate(() => App.go('notes', { kind: 'CN' })); await page.click('#nNew'); await page.fill('#nParty', 'The Chef Store - Banjara Hills'); await page.fill('#nRef', 'OFFSI27-00001'); await page.fill('#nTax', '1000'); await page.selectOption('#nRate', '18');
+  check('credit note total', (await page.textContent('#nTotal')).includes('1,180.00'), await page.textContent('#nTotal'));
+  await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  fs.writeFileSync(OUT + '/print-note.html', await page.evaluate(() => Print.note(Store.list('notes')[0], Store.company())));
+  await pp.setViewportSize({ width: 794, height: 1123 }); await pp.setContent(fs.readFileSync(OUT + '/print-note.html', 'utf8')); await pp.screenshot({ path: OUT + '/05c-print-note.png', fullPage: true });
+  await pp.setContent(fs.readFileSync(OUT + '/print-purchase.html', 'utf8')); await pp.screenshot({ path: OUT + '/05d-print-purchase.png', fullPage: true });
   await pp.close();
-  // other screens
-  const shots = [['sales', '06-sales'], ['items', '07-items'], ['purchases', '08-purchases'], ['expenses', '09-expenses'], ['journal', '10-journal'], ['salesReport', '11-sales-report'], ['pnl', '12-pnl'], ['balance', '13-balance'], ['stock', '14-stock']];
-  for (const [r, n] of shots) { await page.evaluate((r) => App.go(r), r); await page.waitForTimeout(100); await page.screenshot({ path: OUT + '/' + n + '.png', fullPage: true }); }
+  await page.evaluate(() => App.go('journal')); await page.click('#jNew');
+  await page.selectOption('#jRows tr[data-i="0"] [data-k=account]', 'Bank'); await page.fill('#jRows tr[data-i="0"] [data-k=amount]', '50000'); await page.selectOption('#jRows tr[data-i="1"] [data-k=account]', 'Capital');
+  check('journal balances itself', (await page.inputValue('#jRows tr[data-i="1"] [data-k=amount]')) === '50000.00' && (await page.textContent('#jBal')).includes('(balanced)'), await page.textContent('#jBal'));
+  await page.screenshot({ path: OUT + '/10b-journal-editor.png' });
+  await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+
+  // contacts upload in the app's template layout
+  await page.evaluate(() => App.go('contacts', { type: 'Customer' }));
+  const csv = path.join(process.env.BLITZBOOK_DATA, 'contacts.csv');
+  fs.writeFileSync(csv, 'Name,Phone,Email,GSTIN,Address,State\nRamesh Traders,9876543210,ramesh@gmail.com,,100 Feet Road Vijayawada,Andhra Pradesh\n"Suresh, Sons",9123456789,,,MG Road Hyderabad,Telangana\n');
+  let [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#cCsv')]); await chooser.setFiles(csv);
+  await page.waitForFunction(() => Store.list('contacts').some(c => c.name === 'Suresh, Sons'));
+  check('contacts upload', await page.evaluate(() => Store.list('contacts').find(c => c.name === 'Ramesh Traders').state) === 'Andhra Pradesh (37)');
+  const stockCsv = path.join(process.env.BLITZBOOK_DATA, 'stock.csv');
+  fs.writeFileSync(stockCsv, 'Item,HSN,Qty,UQC,Rate,GST%\nWooden Chair,9401,10,NOS,1500,18\ndining table,9403,2,NOS,12000,18\n');
+  await page.evaluate(() => App.go('stock'));
+  [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#stUp')]); await chooser.setFiles(stockCsv);
+  await page.waitForFunction(() => Store.list('purchases').some(p => p.kind === 'STK'));
+  const stock = (await page.textContent('table.list')).replace(/\s+/g, ' ');
+  check('stock in hand: bought less sold, at the last rate', stock.includes('Air Fryer 4.5L - Black (See Through) (NOS)10551,800.00₹ 9,000.00') && stock.includes('Dining Table') && stock.includes('Wooden Chair'), stock.slice(0, 260));
+
+  // every screen renders; statements export
+  const shots = [['sales', '06-sales'], ['items', '07-items'], ['purchases', '08-purchases'], ['expenses', '09-expenses'], ['journal', '10-journal'], ['salesReport', '11-sales-report'], ['pnl', '12-pnl'], ['balance', '13-balance'], ['stock', '14-stock'], ['backup', '17-backup']];
+  for (const [r, n] of shots) { await page.evaluate((r) => App.go(r), r); await page.waitForTimeout(80); await page.screenshot({ path: OUT + '/' + n + '.png', fullPage: true }); }
   await page.evaluate(() => App.go('contacts', { type: 'Customer' })); await page.screenshot({ path: OUT + '/15-contacts.png', fullPage: true });
-  // an expense and a purchase through the dialogs
-  await page.evaluate(() => App.go('expenses')); await page.click('#eNew'); await page.fill('#eCat', 'Rent'); await page.fill('#eBill', '11800'); await page.waitForTimeout(50);
-  console.log('EXPENSE taxable/gst:', await page.inputValue('#eTax'), await page.inputValue('#eGst'));
-  await page.click('.modal .mf .btn.green'); await page.waitForTimeout(100);
-  await page.evaluate(() => App.go('purchases')); await page.click('#pNew'); await page.fill('#pSup', 'Solara Appliances'); await page.fill('#pGstin', '29AABCS1234A1ZX');
-  await page.fill('#pRows tr [data-k=name]', 'Air Fryer 4.5L - Black (See Through)'); await page.fill('#pRows tr [data-k=qty]', '10'); await page.fill('#pRows tr [data-k=rate]', '1800');
-  console.log('PURCHASE totals:', (await page.textContent('#pTot')).replace(/\s+/g, ' '));
-  await page.click('.modal .mf .btn.green'); await page.waitForTimeout(100);
-  await page.evaluate(() => App.go('stock')); await page.screenshot({ path: OUT + '/16-stock-after.png', fullPage: true });
-  console.log('STOCK:', (await page.textContent('table.list')).replace(/\s+/g, ' ').slice(0, 200));
-  await page.evaluate(() => App.go('pnl')); console.log('PNL:', (await page.textContent('.kv')).replace(/\s+/g, ' ').slice(0, 400));
+  await page.evaluate(() => App.go('pnl'));
+  const pnl = (await page.textContent('.kv')).replace(/\s+/g, ' ');
+  check('profit & loss', pnl.includes('Sales (1 invoices, before GST)₹ 27,319.83') && pnl.includes('Less: Credit notes (1)₹ 1,000.00') && pnl.includes('Purchases (2 bills, before GST)₹ 21,000.00') && pnl.includes('Rent₹ 10,000.00') && pnl.includes('NET LOSS₹ 4,680.17'), pnl.slice(0, 420));
+  let [dl] = await Promise.all([page.waitForEvent('download'), page.click('#stXls')]);
+  check('statement exports to Excel', /^BlitzBook_Profit_Loss_\d{8}_\d{6}\.xls$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+  await page.evaluate(() => App.go('balance'));
+  const bs = (await page.textContent('.kv')).replace(/\s+/g, ' ');
+  const bsNums = await page.evaluate(() => { const b = Books.balanceSheet(U.dateMs(U.today())); return [b.totalAssets, b.totalLiabilities + b.capital, b.tdsPayable, b.receivables]; });
+  check('balance sheet balances, carries TDS payable and receivables', Math.abs(bsNums[0] - bsNums[1]) < 0.01 && bsNums[2] === 360 && bsNums[3] === 32114 - 1180 && bs.includes('TDS payable'), bsNums);
+  await page.evaluate(() => App.go('backup'));
+  [dl] = await Promise.all([page.waitForEvent('download'), page.click('#bExp')]);
+  const backup = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+  check('backup is in the app layout', Array.isArray(backup.invoices) && backup.invoices[0].invoice_no === 'OFFSI27-00001' && backup.invoice_items.length === 3 && backup.company_master[0].company_name.startsWith('Win The Buy Box'));
+
+  // ------------------------------------------------------------ second browser, same account
+  console.log('second browser signs in to the same account');
+  const B = await newPage(browser, 'B');
+  await B.goto(URL);
+  await B.fill('#lId', '9876543210'); await B.fill('#lPw', 'Wrong@123'); await B.click('#lGo');
+  await B.waitForSelector('.toast');
+  check('wrong password is refused', (await toast(B)).includes('Invalid login'));
+  await B.fill('#lPw', 'Test@123'); await B.click('#lGo');
+  await B.waitForSelector('.hero');
+  await B.waitForFunction(() => Store.list('invoices').length > 0, null, { timeout: 15000 });
+  await B.waitForTimeout(300);
+  check('no company dialog: the profile came with the books', (await B.$('#cName')) === null && (await B.textContent('.hero .co')) === 'Win The Buy Box Private Limited');
+  const same = async (what) => JSON.stringify(await page.evaluate(what)) === JSON.stringify(await B.evaluate(what));
+  check('same invoices', await same(() => Store.list('invoices').map(i => [i.no, i.date, i.payment, i.totals, i.items.map(x => [x.desc, x.hsn, x.gst, +x.qty, +x.rate, x.taxable])])));
+  check('same items, contacts, purchases, expenses, notes, journal', await same(() => [Store.items().map(i => [i.name, i.hsn, i.gst, +i.rate, i.category]).sort(), Store.list('contacts').map(c => [c.id, c.name, c.type, c.state, c.tds]).sort(),
+    Store.list('purchases').map(p => [p.id, p.no, p.kind, p.total, p.tds, p.items.length]).sort(), Store.list('expenses').map(e => [e.id, e.category, e.amount]), Store.list('notes').map(n => [n.id, n.no, n.total]), Store.list('journal').map(j => [j.id, j.lines])]));
+  check('same statements', await same(() => { const b = Books.balanceSheet(U.dateMs(U.today())), p = Books.profitLoss(null, null); return [b.totalAssets, b.capital, b.stockValue, p.netProfit, p.outputGst, p.inputGst].map(U.round2); }));
+  check('same trial clock', await same(() => Store.get('registered_at')));
+  await B.screenshot({ path: OUT + '/30-second-browser.png', fullPage: true });
+
+  console.log('an entry made in one browser shows up in the other by itself');
+  await page.evaluate(() => App.go('contacts', { type: 'Customer' }));
+  await B.evaluate(() => App.go('contacts', { type: 'Customer' })); await B.click('#cAdd');
+  await B.fill('#pName', 'Entered On Second Device'); await B.fill('#pPhone', '9000000002'); await B.click('.modal .mf .btn.green');
+  await page.waitForFunction(() => document.querySelector('table.list') && document.querySelector('table.list').textContent.includes('Entered On Second Device'), null, { timeout: 25000 });
+  check('the open list redrew with the new party', true);
+  await page.click('[data-d]'); await page.click('.modal .mf .btn.red'); // delete the first contact on A
+  const gone = await page.evaluate(() => Store.list('contacts').length);
+  await B.waitForFunction((n) => Store.list('contacts').length === n, gone, { timeout: 25000 });
+  check('a delete travels too', true);
+  await B.evaluate(() => App.go('invoice', { id: Store.list('invoices')[0].id })); await B.waitForSelector('#rows');
+  await B.fill(row(0) + '[data-k=qty]', '6'); await B.click('#iPrint'); await B.click('.menu-list button:nth-child(1)'); await B.click('.menu-list button:nth-child(1)'); await B.waitForSelector('.modal .mh'); await B.click('.modal .mf .btn.outline');
+  await page.waitForFunction(() => +Store.list('invoices')[0].items[0].qty === 6, null, { timeout: 25000 });
+  check('an invoice edited there is the same invoice here', await same(() => Store.list('invoices').map(i => [i.no, i.totals.rounded, i.items.length])));
+
+  // activation entered on B unlocks A
+  const code = await B.evaluate(() => Sub.makeCode('9876543210', 30));
+  await B.evaluate(() => Subscription.dialog(false)); await B.fill('#sCode', code); await B.click('#subDlg .mf .btn.green');
+  await B.waitForFunction(() => !Sub.isOnTrial());
+  await page.waitForFunction(() => !Sub.isOnTrial(), null, { timeout: 25000 });
+  check('one activation covers both', (await page.evaluate(() => Sub.statusText())).includes('30 days'), await page.evaluate(() => Sub.statusText()));
+
   // mobile viewport
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => App.go('dashboard')); await page.screenshot({ path: OUT + '/20-m-dashboard.png', fullPage: true });
   await page.evaluate(() => App.go('invoice', { id: Store.list('invoices')[0].id })); await page.waitForSelector('#rows'); await page.screenshot({ path: OUT + '/21-m-invoice.png', fullPage: true });
+  await page.click('#quickBtn'); await page.waitForSelector('.qitem'); await page.screenshot({ path: OUT + '/21b-m-quick.png' }); await page.click('.modal .mf .btn.outline');
   await page.evaluate(() => App.go('sales')); await page.screenshot({ path: OUT + '/22-m-sales.png', fullPage: true });
-  await page.click('#menuBtn'); await page.waitForTimeout(300); await page.screenshot({ path: OUT + '/23-m-drawer.png' });
-  await page.evaluate(() => App.drawer(false));
-  await page.evaluate(() => Subscription.dialog(false)); await page.screenshot({ path: OUT + '/24-m-subscription.png' });
-  // horizontal overflow check on mobile
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-  console.log('MOBILE HORIZONTAL OVERFLOW:', overflow);
+  // top navigation: the strip scrolls sideways on phones, the tapped link becomes the active one
+  await page.click('#nav [data-go=stock]'); await page.waitForTimeout(300); await page.screenshot({ path: OUT + '/23-m-nav.png' });
+  check('navigation marks the open screen', (await page.textContent('#nav .navlink.active')) === 'Stock in Hand');
+  await page.evaluate(() => App.go('sync')); await page.screenshot({ path: OUT + '/24-m-sync.png' }); await page.click('.modal .mf .btn.outline');
+  check('no sideways scroll on a phone', !(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)));
+
   await browser.close();
+  server.close();
+  fs.rmSync(process.env.BLITZBOOK_DATA, { recursive: true, force: true });
   console.log('ERRORS:', errors.length ? errors : 'none');
-})().catch(e => { console.error('SMOKE FAILED', e); process.exit(1); });
+  console.log(failures || errors.length ? '\n' + failures + ' FAILED' : '\nall passed');
+  process.exit(failures || errors.length ? 1 : 0);
+})().catch(e => { console.error('SMOKE FAILED', e); console.log('ERRORS:', errors); process.exit(1); });

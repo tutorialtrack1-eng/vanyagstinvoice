@@ -14,7 +14,7 @@ import java.util.Set;
 /**
  * Trial and subscription validity.
  *
- * A freshly registered account may use the app for {@link #TRIAL_MILLIS} (10 minutes). After that the
+ * A freshly registered account may use the app for {@link #TRIAL_MILLIS} (1 day). After that the
  * app is locked until an activation code is entered. A code is tied to the account's login
  * (phone number or email) and to a plan length, so the app works out the validity from the code
  * itself: it tries every plan in {@link #PLAN_DAYS} and accepts the one whose code matches.
@@ -27,11 +27,15 @@ import java.util.Set;
  *   registered_at_<userId>   when the account first opened the app (start of the trial)
  *   valid_until_<userId>     end of the paid subscription, 0 when none
  *   used_codes_<userId>      codes already redeemed, so a code cannot be entered twice
+ * With sync on (Sync.java) these three are shared with the web portal: one trial and one activation per
+ * account, whichever device it is used on.
  */
 final class Subscription {
     private Subscription() {}
 
-    static final long TRIAL_MILLIS = 10 * 60 * 1000L;
+    static final long TRIAL_MILLIS = 24 * 60 * 60 * 1000L;
+    // How the trial is named in messages
+    static final String TRIAL_LABEL = "1-day";
     static final int[] PLAN_DAYS = {1, 30, 90, 180, 365, 730};
     static final int[] PLAN_PRICES = {49, 299, 799, 1499, 2499, 3999};
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
@@ -112,12 +116,15 @@ final class Subscription {
 
     static boolean isOnTrial(Context c, long userId) { return subscriptionUntil(c, userId) <= 0; }
 
-    /** "Trial: 7 min left", "Valid till 31/03/2027" or "Expired on ..." for the dashboard banner. */
+    /** "Trial: 23 hr 10 min left", "Valid till 31/03/2027" or "Expired on ..." for the dashboard banner. */
     static String statusText(Context c, long userId) {
         long end = expiresAt(c, userId), left = end - System.currentTimeMillis();
         String date = new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(new Date(end));
         if (left <= 0) return "Subscription expired on " + date;
-        if (isOnTrial(c, userId)) return "Trial: " + Math.max(1, (left + 59_999) / 60_000) + " min left";
+        if (isOnTrial(c, userId)) {
+            long mins = Math.max(1, (left + 59_999) / 60_000), hours = mins / 60, rest = mins % 60;
+            return "Trial: " + (hours > 0 ? hours + " hr" + (rest > 0 ? " " : "") : "") + (rest > 0 || hours == 0 ? rest + " min" : "") + " left";
+        }
         long days = (left + DAY_MILLIS - 1) / DAY_MILLIS;
         return "Subscription valid till " + date + " (" + days + " days)";
     }

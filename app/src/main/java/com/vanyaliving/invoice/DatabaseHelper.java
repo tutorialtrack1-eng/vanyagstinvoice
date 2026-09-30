@@ -23,6 +23,21 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         super(context, name, null, DATABASE_VERSION);
     }
 
+    // Counts every time the app asks for a database to write to. Sync watches it to know that something
+    // may have been entered, so nothing else in the app has to report its changes.
+    static volatile long writeTick;
+
+    @Override
+    public SQLiteDatabase getWritableDatabase() {
+        writeTick++;
+        return super.getWritableDatabase();
+    }
+
+    /** The writable database without counting as a change made by the user (used by sync itself). */
+    SQLiteDatabase quietDatabase() {
+        return super.getWritableDatabase();
+    }
+
     // Data written before accounts were separated stays with the first registered account.
     public static DatabaseHelper forUser(Context context, long userId) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -145,6 +160,40 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         String email = c.moveToFirst() && !c.isNull(0) ? c.getString(0).trim() : "";
         c.close();
         return email;
+    }
+
+    /** name, phone, email, password of an account, or null when it does not exist. */
+    public String[] userRecord(long userId) {
+        Cursor c = getReadableDatabase().query("users", new String[]{"name", "phone", "email", "password"}, "id=?", new String[]{String.valueOf(userId)}, null, null, null);
+        String[] out = null;
+        if (c.moveToFirst()) {
+            out = new String[4];
+            for (int i = 0; i < 4; i++) out[i] = c.isNull(i) ? "" : c.getString(i).trim();
+        }
+        c.close();
+        return out;
+    }
+
+    /**
+     * An account that signed in through the sync server: created on this phone if it is new here,
+     * otherwise its password (and missing details) brought up to date. Returns the user id, or -1.
+     */
+    public long saveServerUser(String name, String phone, String email, String password) {
+        long id = -1;
+        if (phone != null && !phone.isEmpty()) id = findUserId(phone);
+        if (id < 0 && email != null && !email.isEmpty()) id = findUserId(email);
+        ContentValues cv = new ContentValues();
+        cv.put("password", password);
+        if (name != null && !name.isEmpty()) cv.put("name", name);
+        if (phone != null && !phone.isEmpty()) cv.put("phone", phone);
+        if (email != null && !email.isEmpty()) cv.put("email", email.toLowerCase(java.util.Locale.ROOT));
+        SQLiteDatabase db = getWritableDatabase();
+        try {
+            if (id >= 0) { db.update("users", cv, "id=?", new String[]{String.valueOf(id)}); return id; }
+            return db.insert("users", null, cv);
+        } catch (Exception e) {
+            return id;
+        }
     }
 
     public boolean resetPassword(String phoneOrEmail, String newPassword) {

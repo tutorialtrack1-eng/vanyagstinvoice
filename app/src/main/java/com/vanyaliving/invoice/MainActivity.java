@@ -90,7 +90,7 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements Sync.Listener {
     private static final String PREFS = "invoice_prefs";
     // Login accounts are never part of a backup; each backup holds only the signed-in user's business data
     private static final String[] BACKUP_TABLES = {"company_master", "items_master", "contacts", "history", "invoices", "invoice_items", "expenses", "purchases", "purchase_items", "journal", "journal_vouchers", "journal_lines", "ledger_accounts", "notes"};
@@ -227,8 +227,15 @@ public class MainActivity extends Activity {
     private final List<ItemRow> rows = new ArrayList<>();
     private SharedPreferences prefs;
     private DatabaseHelper dbHelper;
+    // Login accounts (vanya.db). dbHelper is the signed-in user's own books, which for every account but the
+    // first is a separate file with no accounts in it.
+    private DatabaseHelper accountsDb;
     private long userId;
     private boolean loadingInvoice = false;
+    // Keeps these books and the web portal the same (Sync.java); runs while the app is on screen
+    private Sync sync;
+    private TextView syncStatusTv;
+    private boolean onDashboard, companyPromptPending;
 
     private String sellerNameStr = "";
     private String sellerGstinStr = "";
@@ -379,14 +386,21 @@ public class MainActivity extends Activity {
             startActivity(new Intent(this, LoginActivity.class)); finish(); return;
         }
         Subscription.markRegistered(this, userId); // trial clock starts the first time this account opens the app
+        accountsDb = new DatabaseHelper(this);
         dbHelper = DatabaseHelper.forUser(this, userId); ensureInvoiceColumns(); loadHsnMapFromAsset(); applyRandomPastelTheme(); buildUi(); loadCompanyMaster();
+        sync = new Sync(this, dbHelper, userId, this);
 
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         Cursor c = db.query("company_master", null, null, null, null, null, null);
         if (!c.moveToFirst()) {
             c.close();
             showDashboardView();
-            showCompanyMasterDialog();
+            // On a phone that has never met the sync server the profile may be on its way with the rest of
+            // the books, so the first round is awaited before asking for one (see onSyncStatus)
+            if (Sync.enabled(this) && !sync.hasSynced()) {
+                companyPromptPending = true;
+                Toast.makeText(this, "Checking for your books...", Toast.LENGTH_SHORT).show();
+            } else showCompanyMasterDialog();
         } else {
             c.close();
             showDashboardView();
@@ -394,22 +408,25 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ subscription / validity
-    // The trial (10 minutes from first launch after registering) and paid validity are computed in
+    // The trial (1 day from first launch after registering) and paid validity are computed in
     // Subscription.java. This block only enforces it: every time the screen comes to the front, and again
     // the moment the current validity runs out while the app is open, the lock dialog is shown.
 
     private final android.os.Handler subscriptionTimer = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable subscriptionCheck = this::checkSubscription;
     private AlertDialog subscriptionDialog;
+    private boolean subscriptionDialogLocked;
 
     @Override protected void onResume() {
         super.onResume();
         if (dbHelper != null) checkSubscription();
+        if (sync != null) sync.start();
     }
 
     @Override protected void onPause() {
         super.onPause();
         subscriptionTimer.removeCallbacks(subscriptionCheck);
+        if (sync != null) sync.stop();
     }
 
     private void checkSubscription() {
@@ -417,25 +434,85 @@ public class MainActivity extends Activity {
         if (Subscription.isActive(this, userId)) {
             long left = Subscription.expiresAt(this, userId) - System.currentTimeMillis();
             subscriptionTimer.postDelayed(subscriptionCheck, Math.max(1000, Math.min(left + 500, 6 * 60 * 60 * 1000L)));
+            // Activated on another device while this one was locked: the code arrived through sync
+            if (subscriptionDialogLocked && subscriptionDialog != null && subscriptionDialog.isShowing()) { subscriptionDialog.dismiss(); showDashboardView(); }
             return;
         }
         showSubscriptionDialog(true);
     }
 
+    // ------------------------------------------------------------------ sync with the web portal
+
+    @Override public void onSyncApplied(Set<String> keys) {
+        if (isFinishing()) return;
+        boolean invoices = false, items = false, contacts = false;
+        for (String k : keys) { if (k.startsWith("inv:")) invoices = true; else if (k.startsWith("item:")) items = true; else if (k.startsWith("contact:")) contacts = true; }
+        if (items) itemSuggestionCache = null;
+        if (keys.contains("company") || invoices) loadCompanyMaster();
+        if (contacts && buyerBillTo != null && consignee != null) { setupAutoComplete(buyerBillTo); setupAutoComplete(consignee); }
+        if (keys.contains("sub")) checkSubscription();
+        // The dashboard shows totals and recent items, so it is drawn again; an invoice being typed is left alone
+        if (onDashboard) showDashboardView();
+    }
+
+    @Override public void onSyncStatus() {
+        if (syncStatusTv != null) syncStatusTv.setText("Sync: " + sync.statusText());
+        if (companyPromptPending && !sync.isBusy()) {
+            companyPromptPending = false;
+            if (sellerNameStr.isEmpty() && !isFinishing()) showCompanyMasterDialog();
+        }
+    }
+
+    @Override public void onSyncAuthLost(String message) {
+        if (isFinishing()) return;
+        Toast.makeText(this, message + ". Log in with the new password.", Toast.LENGTH_LONG).show();
+        prefs.edit().putBoolean("is_logged_in", false).remove("user_id").apply();
+        startActivity(new Intent(this, LoginActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK));
+        finish();
+    }
+
+    private void showSyncDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        TextView msg = new TextView(this);
+        msg.setTextSize(13.5f);
+        String url = Sync.serverUrl(this), status = sync.statusText();
+        String last = sync.lastSync() > 0 ? "\nLast exchange: " + new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.US).format(new Date(sync.lastSync())) : "";
+        if (url.isEmpty()) msg.setText("This phone is not connected to a sync server, so the books stay on this phone only.\n\nRun the BlitzBook sync server, enter its address below and open the web portal from the same address: both will then show the same data.");
+        else if (status.equals("Synced") || status.equals("Syncing...")) msg.setText("Whatever is entered here appears in the web portal, and whatever is entered there appears here, within a few seconds while both are online.\n\nAccount: " + accountsDb.userIdentity(userId) + "\nServer: " + url + last);
+        else msg.setText((sync.lastError().isEmpty() ? status : sync.lastError()) + ".\n\nYou can keep working: everything entered here is sent as soon as the server is reachable again.\nServer: " + url + last);
+        box.addView(msg);
+        EditText eUrl = edit("https://books.example.com", false);
+        eUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        eUrl.setSingleLine(true);
+        eUrl.setText(Sync.customUrl(this));
+        box.addView(field("Sync server address" + (Sync.SERVER_URL.isEmpty() ? "" : " (blank = " + Sync.SERVER_URL + ")"), eUrl));
+        new AlertDialog.Builder(this).setTitle("Sync with Web Portal").setView(box)
+                .setPositiveButton("Sync Now", (d, w) -> {
+                    String entered = eUrl.getText().toString().trim();
+                    if (!entered.equals(Sync.customUrl(this))) Sync.setServerUrl(this, entered);
+                    if (!Sync.enabled(this)) { Toast.makeText(this, "Enter the sync server address first", Toast.LENGTH_SHORT).show(); return; }
+                    Toast.makeText(this, "Syncing...", Toast.LENGTH_SHORT).show();
+                    sync.now();
+                })
+                .setNegativeButton("Close", null).show();
+    }
+
     // locked = validity over: the dialog cannot be dismissed, only Activate or Logout
     private void showSubscriptionDialog(boolean locked) {
         if (subscriptionDialog != null && subscriptionDialog.isShowing()) return;
-        String identity = dbHelper.userIdentity(userId);
+        String identity = accountsDb.userIdentity(userId);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), dp(4));
         TextView msg = new TextView(this);
         msg.setTextSize(13.5f);
         String pending = Subscription.pendingRequest(this, userId);
-        msg.setText((locked ? (Subscription.isOnTrial(this, userId) ? "Your 10-minute trial has ended." : Subscription.statusText(this, userId) + ".")
+        msg.setText((locked ? (Subscription.isOnTrial(this, userId) ? "Your " + Subscription.TRIAL_LABEL + " trial has ended." : Subscription.statusText(this, userId) + ".")
                 + "\n\nA subscription is needed to continue." : Subscription.statusText(this, userId) + ".")
                 + "\n\nTap \"Buy / Renew\" to choose a plan and pay by UPI. The activation code is then sent to your mobile"
-                + (dbHelper.userEmail(userId).isEmpty() ? "" : " and email") + ". Enter it below."
+                + (accountsDb.userEmail(userId).isEmpty() ? "" : " and email") + ". Enter it below."
                 + (pending.isEmpty() ? "" : "\n\n" + pending));
         box.addView(msg);
         EditText code = edit("XXXX-XXXX-XXXX-XXXX", false);
@@ -455,6 +532,7 @@ public class MainActivity extends Activity {
             finish();
         }); else b.setNegativeButton("Close", null);
         subscriptionDialog = b.create();
+        subscriptionDialogLocked = locked;
         subscriptionDialog.setOnShowListener(d -> {
             subscriptionDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
                 int days = Subscription.activate(this, userId, identity, code.getText().toString());
@@ -487,7 +565,7 @@ public class MainActivity extends Activity {
 
     private void startUpiPayment(int days, int amount) {
         pendingPlanDays = days; pendingPlanAmount = amount;
-        String phone = dbHelper.userIdentity(userId);
+        String phone = accountsDb.userIdentity(userId);
         Intent pay = new Intent(Intent.ACTION_VIEW, Uri.parse(Subscription.upiUri(phone, days, amount)));
         Intent chooser = Intent.createChooser(pay, "Pay Rs " + amount + " with");
         if (pay.resolveActivity(getPackageManager()) == null) {
@@ -536,7 +614,7 @@ public class MainActivity extends Activity {
     // return it so the app activates at once. Without one: the request is sent to the vendor on WhatsApp /
     // SMS and the code comes back to the customer's mobile and email.
     private void submitActivationRequest(String txnRef, String status) {
-        String phone = dbHelper.userIdentity(userId), email = dbHelper.userEmail(userId);
+        String phone = accountsDb.userIdentity(userId), email = accountsDb.userEmail(userId);
         int days = pendingPlanDays, amount = pendingPlanAmount;
         String summary = "Plan " + days + " days, Rs " + amount + ", UPI ref " + (txnRef.isEmpty() ? "-" : txnRef) + ", paid on " + today();
         Subscription.savePendingRequest(this, userId, "Payment recorded: " + summary + ". Waiting for the activation code on " + phone + (email.isEmpty() ? "" : " / " + email) + ".");
@@ -1472,6 +1550,7 @@ public class MainActivity extends Activity {
 
     private void showDashboardView() {
         if (root == null) return;
+        onDashboard = true;
         root.removeAllViews();
 
         // Hero banner: theme-coloured gradient, company name, GSTIN and subscription chips
@@ -1746,6 +1825,7 @@ public class MainActivity extends Activity {
 
     private void showInvoiceView() {
         if (root == null) return;
+        onDashboard = false;
         root.removeAllViews();
 
         LinearLayout topNav = new LinearLayout(this);
@@ -2130,6 +2210,7 @@ public class MainActivity extends Activity {
                 new DashboardTile("Stock in Hand", R.drawable.ic_stock, 0xFF00ACC1, 0xFFE0F7FA, v -> { drawer.closeDrawers(); showStockDialog(); }),
                 new DashboardTile("Export / Import", R.drawable.ic_backup, 0xFF546E7A, 0xFFECEFF1, v -> { drawer.closeDrawers(); showBackupDialog(); }),
                 new DashboardTile("Subscription", R.drawable.ic_key, 0xFF00897B, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
+                new DashboardTile("Sync", R.drawable.ic_sync, 0xFF3949AB, 0xFFE8EAF6, v -> { drawer.closeDrawers(); showSyncDialog(); }),
         };
         ScrollView menuScroll = new ScrollView(this);
         menuScroll.setVerticalScrollBarEnabled(false);
@@ -2137,6 +2218,11 @@ public class MainActivity extends Activity {
         menuBox.setOrientation(LinearLayout.VERTICAL);
         menuBox.setPadding(dp(8), dp(10), dp(8), dp(4));
         menuBox.addView(tileGrid(menu, 3, 10.5f, 10));
+        syncStatusTv = new TextView(this);
+        syncStatusTv.setTextSize(11.5f); syncStatusTv.setTextColor(0xFF607D8B); syncStatusTv.setPadding(dp(8), dp(10), dp(8), dp(4));
+        syncStatusTv.setText(Sync.enabled(this) ? "Sync: Waiting" : "Sync: This phone only");
+        syncStatusTv.setOnClickListener(v -> { drawer.closeDrawers(); showSyncDialog(); });
+        menuBox.addView(syncStatusTv);
         menuScroll.addView(menuBox);
         side.addView(menuScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -2759,7 +2845,9 @@ public class MainActivity extends Activity {
         addColumnIfMissing(db, "items_master", "hidden", "INTEGER DEFAULT 0");
         addColumnIfMissing(db, "items_master", "item_code", "TEXT");
         addColumnIfMissing(db, "company_master", "account_holder", "TEXT");
+        addColumnIfMissing(db, "invoices", "order_no", "TEXT");
         Ledger.createTables(db);
+        Sync.prepare(db);
     }
 
     private void addColumnIfMissing(SQLiteDatabase db, String table, String column, String type) {
@@ -3038,6 +3126,7 @@ public class MainActivity extends Activity {
             transporter.setText(getString(c, "transporter"));
             vehicleNumber.setText(getString(c, "vehicle_number"));
             deliveryNote.setText(getString(c, "delivery_challan"));
+            buyerOrderNo.setText(getString(c, "order_no"));
             buyerOrderDate.setText(getString(c, "order_date"));
             referenceNoDate.setText(getString(c, "ref_no"));
             otherInfo.setText(getString(c, "additional_info"));
@@ -3169,7 +3258,7 @@ public class MainActivity extends Activity {
         cv.put("consignee_phone", consigneePhone.getText().toString()); cv.put("consignee_email", consigneeEmail.getText().toString().trim()); cv.put("consignee_gstin", consigneeGstin.getText().toString()); cv.put("consignee_state", consigneeState.getSelectedItem().toString());
         cv.put("destination", destination.getText().toString()); cv.put("vehicle", vehicle.getText().toString()); cv.put("others_checked", othersCb.isChecked() ? 1 : 0);
         cv.put("transporter", transporter.getText().toString()); cv.put("vehicle_number", vehicleNumber.getText().toString());
-        cv.put("delivery_challan", deliveryNote.getText().toString()); cv.put("order_date", buyerOrderDate.getText().toString());
+        cv.put("delivery_challan", deliveryNote.getText().toString()); cv.put("order_no", buyerOrderNo.getText().toString().trim()); cv.put("order_date", buyerOrderDate.getText().toString());
         cv.put("ref_no", referenceNoDate.getText().toString()); cv.put("additional_info", otherInfo.getText().toString());
         // Under reverse charge no GST is collected, so the sales register records none
         boolean rcm = isRcm();
@@ -4535,6 +4624,7 @@ public class MainActivity extends Activity {
                 cv.put("branch_name", eBranch.getText().toString().trim());
                 cv.put("gst_reg_type", gstType);
                 cv.put("line_of_activity", (String) sActivity.getSelectedItem());
+                cv.put("invoice_format", invoiceFormatStr);
 
                 db.delete("company_master", null, null);
                 db.insert("company_master", null, cv);

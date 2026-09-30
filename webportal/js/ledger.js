@@ -1,139 +1,364 @@
-/* BlitzBook web portal - Parties, Item master, Purchases & Quotations, Expenses, Journal, Stock in Hand. */
+/* BlitzBook web portal - Parties, Item master, Purchases & Quotations, Expenses, Journal, Stock in Hand, and the
+   figures behind Profit & Loss and the Balance Sheet (Books, a port of Ledger.java so both show the same numbers). */
 (function (global) {
   'use strict';
   const { esc, num, money } = U;
   const EXPENSE_CATS = ['Rent', 'Salaries & Wages', 'Electricity & Water', 'Transport & Fuel', 'Office Supplies', 'Marketing & Advertising', 'Repairs & Maintenance', 'Professional Fees', 'Bank Charges', 'Telephone & Internet', 'Packing Material', 'Insurance', 'Taxes & Licences', 'Other'];
   const TDS_SECTIONS = ['194C Contractors', '194J Professional / Technical', '194H Commission', '194I Rent', '194Q Purchase of Goods', '194A Interest', 'Other'];
-  const BUILT_IN_ACCOUNTS = [['Cash', 'Cash'], ['Bank', 'Bank'], ['Capital', 'Capital'], ['Drawings', 'Capital'], ['Sales', 'Income'], ['Other Income', 'Income'], ['Purchases', 'Expense'], ['Depreciation', 'Expense'], ['Fixed Assets', 'Asset'], ['Loans', 'Liability'],
-    ['Output CGST', 'Liability'], ['Output SGST', 'Liability'], ['Output IGST', 'Liability'], ['Input CGST', 'Asset'], ['Input SGST', 'Asset'], ['Input IGST', 'Asset'], ['RCM GST Payable', 'Liability'], ['TDS Payable', 'Liability']];
-  const ACCOUNT_TYPES = [['Customer', 'Customer (Party)'], ['Supplier', 'Supplier (Party)'], ['Expense', 'Expense account (e.g. Depreciation, Interest)'], ['Income', 'Income account'], ['Asset', 'Asset account (e.g. Vehicle, Machinery)'], ['Liability', 'Liability account (e.g. Loan from bank)'], ['Bank', 'Bank account'], ['Cash', 'Cash / petty cash']];
-  function nextNo(col, prefix) { let max = 0; Store.list(col).forEach(x => { if (x.no && x.no.startsWith(prefix + '-')) max = Math.max(max, parseInt(x.no.slice(prefix.length + 1), 10) || 0); }); return prefix + '-' + String(max + 1).padStart(4, '0'); }
+  const KIND_LABEL = { PUR: 'Purchase', QTN: 'Quotation', STK: 'Stock' };
+
+  // ------------------------------------------------------------ books of account
+  // What an account is for. Decides where a journal balance lands in the statements.
+  const N = { CASH: 'Cash', BANK: 'Bank', CUSTOMER: 'Customer (Party)', SUPPLIER: 'Supplier (Party)', ASSET: 'Asset', LIABILITY: 'Liability', CAPITAL: 'Capital / Drawings', INCOME: 'Income', EXPENSE: 'Expense', PURCHASES: 'Purchases',
+    OUT_CGST: 'Output CGST', OUT_SGST: 'Output SGST', OUT_IGST: 'Output IGST', IN_CGST: 'Input CGST', IN_SGST: 'Input SGST', IN_IGST: 'Input IGST', RCM: 'RCM GST Payable', TDS: 'TDS Payable' };
+  const BUILT_IN = [['Cash', N.CASH], ['Bank', N.BANK], ['Capital', N.CAPITAL], ['Drawings', N.CAPITAL], ['Sales', N.INCOME], ['Other Income', N.INCOME], ['Purchases', N.PURCHASES], ['Depreciation', N.EXPENSE], ['Fixed Assets', N.ASSET], ['Loans', N.LIABILITY],
+    ['Output CGST', N.OUT_CGST], ['Output SGST', N.OUT_SGST], ['Output IGST', N.OUT_IGST], ['Input CGST', N.IN_CGST], ['Input SGST', N.IN_SGST], ['Input IGST', N.IN_IGST], ['RCM GST Payable', N.RCM], ['TDS Payable', N.TDS]];
+  // Names used by entries made before accounts existed
+  const LEGACY_NATURE = { 'Receivables (Customers)': N.CUSTOMER, 'Payables (Suppliers)': N.SUPPLIER, 'Sales / Other Income': N.INCOME, 'Expenses': N.EXPENSE, 'GST Payable': N.OUT_CGST };
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' });
+
+  const Books = {
+    N, BUILT_IN,
+    // Built-in accounts, then every customer and supplier, then user-created accounts
+    accounts() {
+      const out = BUILT_IN.map(a => ({ name: a[0], nature: a[1], builtIn: true }));
+      Store.list('contacts').slice().sort(byName).forEach(c => { const name = String(c.name || '').trim(); if (name) out.push({ name, nature: c.type === 'Supplier' ? N.SUPPLIER : N.CUSTOMER }); });
+      Store.list('accounts').slice().sort(byName).forEach(a => out.push({ name: a.name, nature: a.nature }));
+      return out;
+    },
+    natures() { const m = new Map(); this.accounts().forEach(a => m.set(a.name.toLowerCase(), a.nature)); return (name) => m.get(String(name).toLowerCase()) || LEGACY_NATURE[name] || N.ASSET; },
+    // Both bounds inclusive (timestamps at midnight); a null bound is open-ended. Unreadable dates are left out.
+    inRange(date, from, to) { const d = U.dateMs(date); return !!d && (from == null || d >= from) && (to == null || d <= to); },
+    // Debit balance (positive) or credit balance (negative) of every account touched by journal lines
+    journalBalances(from, to) {
+      const bal = new Map();
+      Store.list('journal').forEach(j => { if (!this.inRange(j.date, from, to)) return; j.lines.forEach(l => { const k = String(l.account).toLowerCase(), cur = bal.get(k) || { name: l.account, v: 0 }; cur.v += l.side === 'Dr' ? num(l.amount) : -num(l.amount); bal.set(k, cur); }); });
+      return Array.from(bal.values()).sort(byName);
+    },
+    // Older purchases only stored the GST total; treat those as intra-state (CGST + SGST)
+    gstSplit(p) { const c = num(p.cgst), s = num(p.sgst), i = num(p.igst), g = num(p.gst); return !c && !s && !i && g ? [g / 2, g / 2, 0] : [c, s, i]; },
+    expenseAmounts(e) { const gst = num(e.gst), taxable = num(e.taxable); return { taxable: !taxable && !gst ? num(e.amount) : taxable, gst, cgst: num(e.cgst), sgst: num(e.sgst), igst: num(e.igst), amount: num(e.amount) }; },
+
+    // Quantities bought as stock (purchases and uploaded stock, not quotations) less quantities invoiced, by item
+    // name. asAt limits both sides to that date; null means everything to date. The rate is the latest purchase's.
+    stock(asAt) {
+      const lines = new Map();
+      Store.list('purchases').filter(p => p.kind !== 'QTN' && this.inRange(p.date, null, asAt))
+        .sort((a, b) => U.dateMs(a.date) - U.dateMs(b.date) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }))
+        .forEach(p => p.items.forEach(it => {
+          const name = String(it.name || '').trim(); if (!it.stock || !name) return;
+          const k = name.toLowerCase(); let l = lines.get(k);
+          if (!l) { l = { name, hsn: '', uqc: '', purchased: 0, sold: 0, lastRate: 0 }; lines.set(k, l); }
+          if (it.hsn && !l.hsn) l.hsn = it.hsn;
+          if (it.uqc) l.uqc = it.uqc;
+          l.purchased += num(it.qty); l.lastRate = num(it.rate);
+        }));
+      if (!lines.size) return [];
+      Store.list('invoices').forEach(inv => { if (inv.kind !== 'invoice' || !this.inRange(inv.date, null, asAt)) return; inv.items.forEach(it => { const l = lines.get(String(it.desc || '').trim().toLowerCase()); if (l) l.sold += num(it.qty); }); });
+      return Array.from(lines.values()).sort(byName).map(l => Object.assign(l, { onHand: l.purchased - l.sold, value: Math.max(0, l.purchased - l.sold) * l.lastRate }));
+    },
+
+    profitLoss(from, to) {
+      const pl = { invoices: 0, purchases: 0, rcmInvoices: 0, rcmPurchases: 0, creditNotes: 0, debitNotes: 0, sales: 0, salesReturns: 0, purchasesValue: 0, purchaseReturns: 0, rcmGst: 0, otherIncome: 0,
+        outCgst: 0, outSgst: 0, outIgst: 0, inCgst: 0, inSgst: 0, inIgst: 0, expensesByCategory: new Map() };
+      const addExp = (k, v) => pl.expensesByCategory.set(k, (pl.expensesByCategory.get(k) || 0) + v);
+      Store.list('invoices').forEach(i => {
+        if (i.kind !== 'invoice' || !this.inRange(i.date, from, to)) return;
+        pl.invoices++; pl.sales += num(i.totals.taxable);
+        // GST on a reverse-charge sale is paid by the buyer, so nothing is collected on it
+        if (i.rcm) pl.rcmInvoices++; else { pl.outCgst += num(i.totals.cgst); pl.outSgst += num(i.totals.sgst); pl.outIgst += num(i.totals.igst); }
+      });
+      Store.list('purchases').forEach(p => {
+        if (p.kind !== 'PUR' || !this.inRange(p.date, from, to)) return;
+        pl.purchases++; pl.purchasesValue += num(p.taxable);
+        const s = this.gstSplit(p); pl.inCgst += s[0]; pl.inSgst += s[1]; pl.inIgst += s[2];
+        if (p.rcm) { pl.rcmPurchases++; pl.rcmGst += num(p.gst); }
+      });
+      Store.list('notes').forEach(n => {
+        if (!this.inRange(n.date, from, to)) return;
+        if (n.kind === 'CN') { pl.creditNotes++; pl.salesReturns += num(n.taxable); pl.outCgst -= num(n.cgst); pl.outSgst -= num(n.sgst); pl.outIgst -= num(n.igst); }
+        else { pl.debitNotes++; pl.purchaseReturns += num(n.taxable); pl.inCgst -= num(n.cgst); pl.inSgst -= num(n.sgst); pl.inIgst -= num(n.igst); }
+      });
+      Store.list('expenses').forEach(x => {
+        if (!this.inRange(x.date, from, to)) return;
+        const e = this.expenseAmounts(x);
+        addExp(String(x.category || '').trim() || 'Other', e.taxable);
+        pl.inCgst += e.cgst; pl.inSgst += e.sgst; pl.inIgst += e.igst;
+        if (x.rcm) pl.rcmGst += e.gst;
+      });
+      // Journal: income and expense accounts by name (Depreciation, Interest ...), purchases into cost of goods
+      const nature = this.natures();
+      this.journalBalances(from, to).forEach(b => { const n = nature(b.name); if (n === N.INCOME) pl.otherIncome -= b.v; else if (n === N.PURCHASES) pl.purchasesValue += b.v; else if (n === N.EXPENSE) addExp(b.name, b.v); });
+      pl.expensesByCategory = new Map(Array.from(pl.expensesByCategory.entries()).sort((a, b) => a[0].localeCompare(b[0])));
+      pl.outputGst = pl.outCgst + pl.outSgst + pl.outIgst; pl.inputGst = pl.inCgst + pl.inSgst + pl.inIgst;
+      pl.expenses = Array.from(pl.expensesByCategory.values()).reduce((s, v) => s + v, 0);
+      pl.grossProfit = pl.sales - pl.salesReturns + pl.otherIncome - (pl.purchasesValue - pl.purchaseReturns);
+      pl.netProfit = pl.grossProfit - pl.expenses;
+      return pl;
+    },
+
+    /* Position as at a date: money received on invoices less purchases and expenses paid gives cash and bank;
+       credit sales are receivables, credit purchases and expenses are payables; credit and debit notes adjust those;
+       stock is valued at the last purchase rate; GST collected and paid are carried as Output and Input GST; TDS
+       deducted from suppliers is a liability until paid; journal vouchers move every named account. Owner's capital
+       is the balancing figure (accumulated profit). */
+    balanceSheet(asAt) {
+      const bs = { cash: 0, bank: 0, receivables: 0, stockValue: 0, payables: 0, rcmPayable: 0, tdsPayable: 0, outCgst: 0, outSgst: 0, outIgst: 0, inCgst: 0, inSgst: 0, inIgst: 0, parties: [], assets: [], liabilities: [] };
+      const money = (mode, amt, credit) => { const m = String(mode || '').toLowerCase(); if (m === 'credit') credit(amt); else if (m === 'cash') bs.cash += amt; else bs.bank += amt; };
+      Store.list('invoices').forEach(i => {
+        if (i.kind !== 'invoice' || !this.inRange(i.date, null, asAt)) return;
+        if (!i.rcm) { bs.outCgst += num(i.totals.cgst); bs.outSgst += num(i.totals.sgst); bs.outIgst += num(i.totals.igst); }
+        money(i.payment, num(i.totals.rounded) || num(i.totals.grand), (v) => bs.receivables += v);
+      });
+      Store.list('purchases').forEach(p => {
+        if (p.kind !== 'PUR' || !this.inRange(p.date, null, asAt)) return;
+        bs.tdsPayable += num(p.tds);
+        const s = this.gstSplit(p); bs.inCgst += s[0]; bs.inSgst += s[1]; bs.inIgst += s[2];
+        // Reverse charge GST is owed to the government by us (and claimable as input credit once paid)
+        if (p.rcm) bs.rcmPayable += num(p.gst);
+        money(p.paidBy, -(num(p.total) - num(p.tds)), (v) => bs.payables -= v);
+      });
+      Store.list('expenses').forEach(x => {
+        if (!this.inRange(x.date, null, asAt)) return;
+        const e = this.expenseAmounts(x);
+        bs.inCgst += e.cgst; bs.inSgst += e.sgst; bs.inIgst += e.igst;
+        if (x.rcm) bs.rcmPayable += e.gst;
+        money(x.paidBy, -e.amount, (v) => bs.payables -= v);
+      });
+      Store.list('notes').forEach(n => {
+        if (!this.inRange(n.date, null, asAt)) return;
+        const total = num(n.total);
+        if (n.kind === 'CN') { bs.outCgst -= num(n.cgst); bs.outSgst -= num(n.sgst); bs.outIgst -= num(n.igst); money(n.settle, -total, (v) => bs.receivables += v); }
+        else { bs.inCgst -= num(n.cgst); bs.inSgst -= num(n.sgst); bs.inIgst -= num(n.igst); money(n.settle, total, (v) => bs.payables -= v); }
+      });
+      bs.stockValue = this.stock(asAt).reduce((s, l) => s + l.value, 0);
+      const nature = this.natures();
+      this.journalBalances(null, asAt).forEach(b => {
+        const bal = b.v; if (!bal) return;
+        switch (nature(b.name)) {
+          case N.CASH: bs.cash += bal; break;
+          case N.BANK: if (b.name.toLowerCase() === 'bank') bs.bank += bal; else bs.assets.push([b.name, bal]); break;
+          case N.CUSTOMER: case N.SUPPLIER: bs.parties.push([b.name, bal]); if (bal > 0) bs.receivables += bal; else bs.payables -= bal; break;
+          case N.OUT_CGST: bs.outCgst -= bal; break;
+          case N.OUT_SGST: bs.outSgst -= bal; break;
+          case N.OUT_IGST: bs.outIgst -= bal; break;
+          case N.IN_CGST: bs.inCgst += bal; break;
+          case N.IN_SGST: bs.inSgst += bal; break;
+          case N.IN_IGST: bs.inIgst += bal; break;
+          case N.RCM: bs.rcmPayable -= bal; break;
+          case N.TDS: bs.tdsPayable -= bal; break;
+          case N.ASSET: bs.assets.push([b.name, bal]); break;
+          case N.LIABILITY: bs.liabilities.push([b.name, -bal]); break;
+          default: break; // capital, drawings, income, expenses, purchases sit in the balancing capital
+        }
+      });
+      const sum = (l) => l.reduce((s, x) => s + x[1], 0);
+      bs.totalAssets = bs.cash + bs.bank + bs.receivables + bs.stockValue + bs.inCgst + bs.inSgst + bs.inIgst + sum(bs.assets);
+      bs.totalLiabilities = bs.payables + bs.outCgst + bs.outSgst + bs.outIgst + bs.rcmPayable + bs.tdsPayable + sum(bs.liabilities);
+      bs.capital = bs.totalAssets - bs.totalLiabilities;
+      return bs;
+    }
+  };
+
+  // PUR-0001 / QTN-0001 / STK-0001: one running series per kind
+  function nextNo(kind) { let max = 0; Store.list('purchases').forEach(x => { const m = new RegExp('^' + kind + '-\\s*(\\d+)\\s*$').exec(x.no || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); }); return kind + '-' + String(max + 1).padStart(4, '0'); }
   function listTable(headers, rows, emptyMsg) { return '<div class="tablewrap">' + (rows.length ? '<table class="list cards"><thead><tr>' + headers.map(h => '<th class="' + (h.startsWith('#') ? 'num' : '') + '">' + esc(h.replace('#', '')) + '</th>').join('') + '</tr></thead><tbody>' + rows.join('') + '</tbody></table>' : '<div class="empty">' + esc(emptyMsg) + '</div>') + '</div>'; }
   function td(label, v, cls) { return '<td class="' + (cls || '') + '" data-l="' + esc(label) + '">' + v + '</td>'; }
+  // Column of an uploaded sheet by its heading; without a heading row the app's column order applies
+  function columns(rows, first, order) {
+    const head = rows.length && String(rows[0][0] || '').trim().toLowerCase() === first ? rows[0].map(c => String(c).trim().toLowerCase()) : null;
+    const at = {}; order.forEach((name, i) => { at[name] = head ? head.findIndex(c => c.replace(/[^a-z]/g, '').startsWith(name)) : i; });
+    return { body: head ? rows.slice(1) : rows, get: (r, name) => at[name] >= 0 && r[at[name]] != null ? String(r[at[name]]).trim() : '' };
+  }
 
   // ------------------------------------------------------------ contacts
   const Contacts = {
+    select: false,
     open(p) {
       const type = p.type || 'Customer';
-      const list = Store.list('contacts').filter(c => c.type === type);
-      const root = App.view(App.header(type + 's', '<div class="btnrow" style="margin:0"><button class="btn sm" id="cAdd">+ Add ' + type + '</button><button class="btn sm outline" id="cCsv">Upload CSV</button><button class="btn sm outline" id="cTpl">Template</button><button class="btn sm outline" id="cSwap">' + (type === 'Customer' ? 'Suppliers' : 'Customers') + '</button></div>') +
-        listTable(['Name', 'Phone', 'GSTIN', 'State', 'TDS', ''], list.map(c => '<tr>' + td('Name', '<b>' + esc(c.name) + '</b>' + (c.address ? '<div class="small muted">' + esc(c.address) + '</div>' : '')) + td('Phone', esc(c.phone) + (c.email ? '<div class="small muted">' + esc(c.email) + '</div>' : '')) + td('GSTIN', esc(c.gstin)) + td('State', esc(U.stateName(c.state))) + td('TDS', c.tds ? esc(c.tdsSection + ' @ ' + c.tdsRate + '%') : '-') +
-          '<td class="actions"><button class="btn sm outline" data-e="' + c.id + '">Edit</button><button class="btn sm red" data-d="' + c.id + '">Delete</button></td></tr>'), 'No ' + type.toLowerCase() + 's yet.'));
+      const list = Biz.contactsOf(type);
+      const root = App.view(App.header(type + ' Contacts', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="cAdd">+ Add ' + type + '</button><button class="btn sm outline" id="cCsv">Upload CSV / Excel</button><button class="btn sm outline" id="cTpl">Template</button><button class="btn sm outline" id="cSel">' + (Contacts.select ? 'Done' : 'Select') + '</button><button class="btn sm outline" id="cSwap">' + (type === 'Customer' ? 'Suppliers' : 'Customers') + '</button></div>') +
+        (Contacts.select ? '<div class="btnrow"><label class="check"><input type="checkbox" id="selAll"> Select all</label><button class="btn sm red" id="bDel">Delete selected</button></div>' : '') +
+        listTable(['', 'Name', 'Phone', 'GSTIN', 'State', 'TDS', ''], list.map(c => '<tr>' + td('', Contacts.select ? '<input type="checkbox" class="selbox" data-id="' + esc(c.id) + '">' : '') + td('Name', '<b>' + esc(c.name) + '</b>' + (c.address ? '<div class="small muted">' + esc(c.address) + '</div>' : '')) + td('Phone', esc(c.phone) + (c.email ? '<div class="small muted">' + esc(c.email) + '</div>' : '')) + td('GSTIN', esc(c.gstin)) + td('State', esc(U.stateName(c.state))) + td('TDS', c.tds ? esc(U.fmtQty(c.tdsRate) + '%') : '-') +
+          '<td class="actions">' + (Contacts.select ? '' : '<button class="btn sm outline" data-e="' + esc(c.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(c.id) + '">Delete</button>') + '</td></tr>'), 'No ' + type + ' contacts found. Click "+ Add ' + type + '" to create one.'));
       App.wireBack(root);
-      $('#cAdd').onclick = () => Contacts.edit({ type }); $('#cSwap').onclick = () => App.go('contacts', { type: type === 'Customer' ? 'Supplier' : 'Customer' });
-      $('#cTpl').onclick = () => UI.download('parties_template.csv', UI.csv([['Type', 'Name', 'Phone', 'Email', 'GSTIN', 'State code', 'Address'], ['Customer', 'ABC Traders', '9876543210', 'abc@example.com', '36AAOFT3399K1ZB', '36', '8-2-287/4/1, Road No 14, Hyderabad']]), 'text/csv');
-      $('#cCsv').onclick = () => UI.pickFile('.csv', (text) => { const rows = UI.parseCsv(text).slice(1); const cs = Store.list('contacts'); let n = 0; rows.forEach(r => { if (!r[1]) return; cs.push({ id: U.uid(), type: /supp/i.test(r[0] || '') ? 'Supplier' : 'Customer', name: r[1].trim(), phone: (r[2] || '').trim(), email: (r[3] || '').trim(), gstin: (r[4] || '').trim().toUpperCase(), state: U.stateByCode((r[5] || '').trim().padStart(2, '0')) || '', address: (r[6] || '').trim().toUpperCase(), tds: false }); n++; }); Store.saveList('contacts', cs); UI.toast(n + ' parties imported'); Contacts.open({ type }); });
+      $('#cAdd').onclick = () => Contacts.edit({ type }); $('#cSwap').onclick = () => { Contacts.select = false; App.go('contacts', { type: type === 'Customer' ? 'Supplier' : 'Customer' }); };
+      $('#cSel').onclick = () => { Contacts.select = !Contacts.select; Contacts.open({ type }); };
+      $('#cTpl').onclick = () => { UI.download('BlitzBook_Contacts_Template.csv', 'Name,Phone,Email,GSTIN,Address,State\nRamesh Traders,9876543210,ramesh@gmail.com,37ABCDE1234F1ZZ,100 Feet Road Vijayawada,Andhra Pradesh\nSuresh Enterprises,9123456789,suresh@gmail.com,36XYZAB5678G2ZY,MG Road Hyderabad,Telangana\n', 'text/csv'); UI.toast('Template downloaded'); };
+      $('#cCsv').onclick = () => UI.pickSheet((rows) => Contacts.importRows(rows, type));
+      if (Contacts.select) {
+        const picked = () => $$('.selbox:checked', root).map(b => b.dataset.id);
+        $('#selAll').onchange = e => $$('.selbox', root).forEach(b => b.checked = e.target.checked);
+        $('#bDel').onclick = () => { const ids = picked(); if (!ids.length) return UI.toast('Tick the contacts first'); UI.confirm('Delete Contacts', 'Delete ' + ids.length + ' selected contacts?', () => { Store.saveList('contacts', Store.list('contacts').filter(c => !ids.includes(c.id))); UI.toast('Contacts deleted'); Contacts.open({ type }); }, 'Delete'); };
+      }
       $$('[data-e]', root).forEach(b => b.onclick = () => Contacts.edit(Store.find('contacts', b.dataset.e)));
-      $$('[data-d]', root).forEach(b => b.onclick = () => UI.confirm('Delete party', 'Delete this party?', () => { Store.delete('contacts', b.dataset.d); Contacts.open({ type }); }, 'Delete'));
+      $$('[data-d]', root).forEach(b => b.onclick = () => { const c = Store.find('contacts', b.dataset.d); UI.confirm('Delete Contact', 'Are you sure you want to delete contact "' + c.name + '"?', () => { Store.delete('contacts', c.id); UI.toast('Contact "' + c.name + '" deleted'); Contacts.open({ type }); }, 'Delete'); });
     },
+    // Columns: Name, Phone, Email, GSTIN, Address, State (the app's template). The same name updates the contact.
+    importRows(rows, type) {
+      const col = columns(rows, rows.length && /^type$/i.test(String(rows[0][0]).trim()) ? 'type' : 'name', ['name', 'phone', 'email', 'gstin', 'address', 'state']);
+      const head = rows.length ? rows[0].map(c => String(c).trim().toLowerCase()) : [], typeAt = head.indexOf('type');
+      const list = Store.list('contacts'); let added = 0, updated = 0;
+      col.body.forEach(r => {
+        const name = col.get(r, 'name'); if (!name) return;
+        const gstin = col.get(r, 'gstin').toUpperCase(), state = col.get(r, 'state');
+        const f = { name, phone: col.get(r, 'phone'), email: col.get(r, 'email').toLowerCase(), gstin, address: col.get(r, 'address'), state: U.matchState(state, gstin) || state };
+        const ex = list.find(x => x.name.toLowerCase() === name.toLowerCase());
+        if (ex) { Object.assign(ex, f, { updatedAt: Date.now() }); updated++; }
+        else { list.push(Object.assign({ id: U.uid(), createdAt: Date.now(), type: typeAt >= 0 ? (/supp/i.test(r[typeAt] || '') ? 'Supplier' : 'Customer') : type, tds: false, tdsSection: '', tdsRate: 0 }, f)); added++; }
+      });
+      if (!added && !updated) { UI.toast('No contacts found in file. Use the template format.', 4000); return; }
+      Store.saveList('contacts', list);
+      UI.toast(added + ' contacts added, ' + updated + ' updated', 4000); Contacts.open({ type });
+    },
+    // Create or edit a customer / supplier, including the TDS to deduct or expect on their bills
     edit(c, onSaved) {
-      c = Object.assign({ type: 'Customer', name: '', phone: '', email: '', gstin: '', state: U.stateByCode(Biz.sellerStateCode()), address: '', tds: false, tdsSection: TDS_SECTIONS[0], tdsRate: '' }, c || {});
-      const bg = UI.modal({ title: c.id ? 'Edit Party' : 'Add Party', body: '<div class="grid2">' +
-        UI.field('Contact Type', UI.select('pType', ['Customer', 'Supplier'], c.type), { req: true }) + UI.field('Name', UI.input('pName', c.name), { req: true }) +
-        UI.field('Phone', UI.input('pPhone', c.phone, { type: 'tel', placeholder: '10 digits' })) + UI.field('Email', UI.input('pEmail', c.email, { type: 'email' })) +
-        UI.field('GSTIN', UI.input('pGstin', c.gstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) + UI.field('State', UI.select('pState', U.STATES, c.state)) +
+      c = Object.assign({ type: 'Customer', name: '', phone: '', email: '', gstin: '', state: '', address: '', tds: false, tdsSection: TDS_SECTIONS[0], tdsRate: '' }, c || {});
+      const bg = UI.modal({ title: (c.id ? 'Edit Contact' : 'Create Contact') + ' (' + c.type + ')', body: '<div class="grid2">' +
+        UI.field('Contact Type', UI.select('pType', ['Customer', 'Supplier'], c.type), { req: true }) + UI.field('Name / Company Name', UI.input('pName', c.name), { req: true }) +
+        UI.field('Phone (10 digits)', UI.input('pPhone', c.phone, { type: 'tel', attrs: ' maxlength="10"' })) + UI.field('Email Address', UI.input('pEmail', c.email, { type: 'email' })) +
+        UI.field('GSTIN Number', UI.input('pGstin', c.gstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) + UI.field('State', UI.select('pState', U.STATES, U.matchState(c.state, c.gstin) || U.stateByCode(Biz.sellerStateCode()))) +
         UI.field('Address', '<textarea id="pAddr">' + esc(c.address) + '</textarea>', { span: true }) +
-        '<div class="field span">' + UI.check('pTds', 'TDS applicable', c.tds) + '</div><div id="tdsBox" class="grid2 keep2 span ' + (c.tds ? '' : 'hidden') + '">' + UI.field('TDS Section', UI.select('pTdsSec', TDS_SECTIONS, c.tdsSection)) + UI.field('TDS Rate %', UI.input('pTdsRate', c.tdsRate, { type: 'number', attrs: ' step="any" min="0" max="30"' })) + '</div></div>',
-        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
+        '<div class="field span">' + UI.check('pTds', 'TDS applicable', c.tds) + '</div><div id="tdsBox" class="grid2 keep2 span ' + (c.tds ? '' : 'hidden') + '">' + UI.field('TDS Section', UI.select('pTdsSec', TDS_SECTIONS, c.tdsSection)) + UI.field('TDS Rate %', UI.input('pTdsRate', c.tdsRate || '', { type: 'number', placeholder: 'e.g. 1, 2, 10', attrs: ' step="any" min="0" max="30"' })) +
+        '<div class="hint span" style="grid-column:1/-1">Supplier: this rate is deducted from their bills and shown as TDS payable. Customer: they deduct it from your invoices.</div></div></div>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save Contact', cls: 'green', onClick: (bg) => {
           const v = (id) => UI.val(id, bg);
-          Object.assign(c, { type: v('pType'), name: v('pName').trim(), phone: v('pPhone').trim(), email: v('pEmail').trim(), gstin: v('pGstin').trim().toUpperCase(), state: v('pState'), address: v('pAddr').trim().toUpperCase(), tds: v('pTds'), tdsSection: v('pTdsSec'), tdsRate: num(v('pTdsRate')) });
-          if (!c.name) { UI.toast('Name is required'); return false; } if (!U.isValidPhone(c.phone)) { UI.toast('Phone must be 10 digits'); return false; }
-          if (!U.isValidEmail(c.email)) { UI.toast('Enter a valid email'); return false; } if (!U.isValidGstin(c.gstin)) { UI.toast('Enter a valid 15-character GSTIN'); return false; }
-          if (c.tds && !(c.tdsRate > 0 && c.tdsRate <= 30)) { UI.toast('TDS rate must be between 0 and 30'); return false; }
+          const tds = v('pTds');
+          Object.assign(c, { type: v('pType'), name: v('pName').trim(), phone: v('pPhone').trim(), email: v('pEmail').trim().toLowerCase(), gstin: v('pGstin').trim().toUpperCase(), state: v('pState'), address: v('pAddr').trim().toUpperCase(), tds, tdsSection: tds ? v('pTdsSec') : '', tdsRate: tds ? num(v('pTdsRate')) : 0 });
+          if (!c.name) { UI.mark('pName', true, bg); UI.toast('Name is required'); return false; }
+          if (!U.isValidPhone(c.phone)) { UI.mark('pPhone', true, bg); UI.toast('Enter correct contact phone number'); return false; }
+          if (!U.isValidEmail(c.email)) { UI.mark('pEmail', true, bg); UI.toast('Enter correct contact email address'); return false; }
+          if (!U.isValidGstin(c.gstin)) { UI.mark('pGstin', true, bg); UI.toast('Enter a valid contact GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)'); return false; }
+          if (c.tds && !(c.tdsRate > 0 && c.tdsRate <= 30)) { UI.mark('pTdsRate', true, bg); UI.toast('Enter the TDS rate'); return false; }
           if (c.id) Store.update('contacts', c); else Store.add('contacts', c);
-          UI.toast('Party saved'); if (onSaved) onSaved(c); else App.go('contacts', { type: c.type });
+          UI.toast(c.type + ' contact saved'); if (onSaved) onSaved(c); else App.go('contacts', { type: c.type });
         } }] });
       $('#pTds', bg).addEventListener('change', e => $('#tdsBox', bg).classList.toggle('hidden', !e.target.checked));
-      $('#pGstin', bg).addEventListener('input', e => { const g = e.target.value.trim(); if (g.length >= 2 && U.stateByCode(g.slice(0, 2))) $('#pState', bg).value = U.stateByCode(g.slice(0, 2)); });
+      $('#pGstin', bg).addEventListener('input', e => { const g = e.target.value.trim(); e.target.classList.toggle('err', g.length >= 15 && !U.isValidGstin(g)); if (g.length >= 2 && U.stateByCode(g.slice(0, 2))) $('#pState', bg).value = U.stateByCode(g.slice(0, 2)); });
     }
   };
   App.routes.contacts = (p) => Contacts.open(p);
 
   // ------------------------------------------------------------ items master
+  // Normal mode: add / edit / delete one at a time. Select mode: tick many, then delete or update them together.
   const Items = {
+    select: false,
     open() {
-      const list = Store.list('items').slice().sort((a, b) => a.name.localeCompare(b.name));
-      const root = App.view(App.header('Item Master List', '<div class="btnrow" style="margin:0"><button class="btn sm" id="itAdd">+ Add Item</button><button class="btn sm outline" id="itSel">Select</button></div>') +
-        '<div id="bulk" class="btnrow hidden"><label class="check"><input type="checkbox" id="selAll"> Select all</label><button class="btn sm outline" id="bCat">Set category</button><button class="btn sm outline" id="bGst">Set GST %</button><button class="btn sm red" id="bDel">Delete</button></div>' +
-        listTable(['', 'Item', 'Code', 'Category', 'HSN/SAC', 'GST %', '#Unit Price', ''], list.map(i => '<tr>' + td('', '<input type="checkbox" class="selbox hidden" data-id="' + i.id + '">') + td('Item', '<b>' + esc(i.name) + '</b>') + td('Code', esc(i.code || '')) + td('Category', esc(i.category || '')) + td('HSN/SAC', esc(i.hsn || '')) + td('GST %', esc(i.gst || '0') + '%') + td('Unit Price', i.rate ? money(i.rate) : '', 'num') +
-          '<td class="actions"><button class="btn sm outline" data-e="' + i.id + '">Edit</button><button class="btn sm red" data-d="' + i.id + '">Delete</button></td></tr>'), 'No items yet. Items you invoice are added here automatically.'));
+      const list = Store.items().sort(byName);
+      const root = App.view(App.header(Items.select ? 'Select Items' : 'Item Master List', '<div class="btnrow" style="margin:0"><button class="btn sm" id="itAdd">+ Add Item</button><button class="btn sm outline" id="itSel">' + (Items.select ? 'Done' : 'Select') + '</button></div>') +
+        (Items.select ? '<div class="btnrow"><label class="check"><input type="checkbox" id="selAll"> Select all</label><button class="btn sm outline" id="bCat">Set category</button><button class="btn sm outline" id="bGst">Set GST %</button><button class="btn sm red" id="bDel">Delete</button></div>' : '') +
+        listTable(['', 'Item', 'Code', 'Category', 'HSN/SAC', 'GST %', '#Unit Price', ''], list.map(i => '<tr>' + td('', Items.select ? '<input type="checkbox" class="selbox" data-id="' + esc(i.id) + '">' : '') + td('Item', '<b>' + esc(i.name) + '</b>') + td('Code', esc(i.code || '')) + td('Category', esc(i.category || '')) + td('HSN/SAC', esc(i.hsn || '')) + td('GST %', esc(i.gst || '0') + '%') + td('Unit Price', money(i.rate), 'num') +
+          '<td class="actions">' + (Items.select ? '' : '<button class="btn sm outline" data-e="' + esc(i.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(i.id) + '">Delete</button>') + '</td></tr>'), 'No master items found. Invoiced items will appear here automatically.'));
       App.wireBack(root);
-      $('#itAdd').onclick = () => Items.edit(null);
-      $('#itSel').onclick = () => { $('#bulk').classList.toggle('hidden'); $$('.selbox', root).forEach(b => b.classList.toggle('hidden')); };
-      const selected = () => $$('.selbox:checked', root).map(b => b.dataset.id);
-      $('#selAll').onchange = e => $$('.selbox', root).forEach(b => b.checked = e.target.checked);
-      const apply = (fn) => { const ids = selected(); if (!ids.length) return UI.toast('Select items first'); const list = Store.list('items'); list.forEach(i => { if (ids.includes(i.id)) fn(i); }); Store.saveList('items', list); Items.open(); };
-      $('#bCat').onclick = () => UI.prompt('Set category', 'Category', '', (v) => apply(i => i.category = v.trim()));
-      $('#bGst').onclick = () => UI.menu('Set GST %', U.GST_RATES.map(r => r + '%'), (n) => apply(i => i.gst = U.GST_RATES[n]));
-      $('#bDel').onclick = () => { const ids = selected(); if (!ids.length) return UI.toast('Select items first'); UI.confirm('Delete items', 'Delete ' + ids.length + ' item(s)?', () => { Store.saveList('items', Store.list('items').filter(i => !ids.includes(i.id))); Items.open(); }, 'Delete'); };
-      $$('[data-e]', root).forEach(b => b.onclick = () => Items.edit(Store.find('items', b.dataset.e)));
-      $$('[data-d]', root).forEach(b => b.onclick = () => UI.confirm('Delete item', 'Delete this item?', () => { Store.delete('items', b.dataset.d); Items.open(); }, 'Delete'));
-    },
-    edit(i) {
-      i = Object.assign({ name: '', code: '', category: '', hsn: '', gst: '18', rate: '' }, i || {});
-      UI.modal({ title: i.id ? 'Edit Item' : 'Add Item', body: '<div class="grid2">' + UI.field('Item Name', UI.input('mName', i.name), { req: true, span: true }) + UI.field('Item Code (SKU)', UI.input('mCode', i.code)) + UI.field('Category', UI.input('mCat', i.category)) + UI.field('HSN / SAC', UI.input('mHsn', i.hsn)) + UI.field('GST Rate %', UI.select('mGst', U.GST_RATES, i.gst)) + UI.field('Unit Price ₹', UI.input('mRate', i.rate, { type: 'number', attrs: ' step="any" min="0"' })) + '</div>',
-        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
-          const v = (id) => UI.val(id, bg); Object.assign(i, { name: v('mName').trim(), code: v('mCode').trim(), category: v('mCat').trim(), hsn: v('mHsn').trim(), gst: v('mGst'), rate: num(v('mRate')) });
-          if (!i.name) { UI.toast('Item name is required'); return false; }
-          const dup = Store.list('items').find(x => x.name.toLowerCase() === i.name.toLowerCase() && x.id !== i.id); if (dup) { UI.toast('An item with this name already exists'); return false; }
-          if (i.id) Store.update('items', i); else Store.add('items', i); UI.toast('Item saved'); Items.open();
-        } }] });
+      $('#itAdd').onclick = () => Quick.editItem(null, () => Items.open());
+      $('#itSel').onclick = () => { Items.select = !Items.select; Items.open(); };
+      if (Items.select) {
+        const picked = () => $$('.selbox:checked', root).map(b => b.dataset.id);
+        $('#selAll').onchange = e => $$('.selbox', root).forEach(b => b.checked = e.target.checked);
+        // Applies one new category or GST rate to every ticked item
+        const apply = (ids, fn) => { const all = Store.list('items'); all.forEach(i => { if (ids.includes(i.id)) fn(i); }); Store.saveList('items', all); UI.toast('Updated ' + ids.length + ' items'); Items.open(); };
+        $('#bCat').onclick = () => { const ids = picked(); if (!ids.length) return UI.toast('Tick the items first'); UI.prompt('Set Category', 'New category for ' + ids.length + ' items', '', (v) => { const c = U.nameCase(v); if (c) apply(ids, i => i.category = c); }, { okLabel: 'Apply', list: Biz.categories() }); };
+        $('#bGst').onclick = () => { const ids = picked(); if (!ids.length) return UI.toast('Tick the items first'); UI.menu('GST rate for ' + ids.length + ' items', U.GST_RATES.map(r => r + '%'), (n) => apply(ids, i => i.gst = U.GST_RATES[n]), U.GST_RATES.indexOf('18')); };
+        $('#bDel').onclick = () => { const ids = picked(); if (!ids.length) return UI.toast('Tick the items first'); UI.confirm('Delete Items', 'Delete ' + ids.length + ' selected items from the item master?', () => { Store.saveList('items', Store.list('items').filter(i => !ids.includes(i.id))); UI.toast('Items deleted'); Items.open(); }, 'Delete'); };
+      }
+      $$('[data-e]', root).forEach(b => b.onclick = () => Quick.editItem(Store.find('items', b.dataset.e), () => Items.open()));
+      $$('[data-d]', root).forEach(b => b.onclick = () => { const i = Store.find('items', b.dataset.d); UI.confirm('Delete Item', 'Delete "' + i.name + '" from the item master?', () => { Store.delete('items', i.id); UI.toast('Item deleted from Master'); Items.open(); }, 'Delete'); });
     }
   };
   App.routes.items = () => Items.open();
 
   // ------------------------------------------------------------ purchases & quotations
+  // Same arithmetic as Ledger.Purchase.recalc(): rates typed with GST included have the taxable part backed out,
+  // a supplier in another state (by GSTIN) means IGST, and under reverse charge the supplier is paid the taxable value
   function purchaseTotals(p) {
-    const gstOn = Biz.chargesGst(); let taxable = 0, gst = 0;
-    p.items.forEach(it => { const q = num(it.qty), r = num(it.rate), g = gstOn ? num(it.gst) : 0; let amt = q * r; if (p.inclusive) amt = amt / (1 + g / 100); it.amount = U.round2(amt); it.gstAmt = U.round2(amt * g / 100); taxable += it.amount; gst += it.gstAmt; });
-    const sg = (p.supplierGstin || '').slice(0, 2); const inter = /^\d{2}$/.test(sg) && sg !== Biz.sellerStateCode();
-    p.taxable = U.round2(taxable); p.gst = U.round2(gst); p.cgst = inter ? 0 : U.round2(gst / 2); p.sgst = inter ? 0 : U.round2(gst / 2); p.igst = inter ? U.round2(gst) : 0;
-    p.total = U.round2(p.rcm ? taxable : taxable + gst); p.tds = p.tdsRate ? Math.round(taxable * p.tdsRate) / 100 : 0; p.payable = U.round2(p.total - p.tds);
+    let taxable = 0, gst = 0;
+    p.items.forEach(it => { const g = num(it.gst); let amt = num(it.qty) * num(it.rate); if (p.inclusive) amt = amt / (1 + g / 100); it.amount = amt; it.gstAmt = amt * g / 100; taxable += it.amount; gst += it.gstAmt; });
+    const inter = Biz.isInter(p.supplierGstin);
+    p.taxable = taxable; p.gst = gst; p.cgst = inter ? 0 : gst / 2; p.sgst = inter ? 0 : gst / 2; p.igst = inter ? gst : 0;
+    p.total = p.rcm ? taxable : taxable + gst; p.tds = p.tdsRate ? Math.round(taxable * p.tdsRate) / 100 : 0; p.payable = p.total - p.tds;
     return p;
+  }
+  // Items bought as stock join the item master so they show up in item suggestions and the quick picker
+  function stockItemsToMaster(p) {
+    if (p.kind === 'QTN') return;
+    p.items.forEach(it => { if (it.stock && it.name) Biz.upsertMaster(it.name, Object.assign({ gst: String(it.gst), hidden: false }, it.hsn ? { hsn: it.hsn } : {})); });
   }
   const Purchases = {
     open() {
-      const list = Store.list('purchases').slice().reverse();
-      const root = App.view(App.header('Purchases & Quotations', '<div class="btnrow" style="margin:0"><button class="btn sm" id="pNew">+ Purchase</button><button class="btn sm outline" id="qNew">+ Quotation</button><button class="btn sm outline" id="pStock">Stock</button><button class="btn sm outline" id="pDN">Debit Notes</button></div>') +
-        listTable(['No', 'Date', 'Supplier', '#Taxable', '#GST', '#Total', ''], list.map(p => '<tr>' + td('No', '<b>' + esc(p.no) + '</b> <span class="pill">' + (p.kind === 'QTN' ? 'Quotation' : p.kind === 'STK' ? 'Stock' : 'Purchase') + '</span>') + td('Date', esc(p.date)) + td('Supplier', esc(p.supplier || '-') + (p.rcm ? ' <span class="pill">RCM</span>' : '')) + td('Taxable', money(p.taxable), 'num') + td('GST', money(p.gst), 'num') + td('Total', money(p.total) + (p.tds ? '<div class="small muted">TDS ' + money(p.tds) + '</div>' : ''), 'num') +
-          '<td class="actions">' + (p.kind === 'QTN' ? '<button class="btn sm" data-conv="' + p.id + '">To Purchase</button>' : '') + '<button class="btn sm outline" data-e="' + p.id + '">Edit</button><button class="btn sm red" data-d="' + p.id + '">Delete</button></td></tr>'), 'No purchases yet.'));
+      const list = Store.list('purchases').slice().sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || String(b.no).localeCompare(String(a.no), undefined, { numeric: true }));
+      const root = App.view(App.header('Purchases & Quotations', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="pNew">+ Purchase</button><button class="btn sm blue" id="qNew">+ Quotation</button><button class="btn sm outline" id="pStock">Stock</button><button class="btn sm outline" id="pDN">Debit Notes</button></div>') +
+        listTable(['No', 'Date', 'Supplier', '#Total', 'Paid By', ''], list.map(p => {
+          const stock = p.items.filter(i => i.stock).map(i => i.name + ' x ' + U.fmtQty(i.qty)).join(', ');
+          return '<tr>' + td('No', '<b>' + esc(p.no) + '</b> <span class="pill">' + KIND_LABEL[p.kind] + '</span>') + td('Date', esc(p.date)) +
+            td('Supplier', esc(p.supplier || '(no supplier)') + (stock ? '<div class="small muted">Stock: ' + esc(stock) + '</div>' : '')) +
+            td('Total', money(p.total) + (p.rcm ? '<div class="small muted">RCM GST ' + money(p.gst) + '</div>' : '') + (num(p.tds) > 0 ? '<div class="small muted">TDS ' + money(p.tds) + ' (payable ' + money(num(p.total) - num(p.tds)) + ')</div>' : ''), 'num') + td('Paid By', esc(p.paidBy)) +
+            '<td class="actions">' + (p.kind === 'QTN' ? '<button class="btn sm green" data-conv="' + esc(p.id) + '">To Purchase</button>' : '') + '<button class="btn sm" data-p="' + esc(p.id) + '">Print</button><button class="btn sm outline" data-e="' + esc(p.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(p.id) + '">Delete</button></td></tr>';
+        }), 'No purchases or quotations yet. Tick "Stock" on an item while recording a purchase and it appears under Stock.'));
       App.wireBack(root);
       $('#pNew').onclick = () => Purchases.edit({ kind: 'PUR' }); $('#qNew').onclick = () => Purchases.edit({ kind: 'QTN' }); $('#pStock').onclick = () => App.go('stock'); $('#pDN').onclick = () => App.go('notes', { kind: 'DN' });
       $$('[data-e]', root).forEach(b => b.onclick = () => Purchases.edit(Store.find('purchases', b.dataset.e)));
-      $$('[data-conv]', root).forEach(b => b.onclick = () => { const q = JSON.parse(JSON.stringify(Store.find('purchases', b.dataset.conv))); delete q.id; q.kind = 'PUR'; q.no = nextNo('purchases', 'PUR'); q.date = U.today(); Purchases.edit(q); });
-      $$('[data-d]', root).forEach(b => b.onclick = () => UI.confirm('Delete', 'Delete this document?', () => { Store.delete('purchases', b.dataset.d); Purchases.open(); }, 'Delete'));
+      $$('[data-p]', root).forEach(b => b.onclick = () => { const p = Store.find('purchases', b.dataset.p); UI.menu('Print ' + KIND_LABEL[p.kind], Print.SHEETS.map(k => Print.PAPERS[k].label), (i) => Print.show(Print.purchase(p, Store.company(), Print.SHEETS[i]))); });
+      $$('[data-conv]', root).forEach(b => b.onclick = () => { const q = Store.find('purchases', b.dataset.conv); UI.confirm('Convert Quotation', 'Record ' + q.no + ' as a purchase? It will then count in stock, profit & loss and the balance sheet.', () => { q.kind = 'PUR'; q.no = nextNo('PUR'); Store.update('purchases', purchaseTotals(q)); stockItemsToMaster(q); Purchases.open(); }, 'Convert'); });
+      $$('[data-d]', root).forEach(b => b.onclick = () => { const p = Store.find('purchases', b.dataset.d); UI.confirm('Delete ' + KIND_LABEL[p.kind], 'Delete ' + p.no + '? This cannot be undone.', () => { Store.delete('purchases', p.id); Purchases.open(); }, 'Delete'); });
     },
     edit(p) {
-      const isQ = p.kind === 'QTN';
-      p = Object.assign({ no: nextNo('purchases', p.kind || 'PUR'), date: U.today(), supplier: '', supplierGstin: '', paidBy: 'Cash', rcm: false, inclusive: false, tdsRate: 0, tdsSection: '', items: [{ name: '', hsn: '', qty: '', rate: '', gst: '18', stock: true }], notes: '' }, p);
-      const suppliers = Biz.contactsOf('Supplier'), gstOn = Biz.chargesGst();
-      const rowsHtml = () => p.items.map((it, i) => '<tr data-i="' + i + '">' + td('Item', '<input data-k="name" list="pItemsDl" placeholder="Item name" value="' + esc(it.name) + '">') + td('HSN', '<input data-k="hsn" class="num" value="' + esc(it.hsn) + '">') + td('Qty', '<input data-k="qty" class="num" type="number" step="any" min="0" value="' + esc(it.qty) + '">') + td('Rate', '<input data-k="rate" class="num" type="number" step="any" min="0" value="' + esc(it.rate) + '">') + (gstOn ? td('GST %', UI.select('', U.GST_RATES.map(r => [r, r + '%']), it.gst, { attrs: ' data-k="gst"' })) : '') + td('Stock', '<input type="checkbox" data-k="stock"' + (it.stock ? ' checked' : '') + '>', 'inc') + '<td class="del"><button class="delbtn" data-del>🗑</button></td></tr>').join('');
-      const bg = UI.modal({ title: (p.id ? 'Edit ' : 'New ') + (isQ ? 'Quotation' : p.kind === 'STK' ? 'Opening Stock' : 'Purchase'), wide: true, body: '<div class="grid3">' +
+      const fresh = !p.id, isQ = p.kind === 'QTN';
+      p = Object.assign({ kind: 'PUR', no: fresh ? nextNo(p.kind || 'PUR') : '', date: U.today(), supplier: '', supplierGstin: '', paidBy: 'Cash', rcm: false, inclusive: false, tdsRate: 0, tdsSection: '', items: [], notes: '' }, JSON.parse(JSON.stringify(p)));
+      if (!p.items.length) p.items.push({ name: '', hsn: '', qty: '', rate: '', gst: '18', uqc: 'NOS', stock: false });
+      const suppliers = Biz.contactsOf('Supplier');
+      let tdsRate = p.tdsRate, tdsSection = p.tdsSection;
+      const rowsHtml = () => p.items.map((it, i) => '<tr data-i="' + i + '">' + td('Item', '<input data-k="name" list="pItemsDl" placeholder="Item name" value="' + esc(it.name) + '">', 'desc') + td('HSN', '<input data-k="hsn" class="num" inputmode="numeric" value="' + esc(it.hsn) + '">', 'hsn') + td('Qty', '<input data-k="qty" class="num" type="number" step="any" min="0" value="' + esc(it.qty) + '">', 'qty') + td('Rate', '<input data-k="rate" class="num" type="number" step="any" min="0" value="' + esc(it.rate) + '">', 'rate') + td('GST %', UI.select('', U.GST_RATES.map(r => [r, r + '%']), it.gst, { attrs: ' data-k="gst"' }), 'gst') + td('Stock', '<input type="checkbox" data-k="stock"' + (it.stock ? ' checked' : '') + '>', 'inc') + '<td class="del"><button class="delbtn" title="Remove item" data-del>🗑</button></td></tr>').join('');
+      const bg = UI.modal({ title: (fresh ? 'New ' : 'Edit ') + (isQ ? 'Quotation' : p.kind === 'STK' ? 'Stock' : 'Purchase'), wide: true, body: '<div class="grid3">' +
         UI.field((isQ ? 'Quotation' : 'Purchase') + ' No', UI.input('pNo', p.no)) + UI.field('Date', UI.dateInput('pDate', p.date), { req: true }) + UI.field(isQ ? 'Expected Payment' : 'Paid By', UI.select('pPaid', U.PAYMENT_MODES, p.paidBy)) +
-        UI.field('Supplier', UI.input('pSup', p.supplier, { list: 'pSupDl' }) + UI.datalist('pSupDl', suppliers.map(s => s.name))) + UI.field('Supplier GSTIN', UI.input('pGstin', p.supplierGstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) +
-        '<div class="field"><label>Options</label>' + (gstOn ? UI.check('pRcm', 'Reverse charge (RCM) - GST payable by us', p.rcm) : '') + UI.check('pInc', 'Item rates include GST', p.inclusive) + '<div id="tdsRow" class="' + (p.tdsRate ? '' : 'hidden') + '">' + UI.check('pTds', 'Deduct TDS @ ' + p.tdsRate + '% (' + esc(p.tdsSection) + ')', !!p.tdsRate) + '</div></div></div>' +
-        '<div class="tablewrap" style="margin-top:8px"><table class="items"><thead><tr><th>Item</th><th class="hsn">HSN</th><th class="qty">Qty</th><th class="rate">Rate</th>' + (gstOn ? '<th class="gst">GST %</th>' : '') + '<th class="inc">Stock</th><th class="del"></th></tr></thead><tbody id="pRows">' + rowsHtml() + '</tbody></table></div>' + UI.datalist('pItemsDl', Store.list('items').map(x => x.name)) +
-        '<div class="btnrow"><button class="btn sm" id="pAdd">+ Add item</button></div>' + UI.field('Notes', '<textarea id="pNotes">' + esc(p.notes) + '</textarea>') + '<div class="totals" id="pTot"></div>',
+        UI.field('Supplier', UI.input('pSup', p.supplier, { list: 'pSupDl', placeholder: 'Supplier name' }) + UI.datalist('pSupDl', suppliers.map(s => s.name))) + UI.field('Supplier GSTIN', UI.input('pGstin', p.supplierGstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) +
+        '<div class="field"><label>Options</label>' + UI.check('pRcm', 'Reverse charge (RCM) - GST payable by us, not to the supplier', p.rcm) + UI.check('pInc', 'Item rates include GST', p.inclusive) + '<div id="tdsRow" class="hidden">' + UI.check('pTds', 'Deduct TDS', false) + '</div></div></div>' +
+        '<div class="tablewrap" style="margin-top:8px"><table class="items"><thead><tr><th>Item</th><th class="hsn">HSN</th><th class="qty">Qty</th><th class="rate">Rate</th><th class="gst">GST %</th><th class="inc">Stock</th><th class="del"></th></tr></thead><tbody id="pRows">' + rowsHtml() + '</tbody></table></div>' + UI.datalist('pItemsDl', Biz.itemLabels()) +
+        '<div class="btnrow"><button class="btn sm" id="pAdd">+ Add Item</button></div><div class="totals" id="pTot"></div>' + UI.field('Notes', '<textarea id="pNotes">' + esc(p.notes) + '</textarea>'),
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
           const v = (id) => UI.val(id, bg);
-          Object.assign(p, { no: v('pNo').trim(), date: UI.dateVal('pDate', bg), paidBy: v('pPaid'), supplier: v('pSup').trim(), supplierGstin: v('pGstin').trim().toUpperCase(), rcm: gstOn && v('pRcm'), inclusive: v('pInc'), notes: v('pNotes').trim() });
-          if (!$('#pTds', bg).checked) p.tdsRate = 0;
-          p.items = p.items.filter(it => it.name.trim() || num(it.qty) || num(it.rate));
-          if (!p.date) { UI.toast('Date is required'); return false; } if (!p.items.length) { UI.toast('Add at least one item'); return false; }
-          for (const it of p.items) if (!it.name.trim() || num(it.qty) <= 0 || num(it.rate) <= 0) { UI.toast('Every item needs a name, qty and rate'); return false; }
-          if (!U.isValidGstin(p.supplierGstin)) { UI.toast('Enter a valid supplier GSTIN'); return false; }
+          if (!UI.dateVal('pDate', bg)) { UI.toast('Date is required'); return false; }
+          const items = [];
+          for (const it of p.items) {
+            // An item already in the master keeps its name exactly; a new one is tidied the way the app does it
+            const m = Biz.findMaster(it.name), name = m && !m.hidden ? m.name : U.nameCase(it.name);
+            if (!name && !num(it.qty) && !num(it.rate)) continue;
+            if (!name) { UI.toast('Item name is required'); return false; }
+            if (num(it.qty) <= 0) { UI.toast('Enter quantity for ' + name); return false; }
+            if (num(it.rate) <= 0) { UI.toast('Enter rate for ' + name); return false; }
+            items.push({ name, hsn: String(it.hsn || '').trim(), qty: num(it.qty), uqc: it.uqc || 'NOS', rate: num(it.rate), gst: String(it.gst), stock: !!it.stock });
+          }
+          if (!items.length) { UI.toast('Add at least one item'); return false; }
+          if (!U.isValidGstin(v('pGstin'))) { UI.mark('pGstin', true, bg); UI.toast('Enter a valid supplier GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)'); return false; }
+          const tds = $('#pTds', bg).checked;
+          Object.assign(p, { no: v('pNo').trim(), date: UI.dateVal('pDate', bg), paidBy: v('pPaid'), supplier: (suppliers.find(x => x.name.toLowerCase() === v('pSup').trim().toLowerCase()) || { name: U.nameCase(v('pSup')) }).name, supplierGstin: v('pGstin').trim().toUpperCase(), rcm: v('pRcm'), inclusive: v('pInc'), notes: v('pNotes').trim(), tdsRate: tds ? tdsRate : 0, tdsSection: tds ? tdsSection : '', items });
           purchaseTotals(p);
-          const items = Store.list('items'); p.items.forEach(it => { if (!items.find(x => x.name.toLowerCase() === it.name.trim().toLowerCase())) items.push({ id: U.uid(), name: it.name.trim(), hsn: it.hsn, gst: it.gst, rate: 0, code: '', category: '' }); }); Store.saveList('items', items);
-          if (p.id) Store.update('purchases', p); else Store.add('purchases', p); UI.toast('Saved'); Purchases.open();
+          if (p.id) Store.update('purchases', p); else Store.add('purchases', p);
+          stockItemsToMaster(p);
+          UI.toast((isQ ? 'Quotation ' : 'Purchase ') + p.no + ' saved'); Purchases.open();
         } }] });
-      const tot = () => { const t = purchaseTotals(JSON.parse(JSON.stringify(Object.assign(p, { rcm: gstOn && UI.val('pRcm', bg), inclusive: UI.val('pInc', bg), supplierGstin: UI.val('pGstin', bg), tdsRate: $('#pTds', bg).checked ? p.tdsRate : 0 })))); const r = (k, v) => '<div class="k">' + k + '</div><div class="v">' + v + '</div>';
-        $('#pTot', bg).innerHTML = r('Taxable', money(t.taxable)) + (gstOn ? (t.igst ? r('IGST', money(t.igst)) : r('CGST', money(t.cgst)) + r('SGST', money(t.sgst))) : '') + r('Total' + (t.rcm ? ' (GST under RCM)' : ''), money(t.total)) + (t.tds ? r('Less TDS', money(t.tds)) + r('Payable to supplier', money(t.payable)) : ''); };
-      const wire = () => { $$('#pRows tr', bg).forEach(tr => { const it = p.items[+tr.dataset.i]; $$('[data-k]', tr).forEach(el => { const h = () => { it[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value; if (el.dataset.k === 'name') { const m = Store.list('items').find(x => x.name.toLowerCase() === el.value.trim().toLowerCase()); if (m) { it.hsn = m.hsn || it.hsn; it.gst = m.gst || it.gst; $('[data-k=hsn]', tr).value = it.hsn; const g = $('[data-k=gst]', tr); if (g) g.value = it.gst; } } tot(); }; el.addEventListener('input', h); el.addEventListener('change', h); });
-        $('[data-del]', tr).onclick = () => { if (p.items.length > 1) { p.items.splice(+tr.dataset.i, 1); $('#pRows', bg).innerHTML = rowsHtml(); wire(); tot(); } }; }); };
-      $('#pAdd', bg).onclick = () => { p.items.push({ name: '', hsn: '', qty: '', rate: '', gst: '18', stock: true }); $('#pRows', bg).innerHTML = rowsHtml(); wire(); };
-      ['pRcm', 'pInc', 'pGstin', 'pTds'].forEach(id => { const el = $('#' + id, bg); if (el) el.addEventListener('change', tot); });
-      $('#pSup', bg).addEventListener('change', e => { const s = suppliers.find(x => x.name === e.target.value); if (s) { $('#pGstin', bg).value = s.gstin || ''; if (s.tds && s.tdsRate) { p.tdsRate = s.tdsRate; p.tdsSection = s.tdsSection; $('#tdsRow', bg).classList.remove('hidden'); $('#tdsRow label', bg).lastChild.textContent = ' Deduct TDS @ ' + s.tdsRate + '% (' + s.tdsSection + ')'; $('#pTds', bg).checked = true; } else { p.tdsRate = 0; $('#tdsRow', bg).classList.add('hidden'); } tot(); } });
-      wire(); tot();
+      // TDS comes from the supplier's contact record; the deduction is shown and held as TDS payable
+      const refreshTds = () => {
+        const s = suppliers.find(x => x.name.toLowerCase() === UI.val('pSup', bg).trim().toLowerCase()) || Store.list('contacts').find(x => x.name.toLowerCase() === UI.val('pSup', bg).trim().toLowerCase());
+        const rate = s && s.tds ? num(s.tdsRate) : 0, row = $('#tdsRow', bg), box = $('#pTds', bg), label = (t) => { $('label', row).lastChild.textContent = ' ' + t; };
+        if (rate > 0) { label('Deduct TDS @ ' + U.fmtQty(rate) + '% (' + s.tdsSection + ')'); const shown = !row.classList.contains('hidden'); row.classList.remove('hidden'); if ((fresh || p.tdsRate > 0) && !shown) box.checked = true; tdsRate = rate; tdsSection = s.tdsSection; }
+        else if (p.tdsRate > 0) { label('Deduct TDS @ ' + U.fmtQty(p.tdsRate) + '%'); if (row.classList.contains('hidden')) box.checked = true; row.classList.remove('hidden'); tdsRate = p.tdsRate; tdsSection = p.tdsSection; }
+        else { row.classList.add('hidden'); box.checked = false; tdsRate = 0; }
+      };
+      const tot = () => {
+        const t = purchaseTotals({ items: p.items.map(it => Object.assign({}, it)), rcm: UI.val('pRcm', bg), inclusive: UI.val('pInc', bg), supplierGstin: UI.val('pGstin', bg), tdsRate: $('#pTds', bg).checked ? tdsRate : 0 });
+        const r = (k, v) => '<div class="k">' + k + '</div><div class="v">' + v + '</div>';
+        $('#pTot', bg).innerHTML = r('Taxable', money(t.taxable)) + (t.igst || Biz.isInter(UI.val('pGstin', bg)) ? r(t.rcm ? 'RCM IGST (paid by us)' : 'IGST', money(t.igst)) : r(t.rcm ? 'RCM CGST (paid by us)' : 'CGST', money(t.cgst)) + r(t.rcm ? 'RCM SGST (paid by us)' : 'SGST', money(t.sgst))) +
+          r(t.rcm ? 'Bill value' : 'Total', money(t.total)) + (t.tds ? r('Less TDS', money(t.tds)) + r('Payable to supplier', money(t.payable)) : '');
+      };
+      const wire = () => { $$('#pRows tr', bg).forEach(tr => { const it = p.items[+tr.dataset.i]; $$('[data-k]', tr).forEach(el => { const h = () => { it[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value; if (el.dataset.k === 'name') { const m = Biz.itemFromLabel(el.value); if (m) { it.name = m.name; if (el.value !== m.name) el.value = m.name; if (m.hsn) it.hsn = m.hsn; if (m.gst) it.gst = m.gst; $('[data-k=hsn]', tr).value = it.hsn; $('[data-k=gst]', tr).value = it.gst; } } tot(); }; el.addEventListener('input', h); el.addEventListener('change', h); });
+        // The only row is cleared rather than removed so there is always one to type into
+        $('[data-del]', tr).onclick = () => { if (p.items.length > 1) p.items.splice(+tr.dataset.i, 1); else Object.assign(it, { name: '', qty: '', rate: '' }); $('#pRows', bg).innerHTML = rowsHtml(); wire(); tot(); }; }); };
+      $('#pAdd', bg).onclick = () => { p.items.push({ name: '', hsn: '', qty: '', rate: '', gst: '18', uqc: 'NOS', stock: false }); $('#pRows', bg).innerHTML = rowsHtml(); wire(); const rows = $$('#pRows tr', bg); $('[data-k=name]', rows[rows.length - 1]).focus(); };
+      ['pRcm', 'pInc', 'pTds'].forEach(id => $('#' + id, bg).addEventListener('change', tot));
+      $('#pGstin', bg).addEventListener('input', e => { const g = e.target.value.trim(); e.target.classList.toggle('err', g.length >= 15 && !U.isValidGstin(g)); tot(); });
+      const supChanged = (fill) => { const s = suppliers.find(x => x.name.toLowerCase() === UI.val('pSup', bg).trim().toLowerCase()); if (fill && s && s.gstin) $('#pGstin', bg).value = s.gstin; refreshTds(); tot(); };
+      $('#pSup', bg).addEventListener('input', () => supChanged(false)); $('#pSup', bg).addEventListener('change', () => supChanged(true));
+      wire(); refreshTds(); tot();
     }
   };
   App.routes.purchases = () => Purchases.open();
@@ -141,43 +366,62 @@
   // ------------------------------------------------------------ expenses
   const Expenses = {
     open() {
-      const list = Store.list('expenses').slice().reverse();
-      const root = App.view(App.header('Expenses', '<button class="btn sm" id="eNew">+ Expense</button>') +
-        listTable(['Date', 'Category', 'Paid By', '#Taxable', '#GST', '#Amount', ''], list.map(e => '<tr>' + td('Date', esc(e.date)) + td('Category', '<b>' + esc(e.category) + '</b>' + (e.description ? '<div class="small muted">' + esc(e.description) + '</div>' : '')) + td('Paid By', esc(e.paidBy) + (e.rcm ? ' <span class="pill">RCM</span>' : '')) + td('Taxable', money(e.taxable), 'num') + td('GST', money(e.gst), 'num') + td('Amount', '<b>' + money(e.amount) + '</b>', 'num') +
-          '<td class="actions"><button class="btn sm outline" data-e="' + e.id + '">Edit</button><button class="btn sm red" data-d="' + e.id + '">Delete</button></td></tr>'), 'No expenses recorded yet.'));
+      // Newest date first, then newest entry
+      const list = Store.list('expenses').slice().sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || num(b.createdAt) - num(a.createdAt));
+      const total = list.reduce((s, e) => s + num(e.amount), 0);
+      const root = App.view(App.header('Expenses', '<button class="btn sm green" id="eNew">+ Add Expense</button>') +
+        '<div class="hint bold" style="margin-bottom:10px">' + (list.length ? list.length + ' entries   |   Total: ' + money(total) : 'No expenses recorded yet.') + '</div>' +
+        listTable(['Date', 'Category', 'Paid By', '#Taxable', '#GST', '#Amount', ''], list.map(e => '<tr>' + td('Date', esc(e.date)) + td('Category', '<b>' + esc(e.category) + '</b>' + (e.description ? '<div class="small muted">' + esc(e.description) + '</div>' : '')) + td('Paid By', esc(e.paidBy)) + td('Taxable', money(Books.expenseAmounts(e).taxable), 'num') + td('GST', money(e.gst) + (e.rcm ? '<div class="small muted">RCM, paid by us</div>' : ''), 'num') + td('Amount', '<b>' + money(e.amount) + '</b>', 'num') +
+          '<td class="actions"><button class="btn sm outline" data-e="' + esc(e.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(e.id) + '">Delete</button></td></tr>'), 'No expenses recorded yet.'));
       App.wireBack(root);
       $('#eNew').onclick = () => Expenses.edit(null);
       $$('[data-e]', root).forEach(b => b.onclick = () => Expenses.edit(Store.find('expenses', b.dataset.e)));
-      $$('[data-d]', root).forEach(b => b.onclick = () => UI.confirm('Delete expense', 'Delete this expense?', () => { Store.delete('expenses', b.dataset.d); Expenses.open(); }, 'Delete'));
+      $$('[data-d]', root).forEach(b => b.onclick = () => { const e = Store.find('expenses', b.dataset.d); UI.confirm('Delete Expense', 'Delete this ' + e.category + ' expense of ' + money(e.amount) + '?', () => { Store.delete('expenses', e.id); Expenses.open(); }, 'Delete'); });
     },
+    /* GST on the bill (registered businesses only). Either type the full bill value and the taxable / GST parts are
+       worked out, or type the taxable value and the bill value is worked out: the other side is greyed out so the
+       three figures always agree. amount = what was paid to the vendor: taxable + GST for a normal bill, taxable
+       only under reverse charge (the GST is then paid by us to the government). */
     edit(e) {
-      const gstOn = Biz.chargesGst();
-      e = Object.assign({ date: U.today(), paidBy: 'Cash', category: '', mode: 'bill', bill: '', rate: '18', taxable: '', gst: 0, amount: '', vendorGstin: '', rcm: false, description: '' }, e || {});
-      const bg = UI.modal({ title: e.id ? 'Edit Expense' : 'New Expense', body: '<div class="grid2">' + UI.field('Date', UI.dateInput('eDate', e.date), { req: true }) + UI.field('Paid By', UI.select('ePaid', U.PAYMENT_MODES, e.paidBy)) +
-        UI.field('Category', UI.input('eCat', e.category, { list: 'eCatDl' }) + UI.datalist('eCatDl', EXPENSE_CATS), { req: true, span: true }) +
-        (gstOn ? UI.field('How do you want to enter it?', UI.select('eMode', [['bill', 'Enter bill value (incl. GST)'], ['taxable', 'Enter taxable value + GST']], e.mode), { span: true }) +
-          UI.field('Bill Value', UI.input('eBill', e.bill, { type: 'number', attrs: ' step="any" min="0"' })) + UI.field('GST Rate %', UI.select('eRate', U.GST_RATES, e.rate)) +
-          UI.field('Taxable Value', UI.input('eTax', e.taxable, { type: 'number', attrs: ' step="any" min="0"' })) + UI.field('GST Amount', UI.input('eGst', e.gst, { disabled: true })) +
-          UI.field('Vendor GSTIN', UI.input('eVGstin', e.vendorGstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) + '<div class="field"><label>&nbsp;</label>' + UI.check('eRcm', 'Reverse charge (RCM)', e.rcm) + '</div>'
-          : UI.field('Amount', UI.input('eAmt', e.amount, { type: 'number', attrs: ' step="any" min="0"' }), { req: true })) +
-        UI.field('Description', UI.input('eDesc', e.description), { span: true }) + '</div>',
+      const gstOn = Biz.chargesGst(), was = e;
+      e = Object.assign({ date: U.today(), paidBy: 'Cash', category: '', rate: '0', taxable: '', gst: 0, amount: '', vendorGstin: '', rcm: false, description: '' }, e || {});
+      const known = was ? Books.expenseAmounts(was) : null, byTaxable = !!known && (known.taxable > 0 || known.amount > 0);
+      const bg = UI.modal({ title: e.id ? 'Edit Expense' : 'Add Expense', body: '<div class="grid2">' + UI.field('Date', UI.dateInput('eDate', e.date), { req: true }) + UI.field('Paid By', UI.select('ePaid', U.PAYMENT_MODES, e.paidBy)) +
+        UI.field('Category', UI.input('eCat', e.category, { list: 'eCatDl', placeholder: 'e.g. Rent' }) + UI.datalist('eCatDl', EXPENSE_CATS), { req: true, span: true }) +
+        (gstOn ? UI.field('How do you want to enter it?', UI.select('eMode', [['bill', 'Enter bill value (incl. GST)'], ['taxable', 'Enter taxable value + GST']], byTaxable ? 'taxable' : 'bill'), { span: true }) +
+          UI.field('Bill Value', UI.input('eBill', '', { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' })) + UI.field('GST Rate %', UI.select('eRate', U.GST_RATES, e.rate)) +
+          UI.field('Taxable Value', UI.input('eTax', byTaxable ? known.taxable || known.amount : '', { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' })) + UI.field('GST Amount', UI.input('eGst', '', { disabled: true })) +
+          UI.field('Vendor GSTIN', UI.input('eVGstin', e.vendorGstin, { placeholder: 'optional, decides IGST vs CGST/SGST', attrs: ' maxlength="15" style="text-transform:uppercase"' })) + '<div class="field"><label>&nbsp;</label>' + UI.check('eRcm', 'Reverse charge (RCM) - GST payable by us, not to the vendor', e.rcm) + '</div>'
+          : UI.field('Amount', UI.input('eAmt', num(e.amount) > 0 ? e.amount : '', { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' }), { req: true, span: true })) +
+        UI.field('Description', UI.input('eDesc', e.description, { placeholder: 'What was it for?' }), { span: true }) + '</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
-          const v = (id) => UI.val(id, bg);
-          Object.assign(e, { date: UI.dateVal('eDate', bg), paidBy: v('ePaid'), category: v('eCat').trim(), description: v('eDesc').trim() });
-          if (!e.date) { UI.toast('Date is required'); return false; } if (!e.category) { UI.toast('Category is required'); return false; }
-          if (gstOn) { calc(); Object.assign(e, { mode: v('eMode'), rate: v('eRate'), vendorGstin: v('eVGstin').trim().toUpperCase(), rcm: v('eRcm') }); if (!U.isValidGstin(e.vendorGstin)) { UI.toast('Enter a valid vendor GSTIN'); return false; } }
-          else { e.amount = num(v('eAmt')); e.taxable = e.amount; e.gst = 0; }
-          if (!(e.amount > 0)) { UI.toast('Amount must be more than zero'); return false; }
+          const v = (id) => UI.val(id, bg), cat = U.nameCase(v('eCat'));
+          if (!cat) { UI.mark('eCat', true, bg); UI.toast('Category is required'); return false; }
+          if (!UI.dateVal('eDate', bg)) { UI.toast('Date is required'); return false; }
+          if (gstOn) {
+            const f = calc();
+            if (!U.isValidGstin(v('eVGstin'))) { UI.mark('eVGstin', true, bg); UI.toast('Enter a valid vendor GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)'); return false; }
+            if (f.taxable <= 0) { UI.mark(v('eMode') === 'bill' ? 'eBill' : 'eTax', true, bg); UI.toast('Enter the amount'); return false; }
+            const vg = v('eVGstin').trim().toUpperCase(), inter = Biz.isInter(vg), gst = U.round2(f.gst), taxable = U.round2(f.taxable);
+            Object.assign(e, { mode: v('eMode'), rate: v('eRate'), vendorGstin: vg, rcm: f.rcm, taxable, gst, cgst: inter ? 0 : gst / 2, sgst: inter ? 0 : gst / 2, igst: inter ? gst : 0, amount: f.rcm ? taxable : U.round2(taxable + gst) });
+          } else {
+            const amt = num(v('eAmt'));
+            if (amt <= 0) { UI.mark('eAmt', true, bg); UI.toast('Enter the amount'); return false; }
+            Object.assign(e, { taxable: amt, gst: 0, rate: '0', rcm: false, cgst: 0, sgst: 0, igst: 0, amount: amt });
+          }
+          Object.assign(e, { date: UI.dateVal('eDate', bg), paidBy: v('ePaid'), category: cat, description: v('eDesc').trim() });
+          delete e.bill;
           if (e.id) Store.update('expenses', e); else Store.add('expenses', e); UI.toast('Expense saved'); Expenses.open();
         } }] });
       const calc = () => {
-        if (!gstOn) return;
         const mode = UI.val('eMode', bg), r = num(UI.val('eRate', bg)) / 100, rcm = UI.val('eRcm', bg);
         $('#eBill', bg).disabled = mode !== 'bill'; $('#eTax', bg).disabled = mode === 'bill';
         let taxable, gst;
-        if (mode === 'bill') { const bill = num(UI.val('eBill', bg)); taxable = rcm ? bill : bill / (1 + r); gst = taxable * r; $('#eTax', bg).value = U.round2(taxable); }
-        else { taxable = num(UI.val('eTax', bg)); gst = taxable * r; $('#eBill', bg).value = U.round2(rcm ? taxable : taxable + gst); }
-        e.taxable = U.round2(taxable); e.gst = U.round2(gst); e.bill = num(UI.val('eBill', bg)); e.amount = U.round2(rcm ? taxable : taxable + gst); $('#eGst', bg).value = e.gst.toFixed(2);
+        // A reverse-charge bill carries no GST, so the bill value is the taxable value itself
+        if (mode === 'bill') { const bill = num(UI.val('eBill', bg)); taxable = rcm ? bill : bill / (1 + r); gst = taxable * r; $('#eTax', bg).value = taxable.toFixed(2); }
+        else { taxable = num(UI.val('eTax', bg)); gst = taxable * r; $('#eBill', bg).value = (rcm ? taxable : taxable + gst).toFixed(2); }
+        $('#eGst', bg).value = gst.toFixed(2);
+        return { taxable, gst, rcm };
       };
       if (gstOn) { ['eMode', 'eBill', 'eRate', 'eTax', 'eRcm'].forEach(id => { $('#' + id, bg).addEventListener('input', calc); $('#' + id, bg).addEventListener('change', calc); }); calc(); }
     }
@@ -185,76 +429,115 @@
   App.routes.expenses = () => Expenses.open();
 
   // ------------------------------------------------------------ journal
-  function allAccounts() {
-    const list = BUILT_IN_ACCOUNTS.map(a => ({ name: a[0], nature: a[1], builtIn: true }));
-    Store.list('contacts').forEach(c => list.push({ name: c.name, nature: c.type }));
-    Store.list('accounts').forEach(a => list.push({ name: a.name, nature: a.nature, id: a.id }));
-    return list;
-  }
+  const ACCOUNT_KINDS = [['Customer (Party)', N.CUSTOMER], ['Supplier (Party)', N.SUPPLIER], ['Expense account (e.g. Depreciation, Interest)', N.EXPENSE], ['Income account', N.INCOME], ['Asset account (e.g. Vehicle, Machinery)', N.ASSET], ['Liability account (e.g. Loan from bank)', N.LIABILITY], ['Bank account', N.BANK], ['Cash / petty cash', N.CASH]];
+  const NEW_ACCOUNT = '\u0001new';
   const Journal = {
     open() {
-      const list = Store.list('journal').slice().reverse();
-      const root = App.view(App.header('Journal Entries', '<div class="btnrow" style="margin:0"><button class="btn sm" id="jNew">+ Journal Entry</button><button class="btn sm outline" id="jAcc">Create Party / Account</button></div>') +
-        listTable(['Date', 'Lines', 'Narration', '#Amount', ''], list.map(j => '<tr>' + td('Date', esc(j.date)) + td('Lines', j.lines.map(l => '<div>' + esc(l.account) + ' <span class="pill">' + l.side + '</span> ' + money(l.amount) + '</div>').join('')) + td('Narration', esc(j.narration)) + td('Amount', money(j.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0)), 'num') +
-          '<td class="actions"><button class="btn sm outline" data-e="' + j.id + '">Edit</button><button class="btn sm red" data-d="' + j.id + '">Delete</button></td></tr>'), 'No journal entries yet.'));
+      const list = Store.list('journal').slice().sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || num(b.createdAt) - num(a.createdAt));
+      const drTotal = (j) => j.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0);
+      const root = App.view(App.header('Journal Entries', '<button class="btn sm green" id="jNew">+ Add Journal Entry</button>') +
+        '<div class="hint" style="margin-bottom:10px">' + (list.length ? list.length + ' entries. Debit the account that receives value, credit the account that gives it.' : 'No journal entries yet. Use them for capital introduced, drawings, loans, asset purchases, depreciation, payments received or made, and corrections. An entry can have any number of debit and credit lines.') + '</div>' +
+        listTable(['Date', 'Lines', 'Narration', '#Amount', ''], list.map(j => '<tr>' + td('Date', esc(j.date)) + td('Lines', '<div class="jl">' + j.lines.map(l => '<div class="' + (l.side === 'Dr' ? '' : 'cr') + '">' + l.side + ' ' + esc(l.account) + '  <b>' + money(l.amount) + '</b></div>').join('') + '</div>') + td('Narration', esc(j.narration)) + td('Amount', money(drTotal(j)), 'num') +
+          '<td class="actions"><button class="btn sm outline" data-e="' + esc(j.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(j.id) + '">Delete</button></td></tr>'), 'No journal entries yet.'));
       App.wireBack(root);
-      $('#jNew').onclick = () => Journal.edit(null); $('#jAcc').onclick = () => Journal.newAccount();
+      $('#jNew').onclick = () => Journal.edit(null);
       $$('[data-e]', root).forEach(b => b.onclick = () => Journal.edit(Store.find('journal', b.dataset.e)));
-      $$('[data-d]', root).forEach(b => b.onclick = () => UI.confirm('Delete entry', 'Delete this journal entry?', () => { Store.delete('journal', b.dataset.d); Journal.open(); }, 'Delete'));
+      $$('[data-d]', root).forEach(b => b.onclick = () => { const j = Store.find('journal', b.dataset.d); UI.confirm('Delete Journal Entry', 'Delete this entry of ' + money(drTotal(j)) + '?', () => { Store.delete('journal', j.id); Journal.open(); }, 'Delete'); });
     },
+    // Parties are saved as contacts so they also appear in the customer / supplier lists and invoice suggestions
     newAccount(onDone) {
-      UI.modal({ title: 'Create Party / Account', body: UI.field('Type', UI.select('aType', ACCOUNT_TYPES, 'Expense')) + UI.field('Name', UI.input('aName', ''), { req: true }),
+      const bg = UI.modal({ title: 'Create Party / Account', body: UI.field('Type', UI.select('aType', ACCOUNT_KINDS.map((k, i) => [i, k[0]]), 2), { req: true }) + UI.field('Name', UI.input('aName', ''), { req: true }) +
+        '<div id="aParty" class="hidden">' + UI.field('Phone', UI.input('aPhone', '', { type: 'tel', attrs: ' maxlength="10"' })) + UI.field('GSTIN', UI.input('aGstin', '', { placeholder: 'GSTIN (optional)', attrs: ' maxlength="15" style="text-transform:uppercase"' })) + '</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Create', cls: 'green', onClick: (bg) => {
-          const type = UI.val('aType', bg), name = UI.val('aName', bg).trim(); if (!name) { UI.toast('Name is required'); return false; }
-          if (type === 'Customer' || type === 'Supplier') Contacts.edit({ type, name }, () => { if (onDone) onDone(name); });
-          else { if (allAccounts().find(a => a.name.toLowerCase() === name.toLowerCase())) { UI.toast('Account already exists'); return false; } Store.add('accounts', { name, nature: type }); UI.toast('Account created'); if (onDone) onDone(name); }
+          const k = +UI.val('aType', bg), name = U.nameCase(UI.val('aName', bg));
+          if (!name) { UI.mark('aName', true, bg); UI.toast('Name is required'); return false; }
+          if (k <= 1) {
+            const phone = UI.val('aPhone', bg).trim(), gstin = UI.val('aGstin', bg).trim().toUpperCase();
+            if (!U.isValidPhone(phone)) { UI.mark('aPhone', true, bg); UI.toast('Enter correct party phone number'); return false; }
+            if (!U.isValidGstin(gstin)) { UI.mark('aGstin', true, bg); UI.toast('Enter a valid party GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)'); return false; }
+            const list = Store.list('contacts'), ex = list.find(x => x.name.toLowerCase() === name.toLowerCase()), f = { name, phone, gstin, type: k === 0 ? 'Customer' : 'Supplier' };
+            if (ex) Object.assign(ex, f, { updatedAt: Date.now() }); else list.push(Object.assign({ id: U.uid(), createdAt: Date.now(), address: '', state: '', email: '', tds: false, tdsSection: '', tdsRate: 0 }, f));
+            Store.saveList('contacts', list);
+          } else if (Books.accounts().some(a => a.name.toLowerCase() === name.toLowerCase())) { UI.toast('An account with that name already exists'); }
+          else Store.add('accounts', { name, nature: ACCOUNT_KINDS[k][1] });
+          UI.toast(name + ' created'); if (onDone) onDone(name);
         } }] });
+      const show = () => $('#aParty', bg).classList.toggle('hidden', +UI.val('aType', bg) > 1);
+      $('#aType', bg).addEventListener('change', show); show();
     },
+    // A voucher with any number of debit and credit lines; it can only be saved when the two sides agree
     edit(j) {
-      j = Object.assign({ date: U.today(), narration: '', lines: [{ account: '', side: 'Dr', amount: '' }, { account: '', side: 'Cr', amount: '' }] }, j ? JSON.parse(JSON.stringify(j)) : {});
-      const accNames = () => allAccounts().map(a => a.name);
-      const rows = () => j.lines.map((l, i) => '<tr data-i="' + i + '">' + td('Account', '<input data-k="account" list="jAccDl" placeholder="Account" value="' + esc(l.account) + '">') + td('Dr/Cr', UI.select('', ['Dr', 'Cr'], l.side, { attrs: ' data-k="side"' })) + td('Amount', '<input data-k="amount" class="num" type="number" step="any" min="0" value="' + esc(l.amount) + '">') + '<td class="del"><button class="delbtn" data-del>🗑</button></td></tr>').join('');
-      const bg = UI.modal({ title: j.id ? 'Edit Journal Entry' : 'New Journal Entry', wide: true, body: UI.field('Date', UI.dateInput('jDate', j.date), { req: true }) +
-        '<div class="tablewrap" style="margin-top:8px"><table class="items"><thead><tr><th>Account</th><th class="gst">Dr / Cr</th><th class="rate">Amount</th><th class="del"></th></tr></thead><tbody id="jRows">' + rows() + '</tbody></table></div><datalist id="jAccDl">' + accNames().map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
-        '<div class="btnrow"><button class="btn sm" id="jDr">+ Debit line</button><button class="btn sm" id="jCr">+ Credit line</button><button class="btn sm outline" id="jNewAcc">Create Party / Account</button><span id="jBal" class="muted"></span></div>' + UI.field('Narration', '<textarea id="jNarr">' + esc(j.narration) + '</textarea>'),
+      j = Object.assign({ date: U.today(), narration: '', lines: [] }, j ? JSON.parse(JSON.stringify(j)) : {});
+      // manual = the user typed this amount; otherwise the editor fills it in to balance the entry
+      let lines = j.lines.length ? j.lines.map(l => ({ account: l.account, side: l.side, amount: num(l.amount) > 0 ? num(l.amount).toFixed(2) : '', manual: num(l.amount) > 0 })) : [{ account: '', side: 'Dr', amount: '', manual: false }, { account: '', side: 'Cr', amount: '', manual: false }];
+      const options = (sel) => { const acc = Books.accounts(); return '<option value="">Tap to choose account</option><option value="' + NEW_ACCOUNT + '">+ Create new party / account...</option>' + (sel && !acc.some(a => a.name === sel) ? '<option selected>' + esc(sel) + '</option>' : '') + acc.map(a => '<option value="' + esc(a.name) + '"' + (a.name === sel ? ' selected' : '') + '>' + esc(a.name + '   (' + a.nature + ')') + '</option>').join(''); };
+      const rows = () => lines.map((l, i) => '<tr data-i="' + i + '">' + td('Dr/Cr', UI.select('', ['Dr', 'Cr'], l.side, { attrs: ' data-k="side"' }), 'gst') + td('Account', '<select data-k="account">' + options(l.account) + '</select>', 'desc') + td('Amount', '<input data-k="amount" class="num' + (l.manual ? '' : ' auto') + '" type="number" step="any" min="0" placeholder="Amount" value="' + esc(l.amount) + '">', 'rate') + '<td class="del"><button class="delbtn" title="Remove line" data-del>🗑</button></td></tr>').join('');
+      const bg = UI.modal({ title: j.id ? 'Edit Journal Entry' : 'Add Journal Entry', wide: true, body: UI.field('Date', UI.dateInput('jDate', j.date), { req: true }) +
+        '<div class="tablewrap" style="margin-top:8px"><table class="items"><thead><tr><th class="gst">Dr / Cr</th><th>Account</th><th class="rate">Amount</th><th class="del"></th></tr></thead><tbody id="jRows">' + rows() + '</tbody></table></div>' +
+        '<div class="btnrow"><button class="btn sm blue" id="jDr">+ Debit line</button><button class="btn sm" id="jCr">+ Credit line</button><b id="jBal"></b></div>' + UI.field('Narration', '<textarea id="jNarr" placeholder="e.g. Capital introduced by owner">' + esc(j.narration) + '</textarea>') +
+        '<div class="hint">Examples: capital brought in = Dr Bank, Cr Capital.  Depreciation = Dr Depreciation, Cr Fixed Assets.  Customer pays part cash, part bank = Dr Cash, Dr Bank, Cr &lt;customer&gt;.  GST paid = Dr Output CGST, Dr Output SGST, Cr Bank.</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
-          j.date = UI.dateVal('jDate', bg); j.narration = UI.val('jNarr', bg).trim();
-          if (!j.date) { UI.toast('Date is required'); return false; }
-          if (j.lines.length < 2) { UI.toast('At least two lines are needed'); return false; }
-          for (const l of j.lines) if (!l.account.trim() || num(l.amount) <= 0) { UI.toast('Every line needs an account and an amount'); return false; }
-          const dr = j.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0), cr = j.lines.filter(l => l.side === 'Cr').reduce((s, l) => s + num(l.amount), 0);
-          if (Math.abs(dr - cr) > 0.005) { UI.toast('Debit total must equal credit total'); return false; }
-          j.lines.forEach(l => l.amount = num(l.amount));
+          if (!UI.dateVal('jDate', bg)) { UI.toast('Date is required'); return false; }
+          for (const l of lines) { if (!l.account) { UI.toast('Choose an account on every line'); return false; } if (num(l.amount) <= 0) { UI.toast('Enter the amount on every line'); return false; } }
+          const dr = lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0), cr = lines.filter(l => l.side === 'Cr').reduce((s, l) => s + num(l.amount), 0);
+          if (Math.abs(dr - cr) >= 0.005 || dr <= 0) { UI.toast('Debit and credit totals must be equal'); return false; }
+          j.date = UI.dateVal('jDate', bg); j.narration = UI.val('jNarr', bg).trim(); j.lines = lines.map(l => ({ account: l.account, side: l.side, amount: num(l.amount) }));
           if (j.id) Store.update('journal', j); else Store.add('journal', j); UI.toast('Journal entry saved'); Journal.open();
         } }] });
-      const bal = () => { const dr = j.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0), cr = j.lines.filter(l => l.side === 'Cr').reduce((s, l) => s + num(l.amount), 0); $('#jBal', bg).textContent = 'Dr ' + money(dr) + '  |  Cr ' + money(cr) + (Math.abs(dr - cr) > 0.005 ? '  (difference ' + money(dr - cr) + ')' : '  ✓ balanced'); $('#jBal', bg).className = Math.abs(dr - cr) > 0.005 ? 'red' : 'green'; };
-      const wire = () => { $$('#jRows tr', bg).forEach(tr => { const l = j.lines[+tr.dataset.i]; $$('[data-k]', tr).forEach(el => { const h = () => { l[el.dataset.k] = el.value; bal(); }; el.addEventListener('input', h); el.addEventListener('change', h); }); $('[data-del]', tr).onclick = () => { if (j.lines.length > 2) { j.lines.splice(+tr.dataset.i, 1); redraw(); } }; }); bal(); };
+      // Auto-balance: the last untyped line on the lighter side receives whatever makes both sides equal
+      const refresh = () => {
+        let drManual = 0, crManual = 0, drAuto = -1, crAuto = -1;
+        lines.forEach((l, i) => { if (l.manual) { if (l.side === 'Dr') drManual += num(l.amount); else crManual += num(l.amount); } else { l.amount = ''; if (l.side === 'Dr') drAuto = i; else crAuto = i; } });
+        const gap = drManual - crManual;
+        if (gap > 0.004 && crAuto >= 0) lines[crAuto].amount = gap.toFixed(2); else if (gap < -0.004 && drAuto >= 0) lines[drAuto].amount = (-gap).toFixed(2);
+        $$('#jRows tr', bg).forEach(tr => { const l = lines[+tr.dataset.i], el = $('[data-k=amount]', tr); if (!l.manual) el.value = l.amount; el.classList.toggle('auto', !l.manual); });
+        const dr = lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0), cr = lines.filter(l => l.side === 'Cr').reduce((s, l) => s + num(l.amount), 0), ok = Math.abs(dr - cr) < 0.005;
+        $('#jBal', bg).textContent = 'Debit ' + money(dr) + '   Credit ' + money(cr) + (ok ? '   (balanced)' : '   Difference ' + money(Math.abs(dr - cr)));
+        $('#jBal', bg).className = ok && dr > 0 ? 'green' : 'red';
+      };
+      const wire = () => {
+        $$('#jRows tr', bg).forEach(tr => {
+          const i = +tr.dataset.i, l = lines[i];
+          $('[data-k=side]', tr).addEventListener('change', e => { l.side = e.target.value; refresh(); });
+          $('[data-k=account]', tr).addEventListener('change', e => {
+            if (e.target.value !== NEW_ACCOUNT) { l.account = e.target.value; return; }
+            e.target.value = l.account;
+            Journal.newAccount((name) => { l.account = name; redraw(); });
+          });
+          $('[data-k=amount]', tr).addEventListener('input', e => { l.amount = e.target.value; l.manual = e.target.value.trim() !== ''; refresh(); });
+          $('[data-del]', tr).onclick = () => { if (lines.length <= 2) { UI.toast('An entry needs at least one debit and one credit line'); return; } lines.splice(i, 1); redraw(); };
+        });
+        refresh();
+      };
       const redraw = () => { $('#jRows', bg).innerHTML = rows(); wire(); };
-      // Auto-balance: a new line is pre-filled with whatever keeps Dr = Cr
-      const addLine = (side) => { const dr = j.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0), cr = j.lines.filter(l => l.side === 'Cr').reduce((s, l) => s + num(l.amount), 0); const diff = side === 'Dr' ? cr - dr : dr - cr; j.lines.push({ account: '', side, amount: diff > 0 ? U.round2(diff) : '' }); redraw(); };
-      $('#jDr', bg).onclick = () => addLine('Dr'); $('#jCr', bg).onclick = () => addLine('Cr');
-      $('#jNewAcc', bg).onclick = () => Journal.newAccount((name) => { $('#jAccDl', bg).innerHTML = accNames().map(n => '<option value="' + esc(n) + '">').join(''); const empty = j.lines.find(l => !l.account); if (empty) { empty.account = name; redraw(); } });
+      $('#jDr', bg).onclick = () => { lines.push({ account: '', side: 'Dr', amount: '', manual: false }); redraw(); };
+      $('#jCr', bg).onclick = () => { lines.push({ account: '', side: 'Cr', amount: '', manual: false }); redraw(); };
       wire();
     }
   };
   App.routes.journal = () => Journal.open();
 
   // ------------------------------------------------------------ stock in hand
-  function stockRows() {
-    const map = new Map();
-    const get = (n) => { const k = n.trim().toLowerCase(); if (!map.has(k)) map.set(k, { name: n.trim(), bought: 0, sold: 0, rate: 0 }); return map.get(k); };
-    Store.list('purchases').forEach(p => { if (p.kind === 'QTN') return; p.items.forEach(it => { if (!it.stock || !it.name) return; const s = get(it.name); s.bought += num(it.qty); s.rate = num(it.rate); }); });
-    Store.list('invoices').forEach(i => i.items.forEach(it => { if (!it.desc) return; get(it.desc).sold += num(it.qty); }));
-    return Array.from(map.values()).map(s => Object.assign(s, { inHand: s.bought - s.sold, value: Math.max(0, s.bought - s.sold) * s.rate })).sort((a, b) => a.name.localeCompare(b.name));
-  }
   App.routes.stock = function () {
-    const rows = stockRows();
-    const root = App.view(App.header('Stock in Hand', '<div class="btnrow" style="margin:0"><button class="btn sm" id="stUp">Upload Stock</button><button class="btn sm outline" id="stTpl">Template</button></div>') +
-      listTable(['Item', '#Bought', '#Sold', '#In Hand', '#Rate', '#Value'], rows.map(s => '<tr>' + td('Item', '<b>' + esc(s.name) + '</b>') + td('Bought', U.fmtQty(s.bought), 'num') + td('Sold', U.fmtQty(s.sold), 'num') + td('In Hand', '<span class="' + (s.inHand <= 0 ? 'red bold' : '') + '">' + U.fmtQty(s.inHand) + '</span>', 'num') + td('Rate', money(s.rate), 'num') + td('Value', money(s.value), 'num') + '</tr>').concat(rows.length ? ['<tr class="total">' + td('', 'Total') + td('', '') + td('', '') + td('', '') + td('', '') + td('Value', money(rows.reduce((s, r) => s + r.value, 0)), 'num') + '</tr>'] : []), 'No stock yet. Purchases with "Stock" ticked and uploaded opening stock appear here.'));
+    const rows = Books.stock(null), total = rows.reduce((s, r) => s + r.value, 0);
+    const root = App.view(App.header('Stock in Hand', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="stUp">Upload Stock</button><button class="btn sm outline" id="stTpl">Template</button></div>') +
+      (rows.length ? '<div class="hint bold" style="margin-bottom:10px">Stock value (at last purchase rate): ' + money(total) + '</div>' : '') +
+      listTable(['Item', '#Bought', '#Sold', '#In Hand', '#Rate', '#Value'], rows.map(s => '<tr>' + td('Item', '<b>' + esc(s.name) + '</b>' + (s.uqc ? ' (' + esc(s.uqc) + ')' : '')) + td('Bought', U.fmtQty(s.purchased), 'num') + td('Sold', U.fmtQty(s.sold), 'num') + td('In Hand', '<span class="' + (s.onHand <= 0 ? 'red bold' : '') + '">' + U.fmtQty(s.onHand) + '</span>', 'num') + td('Rate', U.indianNumber(s.lastRate), 'num') + td('Value', money(s.value), 'num') + '</tr>'),
+        'No stock items yet. When you record a purchase, tick "Stock" on the items you keep in stock. Quantities sold on invoices are deducted automatically.'));
     App.wireBack(root);
-    $('#stTpl').onclick = () => UI.download('stock_template.csv', UI.csv([['Item', 'HSN', 'Qty', 'Rate', 'GST %'], ['Air Fryer 4.5L', '85167990', '5', '2223.94', '18']]), 'text/csv');
-    $('#stUp').onclick = () => UI.pickFile('.csv', (text) => { const rows = UI.parseCsv(text).slice(1).filter(r => r[0]); if (!rows.length) return UI.toast('No rows found'); const p = { kind: 'STK', no: nextNo('purchases', 'STK'), date: U.today(), supplier: 'Opening stock', supplierGstin: '', paidBy: 'Cash', rcm: false, inclusive: false, tdsRate: 0, items: rows.map(r => ({ name: r[0].trim(), hsn: (r[1] || '').trim(), qty: num(r[2]), rate: num(r[3]), gst: (r[4] || '0').trim(), stock: true })), notes: 'Uploaded stock' }; purchaseTotals(p); Store.add('purchases', p); UI.toast(rows.length + ' stock lines added as ' + p.no); App.go('stock'); });
+    $('#stTpl').onclick = () => { UI.download('BlitzBook_Stock_Template.csv', 'Item,HSN,Qty,UQC,Rate,GST%\nWooden Chair,9401,10,NOS,1500,18\nDining Table,9403,2,NOS,12000,18\n', 'text/csv'); UI.toast('Template downloaded'); };
+    // Columns: Item, HSN, Qty, UQC, Rate, GST%. Rows become one opening-stock document dated today, and each
+    // item joins the item master so it can be invoiced straight away.
+    $('#stUp').onclick = () => UI.pickSheet((sheet) => {
+      const col = columns(sheet, 'item', ['item', 'hsn', 'qty', 'uqc', 'rate', 'gst']);
+      const items = col.body.map(r => ({ name: U.nameCase(col.get(r, 'item')), hsn: col.get(r, 'hsn'), qty: num(col.get(r, 'qty')), uqc: col.get(r, 'uqc').toUpperCase() || 'NOS', rate: num(col.get(r, 'rate')), gst: col.get(r, 'gst').replace('%', '') || '18', stock: true })).filter(it => it.name && it.qty > 0);
+      if (!items.length) { UI.toast('No stock rows found. Use the template format: Item, HSN, Qty, UQC, Rate, GST%', 5000); return; }
+      Store.add('purchases', purchaseTotals({ kind: 'STK', no: nextNo('STK'), date: U.today(), supplier: 'Stock upload', supplierGstin: '', paidBy: 'Credit', rcm: false, inclusive: false, tdsRate: 0, tdsSection: '', items, notes: '' }));
+      items.forEach(it => Biz.upsertMaster(it.name, Object.assign({ gst: it.gst, hidden: false }, it.hsn ? { hsn: it.hsn } : {})));
+      UI.toast(items.length + ' stock items added', 4000); App.go('stock');
+    });
   };
 
-  global.Ledger = { EXPENSE_CATS, allAccounts, stockRows, purchaseTotals, Contacts, Items, Purchases, Expenses, Journal };
+  global.Books = Books;
+  global.Ledger = { EXPENSE_CATS, TDS_SECTIONS, purchaseTotals, Contacts, Items, Purchases, Expenses, Journal };
 })(window);

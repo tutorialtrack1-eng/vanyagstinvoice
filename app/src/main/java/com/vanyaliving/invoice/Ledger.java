@@ -492,11 +492,12 @@ final class Ledger {
     }
 
     // Quantities bought as stock (purchases and uploaded stock, not quotations) less quantities invoiced,
-    // by item name. asAt limits both sides to that date; null means everything to date.
+    // by item name. asAt limits both sides to that date; null means everything to date. Purchases are read
+    // in date order (then document number), so "last rate" is the latest purchase's on every synced device.
     static List<StockLine> stock(SQLiteDatabase db, Date asAt) {
         Map<String, StockLine> lines = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         Cursor c = db.rawQuery("SELECT i.item_name, i.hsn, i.uqc, i.qty, i.rate, p.date, p.id FROM purchase_items i JOIN purchases p ON p.id=i.purchase_id " +
-                "WHERE i.is_stock=1 AND p.kind IN (?, ?) ORDER BY p.id", new String[]{KIND_PURCHASE, KIND_STOCK});
+                "WHERE i.is_stock=1 AND p.kind IN (?, ?) ORDER BY substr(p.date,7,4), substr(p.date,4,2), substr(p.date,1,2), p.doc_no, p.id, i.id", new String[]{KIND_PURCHASE, KIND_STOCK});
         while (c.moveToNext()) {
             if (!inRange(c.getString(5), null, asAt)) continue;
             String name = c.isNull(0) ? "" : c.getString(0).trim();
@@ -506,7 +507,7 @@ final class Ledger {
             if (!c.isNull(1) && l.hsn.isEmpty()) l.hsn = c.getString(1);
             if (!c.isNull(2)) l.uqc = c.getString(2);
             l.purchased += c.getDouble(3);
-            l.lastRate = c.getDouble(4); // rows come in purchase order, so the last one wins
+            l.lastRate = c.getDouble(4); // rows come in date order, so the latest purchase wins
         }
         c.close();
         if (lines.isEmpty()) return new ArrayList<>();

@@ -1,5 +1,6 @@
 /* BlitzBook web portal - printable documents. Two invoice layouts, matching the Android app's PDF output:
-   0 = Standard (BlitzBook layout), 1 = Classic boxed (Tally style). Also delivery challan and quotation.
+   0 = Standard (BlitzBook layout), 1 = Classic boxed (Tally style). Also delivery challan, envelopes, purchase
+   records / quotations and credit / debit notes.
    Documents are rendered as HTML in a hidden iframe and sent to the browser's print dialog (Save as PDF). */
 (function (global) {
   'use strict';
@@ -9,8 +10,13 @@
     A4: { label: 'A4  (210 x 297 mm)', css: 'A4 portrait', scale: 1 },
     A5: { label: 'A5  (148 x 210 mm)', css: 'A5 portrait', scale: 0.72 },
     Letter: { label: 'Letter  (8.5 x 11 in)', css: 'letter portrait', scale: 1 },
-    Legal: { label: 'Legal  (8.5 x 14 in)', css: 'legal portrait', scale: 1 }
+    Legal: { label: 'Legal  (8.5 x 14 in)', css: 'legal portrait', scale: 1 },
+    // Envelopes print the addresses only
+    EnvDL: { label: 'Envelope DL  (220 x 110 mm)', css: '220mm 110mm', envelope: true },
+    EnvC5: { label: 'Envelope C5  (229 x 162 mm)', css: '229mm 162mm', envelope: true },
+    Env10: { label: 'Envelope #10  (9.5 x 4.125 in)', css: '9.5in 4.125in', envelope: true }
   };
+  const SHEETS = ['A4', 'A5', 'Letter', 'Legal'];
   const LAYOUTS = ['Standard  (BlitzBook layout)', 'Classic boxed  (Tally style)'];
 
   function docTitle(inv, company) {
@@ -221,24 +227,78 @@
     .classic .foot { display: flex; min-height: 110pt; }
     .classic .bank { width: 52%; border-right: 1px solid #000; padding: 6px; font-size: 8.5pt; } .classic .bank > div { display: grid; grid-template-columns: 90pt 8pt 1fr; margin-top: 3px; }
     .classic .decl { flex: 1; padding: 6px; font-size: 8.5pt; position: relative; } .classic .dh { text-align: right; font-weight: bold; } .classic .dt { font-size: 8pt; margin-top: 4px; }
+    /* Envelope */
+    .env { position: relative; height: 100vh; font-size: 9pt; }
+    .env .from { max-width: 45%; font-size: 8pt; } .env .from b { font-size: 9.5pt; }
+    .env .to { position: absolute; left: 42%; top: 44%; font-size: 10pt; } .env .to .nm { font-size: 12pt; font-weight: bold; }
+    .env .ref { position: absolute; left: 0; bottom: 0; font-size: 8pt; }
     .classic .as { position: absolute; right: 6px; bottom: 6px; font-weight: bold; } .classic .decl img { position: absolute; right: 6px; bottom: 22px; }
   `;
 
   function html(inv, company, layout, paper) {
     const p = PAPERS[paper] || PAPERS.A4;
-    const body = layout === 1 ? classic(inv, company) : standard(inv, company);
-    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(inv.no) + '</title><style>@page { size: ' + p.css + '; margin: 12mm 10mm; }' + CSS +
-      (p.scale !== 1 ? ' body { zoom: ' + p.scale + '; }' : '') + '</style></head><body>' + body + '</body></html>';
+    return page(inv.no, p.css, '12mm 10mm', layout === 1 ? classic(inv, company) : standard(inv, company), p.scale);
   }
 
-  function open(inv, company, layout, paper) {
-    const src = html(inv, company, layout, paper);
+  // ------------------------------------------------------------ envelope: sender top-left, buyer's postal address lower right
+  function envelope(inv, company, paper) {
+    const p = PAPERS[paper] || PAPERS.EnvDL, b = inv.buyer, lines = String(b.name || '').toUpperCase().split('\n').map(x => x.trim()).filter(Boolean);
+    return page(inv.no, p.css, '8mm 10mm', '<div class="env"><div class="from"><b>From: ' + esc(String(company.name || '').toUpperCase()) + '</b><div>' + nl2br(company.address) + '</div><div>Ph: ' + esc(company.phone) + (company.gstin ? '   GSTIN: ' + esc(company.gstin) : '') + '</div></div>' +
+      '<div class="to"><div>To,</div><div class="nm">' + esc(lines[0] || '') + '</div>' + lines.slice(1).map(l => '<div>' + esc(l) + '</div>').join('') + '<div>' + esc(formatState(b.state)) + '</div>' +
+      (b.phone ? '<div>Ph: ' + esc(b.phone) + '</div>' : '') + (b.gstin ? '<div>GSTIN: ' + esc(String(b.gstin).toUpperCase()) + '</div>' : '') + '</div>' +
+      '<div class="ref">Ref: Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + '</div></div>');
+  }
+
+  // ------------------------------------------------------------ purchase record / quotation, in the invoice style
+  function head(title, company, meta) {
+    return '<div class="title">' + title + '</div><div class="head"><div class="seller"><div class="sname">' + esc(company.name) + '</div><div class="addr">' + nl2br(company.address) + '</div>' +
+      '<div><b>' + (company.gstin ? 'GSTIN: ' + esc(company.gstin) + '   ' : '') + 'Phone: ' + esc(company.phone) + '</b></div></div><div class="meta">' + meta.filter(Boolean).map(m => '<div><b>' + m[0] + '</b><' + (m[2] ? 'b' : 'span') + '>' + esc(m[1]) + '</' + (m[2] ? 'b' : 'span') + '></div>').join('') + '</div></div>';
+  }
+  function signBlock(company) { return '<div class="sign"><div><b>For ' + esc(company.name) + '</b></div>' + (company.signature ? '<img src="' + company.signature + '" alt="">' : '<div class="sp"></div>') + '<div>Authorised Signatory</div></div>'; }
+  function purchase(p, company, paper) {
+    const sheet = PAPERS[paper] || PAPERS.A4, quotation = p.kind === 'QTN', inter = num(p.igst) > 0;
+    const body = '<div class="doc std">' + head(quotation ? 'QUOTATION' : 'PURCHASE RECORD', company, [[quotation ? 'Quotation No:' : 'Purchase No:', p.no, 1], ['Date:', p.date, 1], quotation ? null : ['Payment:', p.paidBy], p.rcm ? ['Reverse Charge:', 'Yes'] : null]) +
+      '<table class="grid parties"><tr><th style="text-align:left">' + (quotation ? 'QUOTATION FROM / PARTY' : 'SUPPLIER') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(p.supplier || '-').toUpperCase()) + '</div>' +
+      (p.supplierGstin ? '<div>GSTIN: ' + esc(p.supplierGstin) + '</div>' : '') + (p.notes ? '<div>Notes: ' + esc(p.notes) + '</div>' : '') + '</td></tr></table>' +
+      '<table class="grid items"><tr>' + ['Sl', 'DESCRIPTION', 'HSN/SAC', 'Qty', 'Rate', 'GST%', 'Amount'].map(h => '<th>' + h + '</th>').join('') + '</tr>' +
+      p.items.map((it, n) => '<tr><td class="c">' + (n + 1) + '</td><td>' + esc(it.name) + (it.stock ? '  (stock)' : '') + '</td><td class="c">' + esc(it.hsn) + '</td><td class="c">' + esc(fmtQty(it.qty)) + ' ' + esc(it.uqc || 'NOS') + '</td><td class="c">' + indianNumber(it.rate) + '</td><td class="c">' + esc(it.gst) + '%</td><td class="c">' + indianNumber(it.amount) + '</td></tr>').join('') + '</table>' +
+      '<div class="foot"><div></div><div class="totals" style="flex:0 0 230pt"><div><span><b>Taxable Value:</b></span><b>' + money(p.taxable) + '</b></div>' +
+      (inter ? '<div><span><b>IGST:</b></span><span>' + money(p.igst) + '</span></div>' : '<div><span><b>CGST:</b></span><span>' + money(p.cgst) + '</span></div><div><span><b>SGST:</b></span><span>' + money(p.sgst) + '</span></div>') +
+      '<div class="line"><span><b>' + (p.rcm ? 'Payable to Supplier:' : 'Total:') + '</b></span><b>' + money(p.total) + '</b></div></div></div>' +
+      (p.rcm ? '<div class="note">GST of ' + money(p.gst) + ' payable under reverse charge by ' + esc(company.name) + '.</div>' : '') +
+      '<div class="sect words">Amount in Words: ' + esc(U.toIndianWords(Math.round(num(p.total)))) + '</div>' +
+      (quotation ? '<div class="note" style="font-weight:normal">This quotation is valid for 30 days from the date above unless stated otherwise.</div>' : '') + signBlock(company) + '</div>';
+    return page(p.no, sheet.css, '12mm 10mm', body, sheet.scale);
+  }
+
+  // ------------------------------------------------------------ credit / debit note on A4
+  function note(n, company) {
+    const credit = n.kind !== 'DN', rows = [[credit ? 'Value of goods / services credited' : 'Value of goods / services debited', n.rate, n.taxable]].concat(num(n.igst) > 0 ? [['IGST', '', n.igst]] : [['CGST', '', n.cgst], ['SGST', '', n.sgst]]);
+    const body = '<div class="doc std">' + head(credit ? 'CREDIT NOTE' : 'DEBIT NOTE', company, [['Note No:', n.no, 1], ['Date:', n.date, 1], [credit ? 'Against Invoice:' : 'Against Purchase:', n.ref || '-']]) +
+      '<table class="grid parties"><tr><th style="text-align:left">' + (credit ? 'ISSUED TO (CUSTOMER)' : 'ISSUED TO (SUPPLIER)') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(n.party || '').toUpperCase()) + '</div>' +
+      (n.partyGstin ? '<div>GSTIN: ' + esc(n.partyGstin) + '</div>' : '') + (n.reason ? '<div>Reason: ' + esc(n.reason) + '</div>' : '') + '</td></tr></table>' +
+      '<table class="grid items"><tr><th>PARTICULARS</th><th style="width:80pt">GST %</th><th style="width:125pt">AMOUNT</th></tr>' +
+      rows.map(r => '<tr><td>' + r[0] + '</td><td class="c">' + (r[1] === '' ? '' : esc(r[1]) + '%') + '</td><td class="r">' + indianNumber(r[2]) + '</td></tr>').join('') +
+      '<tr><td colspan="2" class="r"><b>TOTAL</b></td><td class="r"><b>' + money(n.total) + '</b></td></tr></table>' +
+      '<div class="sect words">Amount in Words: ' + esc(U.toIndianWords(Math.round(num(n.total)))) + '</div>' +
+      '<div>Settlement: ' + (n.settle === 'Credit' ? (credit ? "Adjusted against the customer's account" : "Adjusted against the supplier's account") : (credit ? 'Refunded by ' : 'Received back by ') + esc(n.settle)) + '</div>' + signBlock(company) + '</div>';
+    return page(n.no, PAPERS.A4.css, '12mm 10mm', body);
+  }
+
+  function page(title, size, margin, body, scale) {
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>@page { size: ' + size + '; margin: ' + margin + '; }' + CSS +
+      (scale && scale !== 1 ? ' body { zoom: ' + scale + '; }' : '') + '</style></head><body>' + body + '</body></html>';
+  }
+
+  // Sends a finished document to the browser's print dialog
+  function show(src) {
     let f = document.getElementById('printFrame');
     if (!f) { f = document.createElement('iframe'); f.id = 'printFrame'; f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'; document.body.appendChild(f); }
     f.srcdoc = src;
     f.onload = () => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { const w = window.open('', '_blank'); w.document.write(src); w.document.close(); w.print(); } };
   }
+  function open(inv, company, layout, paper) { show(html(inv, company, layout, paper)); }
   function preview(inv, company, layout, paper) { return html(inv, company, layout, paper); }
 
-  global.Print = { PAPERS, LAYOUTS, html, open, preview, docTitle };
+  global.Print = { PAPERS, SHEETS, LAYOUTS, html, open, show, preview, docTitle, envelope, purchase, note };
 })(window);

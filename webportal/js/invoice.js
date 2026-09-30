@@ -1,4 +1,4 @@
-/* BlitzBook web portal - New Invoice editor, print flow, Sales list, Credit / Debit notes. */
+/* BlitzBook web portal - New Invoice editor, quick item picker, print flow, Sales list, Credit / Debit notes. */
 (function (global) {
   'use strict';
   const { esc, num, money, indianNumber } = U;
@@ -7,11 +7,18 @@
   function isComposition() { return Store.company().gstType === 'Composition'; }
   function sellerStateCode() { const g = (Store.company().gstin || '').trim(); return /^\d{2}/.test(g) ? g.slice(0, 2) : '37'; }
   function sellerStateName() { return U.stateName(U.stateByCode(sellerStateCode())) || 'your state'; }
-  function rcmAllowed() { return chargesGst() && (Store.company().activity || '').toLowerCase().includes('service'); }
-  function contactsOf(type) { return Store.list('contacts').filter(c => !type || c.type === type); }
-  function partyFromContact(c) { return { name: c.name + (c.address ? '\n' + c.address : ''), phone: c.phone || '', email: c.email || '', gstin: c.gstin || '', state: c.state || U.stateByCode(sellerStateCode()) }; }
+  // A GSTIN whose first two digits differ from ours belongs to another state; blank counts as local
+  function isInter(gstin) { const g = String(gstin || '').trim(); return /^\d{2}/.test(g) && g.slice(0, 2) !== sellerStateCode(); }
+  function activity() { const a = Store.company().activity || ''; return a && !a.startsWith('Select') ? a : 'General'; }
+  function rcmAllowed() { return chargesGst() && activity().toLowerCase().includes('service'); }
+  function contactsOf(type) { return Store.list('contacts').filter(c => !type || (c.type || 'Customer') === type).sort((a, b) => a.name.localeCompare(b.name)); }
+  function partyFromContact(c) { return { name: c.name + (c.address ? '\n' + c.address : ''), phone: c.phone || '', email: c.email || '', gstin: c.gstin || '', state: U.matchState(c.state, c.gstin) || U.stateByCode(sellerStateCode()) }; }
   function blankParty() { return { name: '', phone: '', email: '', gstin: '', state: U.stateByCode(sellerStateCode()) || U.STATES[0] }; }
   function blankItem(sl) { return { sl, desc: '', hsn: '', gst: '18', inc: false, qty: '', uqc: 'NOS', rate: '', taxable: 0, totalIncl: 0, subSerial: '', subDesc: '', subInfo: '' }; }
+  // Saved invoices, newest first: by date, then by number
+  function invoices() {
+    return Store.list('invoices').filter(i => i.kind === 'invoice').sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || String(b.no).localeCompare(String(a.no), undefined, { numeric: true }));
+  }
   function nextInvoiceNo() {
     const fmt = Store.company().invoiceFormat || U.DEFAULT_INVOICE_FORMAT;
     let max = 0; Store.list('invoices').forEach(i => { if (i.kind === 'invoice') max = Math.max(max, U.parseInvoiceCounter(fmt, i.no)); });
@@ -22,7 +29,7 @@
     const cur = U.parseInvoiceCounter(fmt, s);
     if (cur > 0) return U.formatInvoiceNo(fmt, Math.max(1, cur + delta));
     const m = /(\d+)\s*$/.exec(s); if (!m) return s;
-    const n = Math.max(1, parseInt(m[1], 10) + delta); return s.slice(0, m.index) + String(n).padStart(m[1].length, '0');
+    const n = Math.max(0, parseInt(m[1], 10) + delta); return s.slice(0, m.index) + String(n).padStart(m[1].length, '0');
   }
   function newInvoice() {
     return { id: null, kind: 'invoice', no: nextInvoiceNo(), date: U.today(), payment: 'Cash', rcm: false, buyer: blankParty(), sameShip: true, consignee: blankParty(),
@@ -44,6 +51,148 @@
     return inv.totals;
   }
 
+  // ------------------------------------------------------------ item master helpers (shared with the Item Master screen)
+  // Names are matched without regard to case: "Tea" and "tea" are the same item on every device
+  function findMaster(name) { const k = String(name || '').trim().toLowerCase(); return k ? Store.list('items').find(x => String(x.name).trim().toLowerCase() === k) || null : null; }
+  // Inserts or updates one item by name without dropping its other details
+  function upsertMaster(name, fields) {
+    const list = Store.list('items'), k = name.trim().toLowerCase();
+    const at = list.findIndex(x => String(x.name).trim().toLowerCase() === k);
+    if (at >= 0) Object.assign(list[at], fields, { updatedAt: Date.now() });
+    else list.push(Object.assign({ id: U.uid(), createdAt: Date.now(), name: name.trim(), code: '', category: '', hsn: '', gst: '18', rate: '', hidden: false }, fields));
+    Store.saveList('items', list);
+  }
+  function hideMaster(name) { upsertMaster(name, { hidden: true }); }
+  function categories() { return Array.from(new Set(Store.items().map(i => i.category).filter(Boolean))).sort(); }
+  // Suggestions for an item name box: every item, "Name - CODE" for items with a code, and the well-known HSN names
+  function itemLabels() {
+    const out = new Set();
+    Store.items().slice().sort((a, b) => a.name.localeCompare(b.name)).forEach(i => { out.add(i.name); if (i.code) out.add(i.name + ' - ' + i.code); });
+    Object.keys(U.HSN_MAP).forEach(n => out.add(n));
+    return Array.from(out);
+  }
+  // The master item a typed name or "Name - CODE" suggestion stands for
+  function itemFromLabel(text) {
+    const t = String(text || '').trim().toLowerCase(); if (!t) return null;
+    return Store.items().find(x => x.name.toLowerCase() === t || (x.code && (x.name + ' - ' + x.code).toLowerCase() === t)) || null;
+  }
+
+  // ------------------------------------------------------------ quick items (POS style picker)
+  // Starter items per line of activity. A saved item with the same name replaces the sample; removing a sample
+  // leaves a hidden item behind so it does not come back.
+  const SAMPLES = {
+    food: [['Tea / Chai', '2101', 'Beverages', '5', 20], ['Coffee', '2101', 'Beverages', '5', 30], ['Masala Chai', '2101', 'Beverages', '5', 25], ['Mineral Water 1L', '2201', 'Beverages', '18', 20], ['Soft Drink 300ml', '2202', 'Beverages', '40', 40],
+      ['Veg Sandwich', '2106', 'Snacks', '5', 60], ['Cheese Burger', '2106', 'Snacks', '5', 100], ['Veg Pizza', '2106', 'Snacks', '5', 200], ['French Fries', '2106', 'Snacks', '5', 80], ['Masala Dosa', '2106', 'Snacks', '5', 90],
+      ['Special Veg Thali', '2106', 'Meals', '5', 150], ['Special Non-Veg Thali', '2106', 'Meals', '5', 220], ['Red Sauce Pasta', '2106', 'Meals', '5', 120], ['Ice Cream Scoop', '2105', 'Desserts', '18', 50], ['Gulab Jamun (2 pcs)', '2106', 'Desserts', '5', 60]],
+    retail: [['Cotton Shirt', '6205', 'Apparel', '5', 850], ['Denim Jeans', '6203', 'Apparel', '12', 1200], ['Leather Wallet', '4202', 'Accessories', '18', 450], ['Stainless Steel Bottle', '7323', 'Accessories', '18', 350], ['A4 Notebook', '4820', 'Stationery', '12', 80], ['Ball Pen Pack', '9608', 'Stationery', '18', 50]],
+    service: [['Consulting Service', '9983', 'Professional', '18', 1500], ['Maintenance & Repair', '9987', 'Maintenance', '18', 800], ['Design & Branding', '9983', 'Professional', '18', 2500], ['Delivery & Logistics', '9968', 'Logistics', '18', 200], ['Installation Fee', '9987', 'Maintenance', '18', 500]],
+    trade: [['Raw Material Pack', '9999', 'Materials', '18', 5000], ['Finished Goods Unit', '9999', 'Products', '18', 2500], ['Bulk Packaging Box', '4819', 'Packaging', '12', 150], ['Freight Charges', '9965', 'Logistics', '18', 1200]],
+    general: [['General Goods Item', '9999', 'General', '18', 100], ['Standard Product Unit', '9999', 'General', '18', 250], ['Service Charge', '9987', 'General', '18', 500]]
+  };
+  function quickLabel(act) { const a = String(act || '').toLowerCase(); return /food|beverage/.test(a) ? 'Food Items' : a.includes('service') ? 'Services' : /retail|wholesale|manufactur/.test(a) ? 'Products' : 'Items'; }
+  function quickItems() {
+    const a = activity().toLowerCase();
+    const set = /food|beverage/.test(a) ? SAMPLES.food : a.includes('retail') ? SAMPLES.retail : a.includes('service') ? SAMPLES.service : /manufactur|wholesale/.test(a) ? SAMPLES.trade : SAMPLES.general;
+    const items = set.map(x => ({ name: x[0], hsn: x[1], category: x[2], gst: x[3], rate: x[4], code: '', qty: 0 }));
+    Store.list('items').slice().sort((x, y) => String(x.name).localeCompare(String(y.name))).forEach(m => {
+      if (!String(m.name || '').trim()) return;
+      const at = items.findIndex(q => q.name.toLowerCase() === m.name.trim().toLowerCase()), hasRate = m.rate !== '' && m.rate != null;
+      if (m.hidden) { if (at >= 0) items.splice(at, 1); return; }
+      if (at < 0) items.push({ name: m.name, hsn: m.hsn || '', category: m.category || 'Catalog', gst: m.gst || '18', rate: hasRate ? num(m.rate) : 100, code: m.code || '', qty: 0 });
+      else { const q = items[at]; if (m.hsn) q.hsn = m.hsn; q.gst = m.gst || '18'; if (hasRate) q.rate = num(m.rate); if (m.category) q.category = m.category; q.code = m.code || ''; }
+    });
+    return items;
+  }
+  const Quick = {
+    grid: false,
+    // Add (item == null) or customise an item. Saved to the item master so it persists.
+    editItem(item, onSaved) {
+      const bg = UI.modal({ title: item ? 'Customise Item' : 'Add Item', body: '<div class="grid2">' + UI.field('Item Name', UI.input('mName', item ? item.name : ''), { req: true, span: true }) +
+        UI.field('Item Code', UI.input('mCode', item ? item.code : '', { placeholder: 'e.g. SKU-101', attrs: ' maxlength="20" style="text-transform:uppercase"' })) + UI.field('Category', UI.input('mCat', item ? item.category : '', { placeholder: 'e.g. Beverages', list: 'mCatDl' }) + UI.datalist('mCatDl', categories())) +
+        UI.field('HSN / SAC', UI.input('mHsn', item ? item.hsn : '', { attrs: ' inputmode="numeric"' })) + UI.field('GST Rate %', UI.select('mGst', U.GST_RATES, item ? item.gst : '18')) +
+        UI.field('Unit Price ₹', UI.input('mRate', item && item.rate !== '' && item.rate != null ? num(item.rate).toFixed(2) : '', { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' })) + '</div>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }].concat(item ? [{ label: 'Remove', cls: 'red outline', onClick: () => { hideMaster(item.name); UI.toast(item.name + ' removed from quick items'); onSaved(); } }] : []).concat([{ label: 'Save', cls: 'green', onClick: (bg) => {
+          const v = (id) => UI.val(id, bg).trim(), name = U.nameCase(v('mName'));
+          if (!name) { UI.mark('mName', true, bg); UI.toast('Item name is required'); return false; }
+          if (num(v('mRate')) < 0) { UI.mark('mRate', true, bg); UI.toast('Enter a valid price'); return false; }
+          const renamed = item && item.name.toLowerCase() !== name.toLowerCase();
+          if ((!item || renamed) && Store.items().some(x => x.name.toLowerCase() === name.toLowerCase())) { UI.toast('An item with this name already exists'); return false; }
+          // Renaming leaves the old entry behind as hidden so a built-in sample does not reappear
+          if (renamed) hideMaster(item.name);
+          upsertMaster(name, { name, hsn: v('mHsn'), code: v('mCode').toUpperCase(), gst: v('mGst'), rate: num(v('mRate')), category: U.nameCase(v('mCat')) || 'Catalog', hidden: false });
+          UI.toast('Item saved'); onSaved();
+        } }]) });
+      return bg;
+    },
+    // Price (and GST) of a quick item for this invoice only
+    price(item, gstOn, reload, redraw) {
+      UI.modal({ title: item.name, body: '<div class="grid2 keep2">' + UI.field('Unit Price ₹', UI.input('qpRate', num(item.rate).toFixed(2), { type: 'number', attrs: ' step="any" min="0"' })) + (gstOn ? UI.field('GST Rate %', UI.select('qpGst', U.GST_RATES, item.gst)) : '') + '</div>' +
+        '<div class="hint">Applies to this invoice only. Use "Customise Item" to change the saved name, category, HSN or price.</div>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Customise Item', cls: 'outline', onClick: () => { Quick.editItem(item, reload); } }, { label: 'Apply', cls: 'green', onClick: (bg) => {
+          const p = UI.val('qpRate', bg).trim();
+          if (p !== '' && (isNaN(parseFloat(p)) || parseFloat(p) < 0)) { UI.mark('qpRate', true, bg); UI.toast('Enter a valid price'); return false; }
+          item.rate = num(p); if (gstOn) item.gst = UI.val('qpGst', bg);
+          redraw();
+        } }] });
+    },
+    // Rename a category (every item in it moves to the new name) or remove it (items go to "Catalog")
+    category(cat, menu, reload) {
+      const move = (to) => { menu.forEach(q => { if (String(q.category).toLowerCase() === cat.toLowerCase()) upsertMaster(q.name, Object.assign({ category: to, hidden: false, gst: q.gst, rate: q.rate }, q.hsn ? { hsn: q.hsn } : {})); }); UI.toast('Category updated'); reload(); };
+      UI.menu('Category: ' + cat, ['Rename category', 'Remove category (items move to Catalog)'], (i) => {
+        if (i === 1) { move('Catalog'); return; }
+        UI.prompt('Rename Category', 'Category', cat, (v) => { const name = U.nameCase(v); if (name && name.toLowerCase() !== cat.toLowerCase()) move(name); }, { okLabel: 'Rename' });
+      });
+    },
+    open(inv, onApply) {
+      const label = quickLabel(activity()), gstOn = chargesGst();
+      let menu = quickItems(), cat = 'All';
+      // Start from what is already on the invoice
+      const fromInvoice = () => menu.forEach(q => { const r = inv.items.find(x => String(x.desc).trim().toLowerCase() === q.name.toLowerCase()); if (r) { q.qty = Math.floor(num(r.qty)); if (num(r.rate) > 0) q.rate = num(r.rate); q.gst = String(r.gst); } });
+      fromInvoice();
+      const bg = UI.modal({ title: '⚡ Quick ' + label, wide: true, focus: false,
+        body: '<div class="qbar"><input id="qSearch" placeholder="Search ' + esc(label.toLowerCase()) + '..."><button class="btn sm green" id="qAdd">+ Add</button><button class="btn sm outline" id="qView" title="List / grid view"></button></div>' +
+          '<div class="qcats" id="qCats"></div><div class="qsum" id="qSum"></div><div id="qList"></div>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Apply to Invoice', cls: 'green', onClick: () => { onApply(menu); } }] });
+      const cats = () => ['All'].concat(Array.from(new Set(menu.map(q => q.category).filter(Boolean))));
+      const summary = () => { const n = menu.reduce((s, q) => s + q.qty, 0), t = menu.reduce((s, q) => s + q.qty * q.rate, 0); $('#qSum', bg).textContent = n ? 'Selected: ' + n + (n === 1 ? ' item' : ' items') + '   |   Total: ₹ ' + t.toFixed(2) : 'Nothing selected yet. Tap + on an item to add it.'; };
+      const sub = (q) => [q.code, q.category, q.hsn && 'HSN ' + q.hsn].filter(Boolean).join(' · ');
+      const drawCats = () => {
+        const list = cats(); if (!list.includes(cat)) cat = 'All';
+        $('#qCats', bg).innerHTML = list.map(c => '<button class="btn sm ' + (c === cat ? '' : 'outline') + '" data-c="' + esc(c) + '">' + esc(c) + '</button>').join('') + (cat !== 'All' ? '<button class="link" id="qCatEdit" title="Rename or remove this category">✎ ' + esc(cat) + '</button>' : '');
+        $$('[data-c]', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; drawCats(); draw(); });
+        if ($('#qCatEdit', bg)) $('#qCatEdit', bg).onclick = () => Quick.category(cat, menu, reload);
+      };
+      const draw = () => {
+        const q = $('#qSearch', bg).value.trim().toLowerCase();
+        const shown = menu.filter(x => (cat === 'All' || String(x.category).toLowerCase() === cat.toLowerCase()) && (!q || x.name.toLowerCase().includes(q) || (x.code && x.code.toLowerCase().includes(q))));
+        $('#qView', bg).textContent = Quick.grid ? '☰' : '▦';
+        $('#qList', bg).className = 'qlist' + (Quick.grid ? ' grid' : '');
+        $('#qList', bg).innerHTML = shown.map(x => '<div class="qitem' + (x.qty > 0 ? ' on' : '') + '" data-n="' + esc(x.name) + '"><div class="qname"><b>' + esc(x.name) + '</b><span>' + esc(sub(x)) + '</span></div>' +
+          '<div class="qside"><button class="qprice" data-price>₹ ' + num(x.rate).toFixed(2) + (gstOn ? ' · GST ' + esc(x.gst) + '%' : '') + '  ✎</button>' +
+          '<div class="qstep"><button data-d="-1" aria-label="Less">−</button><input type="number" min="0" step="1" value="' + x.qty + '" aria-label="Quantity"><button data-d="1" aria-label="More">+</button></div></div></div>').join('') ||
+          '<div class="empty">' + esc(q ? "No matching " + label.toLowerCase() + " found for '" + q + "'." : 'No ' + label.toLowerCase() + ' in this category. Tap "+ Add" to create one.') + '</div>';
+        $$('.qitem', bg).forEach(el => {
+          const x = menu.find(m => m.name === el.dataset.n), input = $('input', el);
+          const set = (n) => { x.qty = Math.max(0, Math.floor(num(n))); input.value = x.qty; el.classList.toggle('on', x.qty > 0); summary(); };
+          $$('[data-d]', el).forEach(b => b.onclick = () => set(x.qty + (+b.dataset.d)));
+          input.addEventListener('input', () => { x.qty = Math.max(0, Math.floor(num(input.value))); el.classList.toggle('on', x.qty > 0); summary(); });
+          input.addEventListener('blur', () => set(input.value));
+          $('[data-price]', el).onclick = () => Quick.price(x, gstOn, reload, () => { draw(); summary(); });
+        });
+      };
+      // After an item is added or customised: read the master again, keeping quantities already chosen
+      const reload = () => {
+        const qty = new Map(menu.filter(x => x.qty > 0).map(x => [x.name.toLowerCase(), x.qty]));
+        menu = quickItems(); menu.forEach(x => { if (qty.has(x.name.toLowerCase())) x.qty = qty.get(x.name.toLowerCase()); });
+        drawCats(); draw(); summary();
+      };
+      $('#qSearch', bg).addEventListener('input', draw);
+      $('#qAdd', bg).onclick = () => Quick.editItem(null, reload);
+      $('#qView', bg).onclick = () => { Quick.grid = !Quick.grid; draw(); };
+      drawCats(); draw(); summary();
+    }
+  };
+
   // ------------------------------------------------------------ editor
   const Invoice = {
     inv: null,
@@ -52,22 +201,23 @@
       let inv = null;
       if (params.id) inv = JSON.parse(JSON.stringify(Store.find('invoices', params.id) || {}));
       if (!inv || !inv.no) inv = newInvoice();
-      if (params.quickItem) { const m = Store.list('items').find(x => x.name === params.quickItem); Object.assign(inv.items[0], { desc: params.quickItem, hsn: m ? m.hsn : '', gst: m ? m.gst : '18', qty: 1, rate: m ? m.rate : '' }); }
+      if (params.quickItem) { const m = findMaster(params.quickItem); Object.assign(inv.items[0], { desc: params.quickItem, hsn: m && !m.hidden ? m.hsn : U.hsnFor(params.quickItem), gst: m && !m.hidden ? m.gst : '18', qty: 1, rate: m && !m.hidden && num(m.rate) > 0 ? m.rate : '' }); }
       this.inv = inv;
       this.render();
+      if (params.print) this.printFlow('invoice');
     },
     render() {
       const inv = this.inv, c = Store.company(), gst = chargesGst();
-      const customers = contactsOf('Customer'), allContacts = Store.list('contacts');
+      const allContacts = contactsOf(null);
       const partyBlock = (p, pre, label) =>
-        '<div class="grid2">' + UI.field(label, '<textarea id="' + pre + 'Name" placeholder="Name on the first line, address below">' + esc(p.name) + '</textarea>', { req: pre === 'b', span: true }) +
-        UI.field('Choose from contacts', UI.select(pre + 'Pick', allContacts.map(x => [x.id, x.name + (x.type ? ' (' + x.type + ')' : '')]), '', { blank: '— select a saved party —' })) +
-        UI.field('State', UI.select(pre + 'State', U.STATES, p.state)) +
-        UI.field('Phone', UI.input(pre + 'Phone', p.phone, { type: 'tel' })) + UI.field('Email', UI.input(pre + 'Email', p.email, { type: 'email' })) +
-        UI.field('GSTIN', UI.input(pre + 'Gstin', p.gstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) + '</div>';
-      const root = App.view(App.header(inv.id ? 'Invoice ' + inv.no : 'New Invoice', '<span class="muted">' + esc(c.name) + '</span>') +
+        '<div class="grid2">' + UI.field(label, '<textarea id="' + pre + 'Name" placeholder="' + (pre === 'b' ? 'Buyer' : 'Consignee') + ' Name &amp; Address (name on the first line)">' + esc(p.name) + '</textarea>', { req: pre === 'b', span: true }) +
+        UI.field('Choose from contacts', UI.select(pre + 'Pick', allContacts.map(x => [x.id, x.name + ' (' + (x.type || 'Customer') + ')']), '', { blank: '— select a saved party —' })) +
+        UI.field('State', UI.select(pre + 'State', U.STATES, U.matchState(p.state, '') || p.state)) +
+        UI.field('Phone', UI.input(pre + 'Phone', p.phone, { type: 'tel', placeholder: 'Phone Number', attrs: ' maxlength="10"' })) + UI.field('Email', UI.input(pre + 'Email', p.email, { type: 'email', placeholder: 'Email Address' })) +
+        UI.field('GSTIN', UI.input(pre + 'Gstin', p.gstin, { placeholder: 'GSTIN Number', attrs: ' maxlength="15" style="text-transform:uppercase"' })) + '</div>';
+      const root = App.view(App.header(inv.id ? 'Invoice ' + inv.no : 'New Invoice', '<span class="muted">' + esc(c.name || 'My Company Profile') + '</span>') +
         '<div class="card"><div class="hd">Invoice Details</div><div class="bd"><div class="grid3">' +
-        UI.field('Invoice No', '<div class="inline">' + UI.input('iNo', inv.no) + '<button class="step" id="iUp">▲</button><button class="step" id="iDn">▼</button></div>', { req: true }) +
+        UI.field('Invoice No', '<div class="inline">' + UI.input('iNo', inv.no) + '<button class="step" id="iUp" title="Next number">▲</button><button class="step" id="iDn" title="Previous number">▼</button></div>', { req: true }) +
         UI.field('Dated', UI.dateInput('iDate', inv.date), { req: true }) +
         UI.field('Payment Mode', UI.select('iPay', U.PAYMENT_MODES, inv.payment)) + '</div>' +
         (rcmAllowed() ? UI.check('iRcm', 'Reverse charge (RCM) - GST payable by the recipient', inv.rcm) : '') + '</div></div>' +
@@ -75,24 +225,29 @@
         UI.check('iSame', 'Shipping same as Billing', inv.sameShip) + '<div id="shipBox" class="' + (inv.sameShip ? 'hidden' : '') + '">' + partyBlock(inv.consignee, 'c', 'Consignee (Ship To)') + '</div></div></div>' +
         '<div class="card"><div class="hd">Other Details</div><div class="bd"><div class="grid3">' +
         UI.field('Destination', UI.input('oDest', inv.other.destination)) + UI.field('Vehicle Type', UI.input('oVType', inv.other.vehicleType)) + UI.field('Vehicle Number', UI.input('oVNo', inv.other.vehicleNo)) + '</div>' +
-        UI.check('oMore', 'Show additional details', !!(inv.other.transporter || inv.other.deliveryNote || inv.other.orderNo || inv.other.reference || inv.other.info)) +
+        UI.check('oMore', 'Show additional details', !!(inv.other.transporter || inv.other.deliveryNote || inv.other.orderNo || inv.other.orderDate || inv.other.reference || inv.other.info)) +
         '<div id="moreBox" class="grid3 hidden">' + UI.field('Transporter', UI.input('oTrans', inv.other.transporter)) + UI.field('Delivery Note', UI.input('oDN', inv.other.deliveryNote)) + UI.field('Buyer Order No', UI.input('oOrd', inv.other.orderNo)) +
         UI.field('Buyer Order Date', UI.dateInput('oOrdDt', inv.other.orderDate)) + UI.field('Reference No', UI.input('oRef', inv.other.reference)) + UI.field('Other Info', UI.input('oInfo', inv.other.info)) + '</div></div></div>' +
-        '<div class="card"><div class="hd">Goods / Services <button class="btn sm outline" id="quickBtn">Quick ' + esc(c.activity === 'Food and Beverages' ? 'Food Items' : c.activity === 'Services' ? 'Services' : c.activity === 'Retailer' || c.activity === 'Wholesale' ? 'Products' : 'Items') + '</button></div><div class="bd" style="padding:8px">' +
+        '<div class="card"><div class="hd">Goods / Services <button class="btn sm green" id="quickBtn">Quick ' + esc(quickLabel(activity())) + '</button></div><div class="bd" style="padding:8px">' +
         '<div class="tablewrap" style="border:0"><table class="items"><thead><tr><th class="sl">Sl</th><th class="desc">Particulars</th><th class="hsn">HSN/SAC</th>' + (gst ? '<th class="gst">GST %</th><th class="inc">Inc?</th>' : '') + '<th class="qty">Qty *</th><th class="uqc">UQC</th><th class="rate">Rate *</th><th class="tax">' + (gst ? 'Taxable' : 'Amount') + '</th>' + (gst ? '<th class="tot">Total Incl.</th>' : '') + '<th class="del"></th></tr></thead><tbody id="rows"></tbody></table></div>' +
-        UI.datalist('itemsDl', Store.list('items').map(x => x.name)) +
+        UI.datalist('itemsDl', itemLabels()) +
         '<div class="btnrow"><button class="btn sm" id="addRow">+ Add Particular / Row</button></div></div></div>' +
         '<div class="card"><div class="hd">Totals Summary</div><div class="bd"><div class="totals" id="totals"></div><div class="words" id="words"></div></div></div>' +
         '<div class="btnrow end"><button class="btn red outline" id="iDel" ' + (inv.id ? '' : 'disabled') + '>🗑 Delete</button><button class="btn outline" id="iNew">+ New</button>' + (isComposition() ? '<button class="btn" id="iChallan">Delivery Challan</button>' : '') + '<button class="btn green" id="iPrint">Print / Save PDF</button></div>');
       App.wireBack(root);
       const bind = (id, fn) => { const el = $('#' + id); if (el) el.addEventListener('input', fn), el.addEventListener('change', fn); };
-      bind('iNo', e => { inv.no = e.target.value.trim(); const ex = Store.list('invoices').find(x => x.no === inv.no && x.id !== inv.id); if (ex) UI.confirm('Load invoice', 'Invoice ' + ex.no + ' already exists. Open it?', () => Invoice.open({ id: ex.id }), 'Open'); });
-      $('#iUp').onclick = () => { $('#iNo').value = inv.no = stepInvoiceNo($('#iNo').value, 1); };
-      $('#iDn').onclick = () => { $('#iNo').value = inv.no = stepInvoiceNo($('#iNo').value, -1); };
+      bind('iNo', e => { inv.no = e.target.value.trim(); const ex = Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id); if (ex && !$('#dialogs').children.length) UI.confirm('Load invoice', 'Invoice ' + ex.no + ' already exists. Open it?', () => Invoice.open({ id: ex.id }), 'Open'); });
+      // The running number is never left blank: leaving the field empty restores the next number in sequence
+      $('#iNo').addEventListener('blur', e => { if (!e.target.value.trim()) e.target.value = inv.no = nextInvoiceNo(); });
+      $('#iUp').onclick = () => { $('#iNo').value = inv.no = stepInvoiceNo($('#iNo').value.trim() || nextInvoiceNo(), 1); $('#iNo').dispatchEvent(new Event('change')); };
+      $('#iDn').onclick = () => { $('#iNo').value = inv.no = stepInvoiceNo($('#iNo').value.trim() || nextInvoiceNo(), -1); $('#iNo').dispatchEvent(new Event('change')); };
       bind('iDate', e => inv.date = U.fromIso(e.target.value)); bind('iPay', e => inv.payment = e.target.value); bind('iRcm', e => { inv.rcm = e.target.checked; this.updateTotals(); });
       const wireParty = (pre, p) => {
+        p.state = $('#' + pre + 'State').value;
         bind(pre + 'Name', e => p.name = e.target.value); bind(pre + 'State', e => { p.state = e.target.value; this.updateTotals(); });
-        bind(pre + 'Phone', e => p.phone = e.target.value.trim()); bind(pre + 'Email', e => p.email = e.target.value.trim()); bind(pre + 'Gstin', e => { p.gstin = e.target.value.trim().toUpperCase(); e.target.classList.toggle('err', !U.isValidGstin(p.gstin)); if (p.gstin.length >= 2 && U.stateByCode(p.gstin.slice(0, 2))) { p.state = U.stateByCode(p.gstin.slice(0, 2)); $('#' + pre + 'State').value = p.state; this.updateTotals(); } });
+        bind(pre + 'Phone', e => { p.phone = e.target.value.trim(); e.target.classList.toggle('err', p.phone.length >= 10 && !U.isValidPhone(p.phone)); });
+        bind(pre + 'Email', e => p.email = e.target.value.trim());
+        bind(pre + 'Gstin', e => { p.gstin = e.target.value.trim().toUpperCase(); e.target.classList.toggle('err', p.gstin.length >= 15 && !U.isValidGstin(p.gstin)); if (p.gstin.length >= 2 && U.stateByCode(p.gstin.slice(0, 2))) { p.state = U.stateByCode(p.gstin.slice(0, 2)); $('#' + pre + 'State').value = p.state; this.updateTotals(); } });
         bind(pre + 'Pick', e => { const ct = Store.find('contacts', e.target.value); if (!ct) return; Object.assign(p, partyFromContact(ct)); $('#' + pre + 'Name').value = p.name; $('#' + pre + 'State').value = p.state; $('#' + pre + 'Phone').value = p.phone; $('#' + pre + 'Email').value = p.email; $('#' + pre + 'Gstin').value = p.gstin; this.updateTotals(); });
       };
       wireParty('b', inv.buyer); wireParty('c', inv.consignee);
@@ -100,10 +255,17 @@
       ['oDest', 'destination', 'oVType', 'vehicleType', 'oVNo', 'vehicleNo', 'oTrans', 'transporter', 'oDN', 'deliveryNote', 'oOrd', 'orderNo', 'oRef', 'reference', 'oInfo', 'info'].forEach((k, i, a) => { if (i % 2 === 0) bind(k, e => inv.other[a[i + 1]] = e.target.value.trim()); });
       bind('oOrdDt', e => inv.other.orderDate = U.fromIso(e.target.value));
       const more = $('#oMore'); const showMore = () => $('#moreBox').classList.toggle('hidden', !more.checked); more.addEventListener('change', showMore); showMore();
-      $('#addRow').onclick = () => { const last = inv.items[inv.items.length - 1]; if (last && (!last.desc.trim() || num(last.qty) <= 0 || num(last.rate) <= 0)) { UI.toast('Fill particulars, qty and rate in the current row first'); return; } inv.items.push(blankItem(inv.items.length + 1)); this.renderRows(); const rows = $$('#rows tr'); const el = $('input', rows[rows.length - 1]); if (el) el.focus(); };
-      $('#quickBtn').onclick = () => this.quickPicker();
+      $('#addRow').onclick = () => {
+        const last = inv.items[inv.items.length - 1];
+        if (last && !String(last.desc).trim()) { UI.toast('Please enter particulars for the current item before adding a new item.'); return; }
+        if (last && num(last.qty) <= 0) { UI.toast('Quantity is required for the current item'); return; }
+        if (last && num(last.rate) <= 0) { UI.toast('Rate is required for the current item'); return; }
+        inv.items.push(blankItem(inv.items.length + 1)); this.renderRows();
+        const rows = $$('#rows tr'); const el = $('[data-k=desc]', rows[rows.length - 1]); if (el) el.focus();
+      };
+      $('#quickBtn').onclick = () => Quick.open(inv, (menu) => this.applyQuick(menu));
       $('#iNew').onclick = () => Invoice.open({});
-      $('#iDel').onclick = () => UI.confirm('Delete invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice deleted'); Invoice.open({}); }, 'Delete');
+      $('#iDel').onclick = () => UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice ' + inv.no + ' deleted'); Invoice.open({}); }, 'Delete');
       $('#iPrint').onclick = () => this.printFlow('invoice');
       if ($('#iChallan')) $('#iChallan').onclick = () => this.printFlow('challan');
       this.renderRows();
@@ -119,7 +281,7 @@
         '<td class="uqc" data-l="UQC">' + UI.select('', U.UQC_CODES, it.uqc, { attrs: ' data-k="uqc"' }) + '</td>' +
         '<td class="rate" data-l="Rate"><input class="num" type="number" step="any" min="0" data-k="rate" value="' + esc(it.rate) + '"' + (it.inc ? ' disabled' : '') + '></td>' +
         '<td class="tax" data-l="' + (gst ? 'Taxable' : 'Amount') + '"><input class="num" data-k="taxable" value="' + indianNumber(it.taxable) + '" disabled></td>' +
-        (gst ? '<td class="tot" data-l="Total Incl."><input class="num" type="number" step="any" min="0" data-k="totalIncl" value="' + esc(it.inc ? it.totalIncl : it.totalIncl.toFixed ? it.totalIncl.toFixed(2) : it.totalIncl) + '"' + (it.inc ? '' : ' disabled') + '></td>' : '') +
+        (gst ? '<td class="tot" data-l="Total Incl."><input class="num" type="number" step="any" min="0" data-k="totalIncl" value="' + esc(it.inc ? it.totalIncl : num(it.totalIncl).toFixed(2)) + '"' + (it.inc ? '' : ' disabled') + '></td>' : '') +
         '<td class="del"><button class="delbtn" title="Remove row" data-del>🗑</button></td></tr>').join('');
       $$('tr', tb).forEach(tr => {
         const i = +tr.dataset.i, it = inv.items[i];
@@ -128,7 +290,13 @@
           const h = () => {
             if (k === 'inc') { it.inc = el.checked; $('[data-k=rate]', tr).disabled = it.inc; const t = $('[data-k=totalIncl]', tr); if (t) t.disabled = !it.inc; }
             else it[k] = el.value;
-            if (k === 'desc') { const m = Store.list('items').find(x => x.name.toLowerCase() === el.value.trim().toLowerCase() || (x.code && (x.name + ' - ' + x.code).toLowerCase() === el.value.trim().toLowerCase())); if (m) { it.desc = m.name; it.hsn = m.hsn || it.hsn; if (m.gst) it.gst = m.gst; if (m.rate && !num(it.rate)) it.rate = m.rate; $('[data-k=hsn]', tr).value = it.hsn; const g = $('[data-k=gst]', tr); if (g) g.value = it.gst; $('[data-k=rate]', tr).value = it.rate; } }
+            if (k === 'desc') {
+              // A saved item fills HSN, GST and price; otherwise a well-known item name fills the HSN
+              const m = itemFromLabel(el.value);
+              if (m) { it.desc = m.name; if (el.value !== m.name) el.value = m.name; it.hsn = m.hsn || ''; if (m.gst) it.gst = m.gst; if (num(m.rate) > 0 && !num(it.rate)) it.rate = m.rate; const g = $('[data-k=gst]', tr); if (g) g.value = it.gst; $('[data-k=rate]', tr).value = it.rate; }
+              else { const hsn = U.hsnFor(el.value); if (hsn) it.hsn = hsn; }
+              $('[data-k=hsn]', tr).value = it.hsn;
+            }
             computeItem(it);
             $('[data-k=taxable]', tr).value = indianNumber(it.taxable);
             if (!it.inc) { const t = $('[data-k=totalIncl]', tr); if (t) t.value = it.totalIncl.toFixed(2); } else $('[data-k=rate]', tr).value = it.rate;
@@ -137,7 +305,7 @@
           el.addEventListener('input', h); el.addEventListener('change', h);
         });
         $('[data-sub]', tr).onclick = () => this.subDetails(i);
-        $('[data-del]', tr).onclick = () => { if (inv.items.length <= 1) { UI.toast('At least one row is needed'); return; } inv.items.splice(i, 1); inv.items.forEach((x, n) => x.sl = n + 1); this.renderRows(); };
+        $('[data-del]', tr).onclick = () => { if (inv.items.length <= 1) return; inv.items.splice(i, 1); inv.items.forEach((x, n) => x.sl = n + 1); this.renderRows(); };
       });
       this.updateTotals();
     },
@@ -149,144 +317,162 @@
     },
     subDetails(i) {
       const it = this.inv.items[i];
-      UI.modal({ title: 'Product Sub-details', body: UI.field('Serial No.', UI.input('sS', it.subSerial)) + UI.field('Description / Details', UI.input('sD', it.subDesc)) + UI.field('Other Info', UI.input('sI', it.subInfo)),
-        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => { it.subSerial = UI.val('sS', bg).trim(); it.subDesc = UI.val('sD', bg).trim(); it.subInfo = UI.val('sI', bg).trim(); this.renderRows(); } }] });
+      UI.modal({ title: 'Product Sub-Details - Item #' + (i + 1), body: UI.field('Serial No.', UI.input('sS', it.subSerial, { placeholder: 'Serial No. (e.g. SN12345)' })) + UI.field('Description / Details', UI.input('sD', it.subDesc, { placeholder: 'Product Description / Details' })) + UI.field('Other Info', UI.input('sI', it.subInfo, { placeholder: 'Other Product Info / Warranty' })),
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Clear', cls: 'outline', onClick: () => { it.subSerial = it.subDesc = it.subInfo = ''; this.renderRows(); } },
+          { label: 'Save', cls: 'green', onClick: (bg) => { it.subSerial = UI.val('sS', bg).trim(); it.subDesc = UI.val('sD', bg).trim(); it.subInfo = UI.val('sI', bg).trim(); this.renderRows(); UI.toast('Sub-details saved for Item #' + (i + 1)); } }] });
     },
-    quickPicker() {
-      const items = Store.list('items'); if (!items.length) { UI.toast('No items in the Item Master yet. Add items first.'); return; }
-      const cats = ['All'].concat(Array.from(new Set(items.map(x => x.category).filter(Boolean))));
-      const bg = UI.modal({ title: 'Quick pick', wide: true, body: '<div class="btnrow" id="qCats">' + cats.map((c, i) => '<button class="btn sm ' + (i ? 'outline' : '') + '" data-c="' + esc(c) + '">' + esc(c) + '</button>').join('') + '</div><input id="qSearch" placeholder="Search item..."><div class="tiles" id="qGrid" style="margin-top:10px"></div>', buttons: [{ label: 'Done', cls: 'green' }] });
-      let cat = 'All';
-      const draw = () => { const q = $('#qSearch', bg).value.toLowerCase(); $('#qGrid', bg).innerHTML = items.filter(x => (cat === 'All' || x.category === cat) && x.name.toLowerCase().includes(q)).map(x => '<div class="tile" data-n="' + esc(x.name) + '" style="background:#E3F2FD;border-color:#1E88E566;aspect-ratio:auto;min-height:70px"><div class="t">' + esc(x.name) + '</div><div class="small muted">' + (x.rate ? money(x.rate) : '') + '</div></div>').join('') || '<div class="empty">No items</div>';
-        $$('[data-n]', bg).forEach(el => el.onclick = () => this.addQuick(items.find(x => x.name === el.dataset.n))); };
-      $$('#qCats button', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; $$('#qCats button', bg).forEach(x => x.classList.toggle('outline', x !== b)); draw(); });
-      $('#qSearch', bg).addEventListener('input', draw); draw();
-    },
-    addQuick(m) {
-      const inv = this.inv; let it = inv.items.find(x => x.desc === m.name);
-      if (it) it.qty = num(it.qty) + 1;
-      else { it = inv.items.find(x => !x.desc.trim() && !num(x.qty)) || (inv.items.push(blankItem(inv.items.length + 1)), inv.items[inv.items.length - 1]); Object.assign(it, { desc: m.name, hsn: m.hsn || '', gst: m.gst || '18', qty: 1, rate: m.rate || '' }); }
-      this.renderRows(); UI.toast(m.name + ' added');
+    // Quantities chosen in the quick picker become invoice rows; an item taken back to zero leaves the invoice
+    applyQuick(menu) {
+      const inv = this.inv;
+      inv.items = inv.items.filter(x => String(x.desc).trim() || num(x.qty) || num(x.rate) || num(x.totalIncl));
+      menu.forEach(q => {
+        const at = inv.items.findIndex(x => String(x.desc).trim().toLowerCase() === q.name.toLowerCase());
+        if (q.qty > 0) {
+          if (at >= 0) Object.assign(inv.items[at], { qty: q.qty, rate: num(q.rate).toFixed(2), gst: q.gst, inc: false });
+          else inv.items.push(Object.assign(blankItem(0), { desc: q.name, hsn: q.hsn || '', gst: q.gst, qty: q.qty, rate: num(q.rate).toFixed(2) }));
+        } else if (at >= 0) inv.items.splice(at, 1);
+      });
+      if (!inv.items.length) inv.items.push(blankItem(1));
+      inv.items.forEach((x, n) => x.sl = n + 1);
+      this.renderRows(); UI.toast('Invoice updated with selected items!');
     },
     validate() {
       const inv = this.inv;
-      inv.items = inv.items.filter(it => it.desc.trim() || num(it.qty) || num(it.rate) || num(it.totalIncl));
+      // Completely blank rows are dropped; any row with an item needs both quantity and rate
+      inv.items = inv.items.filter(it => String(it.desc).trim() || num(it.qty) || num(it.rate) || num(it.totalIncl));
       if (!inv.items.length) inv.items.push(blankItem(1));
       inv.items.forEach((x, n) => x.sl = n + 1);
       this.renderRows();
       const bad = (msg, id) => { UI.toast(msg); if (id) UI.mark(id, true); return false; };
       if (!inv.no.trim()) { inv.no = nextInvoiceNo(); $('#iNo').value = inv.no; }
-      if (!inv.date) return bad('Date is required', 'iDate');
+      if (!inv.date) return bad('Invoice date is required', 'iDate');
       const buyerName = inv.buyer.name.trim();
-      if ((inv.payment === 'Credit' || inv.payment === 'Cheque') && !buyerName) return bad('Buyer is required for Credit / Cheque sales', 'bName');
-      if (!U.isValidPhone(inv.buyer.phone)) return bad('Enter a valid 10-digit buyer phone', 'bPhone');
-      if (!U.isValidEmail(inv.buyer.email)) return bad('Enter a valid buyer email', 'bEmail');
-      if (!U.isValidGstin(inv.buyer.gstin)) return bad('Enter a valid 15-character buyer GSTIN', 'bGstin');
-      if (!inv.sameShip) { if (!U.isValidPhone(inv.consignee.phone)) return bad('Enter a valid consignee phone', 'cPhone'); if (!U.isValidEmail(inv.consignee.email)) return bad('Enter a valid consignee email', 'cEmail'); if (!U.isValidGstin(inv.consignee.gstin)) return bad('Enter a valid consignee GSTIN', 'cGstin'); }
-      for (const it of inv.items) { if (!it.desc.trim() || num(it.qty) <= 0 || num(it.rate) <= 0) return bad('Row ' + it.sl + ': particulars, qty and rate are required'); }
+      if ((inv.payment === 'Credit' || inv.payment === 'Cheque') && !buyerName) return bad('Buyer details are mandatory for Credit sales', 'bName');
+      if (!U.isValidPhone(inv.buyer.phone)) return bad('Enter correct buyer phone number', 'bPhone');
+      if (!U.isValidEmail(inv.buyer.email)) return bad('Enter correct buyer email address', 'bEmail');
+      if (!inv.sameShip) { if (!U.isValidPhone(inv.consignee.phone)) return bad('Enter correct Ship To phone number', 'cPhone'); if (!U.isValidEmail(inv.consignee.email)) return bad('Enter correct Ship To email address', 'cEmail'); }
+      if (!U.isValidGstin(inv.buyer.gstin)) return bad('Enter a valid buyer GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)', 'bGstin');
+      if (!inv.sameShip && !U.isValidGstin(inv.consignee.gstin)) return bad('Enter a valid Ship To GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)', 'cGstin');
+      for (const it of inv.items) {
+        if (!String(it.desc).trim()) return bad(inv.items.length === 1 && !num(it.qty) && !num(it.rate) ? 'Please add at least one item' : 'Item Particulars is required for row #' + it.sl);
+        if (num(it.qty) <= 0) return bad('Quantity is required for item #' + it.sl);
+        if (num(it.rate) <= 0) return bad('Rate is required for item #' + it.sl);
+      }
       computeTotals(inv);
       return true;
     },
     save() {
       const inv = this.inv;
+      inv.rcm = !!inv.rcm && rcmAllowed();
       if (inv.sameShip) inv.consignee = JSON.parse(JSON.stringify(inv.buyer));
-      const ex = Store.list('invoices').find(x => x.no === inv.no && x.id !== inv.id);
+      const ex = Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id);
       if (ex) inv.id = ex.id;
       inv.kind = 'invoice';
       const saved = inv.id ? Store.update('invoices', inv) : Store.add('invoices', inv);
       inv.id = saved.id;
-      // upsert items master and buyer contact, like the Android app
-      const items = Store.list('items');
-      inv.items.forEach(it => { const m = items.find(x => x.name.toLowerCase() === it.desc.trim().toLowerCase()); if (m) { m.hsn = it.hsn || m.hsn; m.gst = it.gst; } else items.push({ id: U.uid(), name: it.desc.trim(), hsn: it.hsn, gst: it.gst, rate: num(it.rate), code: '', category: '' }); });
-      Store.saveList('items', items);
+      // Invoiced items join the item master. An item already there keeps its customised price and category.
+      inv.items.forEach(it => { const name = String(it.desc).trim(); if (findMaster(name)) upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), hidden: false }); else upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), rate: num(it.rate) }); });
       const bn = inv.buyer.name.trim();
-      if (bn) { const first = bn.split('\n')[0].trim(); const contacts = Store.list('contacts'); if (!contacts.find(x => x.name.toLowerCase() === first.toLowerCase())) { contacts.push({ id: U.uid(), type: 'Customer', name: first, address: bn.split('\n').slice(1).join('\n').trim().toUpperCase(), phone: inv.buyer.phone, email: inv.buyer.email, gstin: inv.buyer.gstin, state: inv.buyer.state, tds: false }); Store.saveList('contacts', contacts); } }
+      if (bn) { const first = bn.split('\n')[0].trim(); const contacts = Store.list('contacts'); if (!contacts.find(x => x.name.toLowerCase() === first.toLowerCase())) { contacts.push({ id: U.uid(), createdAt: Date.now(), type: 'Customer', name: first, address: bn.split('\n').slice(1).join('\n').trim().toUpperCase(), phone: inv.buyer.phone, email: inv.buyer.email.toLowerCase(), gstin: inv.buyer.gstin, state: inv.buyer.state, tds: false }); Store.saveList('contacts', contacts); } }
       return inv;
     },
+    // Print / Save PDF: invoices pick the layout first, then everything picks the paper, then the document is made
     printFlow(kind) {
-      if (!this.validate()) return;
-      const c = Store.company();
-      UI.menu('Invoice Format', Print.LAYOUTS, (layout) => {
-        c.pdfLayout = layout; Store.saveCompany(c);
+      const c = Store.company(), challan = kind === 'challan';
+      const paperStep = (layout) => {
         const papers = Object.keys(Print.PAPERS);
-        UI.menu(kind === 'challan' ? 'Print Delivery Challan' : 'Print / Save Invoice', papers.map(p => Print.PAPERS[p].label), (pi) => {
-          const paper = papers[pi]; c.paper = paper; Store.saveCompany(c);
+        UI.menu(challan ? 'Print Delivery Challan' : 'Print / Save Invoice', papers.map(p => Print.PAPERS[p].label), (pi) => {
+          const paper = papers[pi];
+          if (Print.PAPERS[paper].envelope) { // addresses only; nothing is saved
+            if (!this.inv.buyer.name.trim()) { UI.toast('Enter the buyer name & address first'); UI.mark('bName', true); return; }
+            Print.show(Print.envelope(this.inv, Store.company(), paper)); return;
+          }
+          if (!this.validate()) return;
+          c.paper = paper; Store.saveCompany(Object.assign(Store.company(), { pdfLayout: layout, paper }));
           const go = () => {
-            const inv = kind === 'invoice' ? this.save() : Object.assign(JSON.parse(JSON.stringify(this.inv)), { kind: 'challan', consignee: this.inv.sameShip ? this.inv.buyer : this.inv.consignee });
+            if (challan) { Print.open(Object.assign(JSON.parse(JSON.stringify(this.inv)), { kind: 'challan', consignee: this.inv.sameShip ? this.inv.buyer : this.inv.consignee }), Store.company(), 0, paper); return; }
+            const inv = this.save();
             Print.open(inv, Store.company(), layout, paper);
-            if (kind === 'invoice') {
-              UI.modal({ title: 'Invoice ' + inv.no + ' Saved', body: '<p>The print dialog is open: choose "Save as PDF" or a printer.</p><p>Choose an action:</p>', buttons: [
-                { label: 'Stay Here', cls: 'outline' }, { label: 'Next Invoice', onClick: () => Invoice.open({}) }, { label: 'Print again', cls: 'green', onClick: () => { Print.open(inv, Store.company(), layout, paper); return false; } }] });
-            }
+            UI.modal({ title: 'Invoice ' + inv.no + ' Saved', body: '<p>The print dialog is open: choose "Save as PDF" or a printer.</p><p>Choose an action:</p>', buttons: [
+              { label: 'Stay Here', cls: 'outline', onClick: () => { $('#iDel').disabled = false; } }, { label: 'Next Invoice (Just Save)', onClick: () => Invoice.open({}) }, { label: 'Print again', cls: 'green', onClick: () => { Print.open(inv, Store.company(), layout, paper); return false; } }] });
           };
           const amount = this.inv.totals.rounded, special = ['Maharashtra', 'Delhi', 'Tamil Nadu', 'Bihar'].some(s => sellerStateName().startsWith(s));
           const threshold = special ? 100000 : 50000;
-          if (kind === 'invoice' && amount > threshold) UI.modal({ title: 'E-Way Bill Required', body: '<p>This invoice is for ' + money(amount) + ', above the ₹' + indianNumber(threshold).replace('.00', '') + ' limit for ' + esc(sellerStateName()) + '. Generate an e-Way Bill on the GST portal before moving the goods.</p>', buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Continue', cls: 'green', onClick: go }] });
+          if (amount > threshold) UI.modal({ title: 'E-Way Bill Warning', body: '<p>Invoice value is ' + money(amount) + '.</p><p>For ' + esc(sellerStateName()) + ', the configured warning threshold is ' + money(threshold) + '. Please generate/verify the E-Way Bill before proceeding.</p>', buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Continue', cls: 'green', onClick: go }] });
           else go();
         }, papers.indexOf(c.paper || 'A4'));
-      }, c.pdfLayout || 0);
+      };
+      if (challan) paperStep(0); else UI.menu('Invoice Format', Print.LAYOUTS, paperStep, c.pdfLayout || 0);
     }
   };
   App.routes.invoice = (p) => Invoice.open(p);
 
-  // ------------------------------------------------------------ sales list
+  // ------------------------------------------------------------ sales register
+  // Every saved invoice, newest first: open it on the invoice screen, print it again, or delete it
   App.routes.sales = function () {
-    const invs = Store.list('invoices').filter(i => i.kind === 'invoice').slice().reverse();
-    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button><button class="btn sm outline" id="sRep">Report</button></div>') +
+    const invs = invoices();
+    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button><button class="btn sm outline" id="sRep">Report</button></div>') +
       '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th></th></tr></thead><tbody>' +
-        invs.map(i => '<tr><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc((i.buyer.name || '').split('\n')[0] || '(cash sale)') + '</td><td class="num" data-l="Total">' + money(i.totals.rounded) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td>' +
-          '<td class="actions"><button class="btn sm outline" data-open="' + i.id + '">Open</button><button class="btn sm" data-print="' + i.id + '">Print</button><button class="btn sm red" data-del="' + i.id + '">Delete</button></td></tr>').join('') + '</tbody></table>' : '<div class="empty">No invoices yet. Tap "+ New Invoice" to create the first one.</div>') + '</div>');
+        invs.map(i => '<tr><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td>' +
+          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">Open</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button></td></tr>').join('') + '</tbody></table>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one.</div>') + '</div>');
     App.wireBack(root);
     $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRep').onclick = () => App.go('salesReport');
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
-    $$('[data-print]', root).forEach(b => b.onclick = () => { const inv = Store.find('invoices', b.dataset.print), c = Store.company(); UI.menu('Invoice Format', Print.LAYOUTS, (l) => Print.open(inv, c, l, c.paper || 'A4'), c.pdfLayout || 0); });
-    $$('[data-del]', root).forEach(b => b.onclick = () => UI.confirm('Delete invoice', 'Delete this invoice?', () => { Store.delete('invoices', b.dataset.del); App.go('sales'); }, 'Delete'));
+    $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));
+    $$('[data-del]', root).forEach(b => b.onclick = () => { const inv = Store.find('invoices', b.dataset.del); UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice ' + inv.no + ' deleted'); App.go('sales'); }, 'Delete'); });
   };
 
   // ------------------------------------------------------------ credit / debit notes
   function noteTotals(n) {
-    const rate = chargesGst() ? num(n.rate) : 0, taxable = num(n.taxable), gst = U.round2(taxable * rate / 100);
-    const pg = (n.partyGstin || '').slice(0, 2); const inter = pg && /^\d{2}$/.test(pg) && pg !== sellerStateCode();
-    n.gst = gst; n.cgst = inter ? 0 : U.round2(gst / 2); n.sgst = inter ? 0 : U.round2(gst / 2); n.igst = inter ? gst : 0; n.total = U.round2(taxable + gst);
+    const rate = chargesGst() ? num(n.rate) : 0, taxable = num(n.taxable), gst = taxable * rate / 100, inter = isInter(n.partyGstin);
+    n.gst = U.round2(gst); n.cgst = inter ? 0 : U.round2(gst / 2); n.sgst = inter ? 0 : U.round2(gst / 2); n.igst = inter ? U.round2(gst) : 0; n.total = U.round2(taxable + gst);
     return n;
   }
   const Notes = {
     open(p) {
-      const kind = p.kind || 'CN', label = kind === 'CN' ? 'Credit Notes' : 'Debit Notes';
-      const notes = Store.list('notes').filter(n => n.kind === kind).slice().reverse();
-      const root = App.view(App.header(label, '<button class="btn sm" id="nNew">+ New ' + (kind === 'CN' ? 'Credit' : 'Debit') + ' Note</button>') +
-        '<div class="tablewrap">' + (notes.length ? '<table class="list cards"><thead><tr><th>Note</th><th>Date</th><th>Party</th><th>Against</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th><th></th></tr></thead><tbody>' +
-          notes.map(n => '<tr><td data-l="Note"><b>' + esc(n.no) + '</b></td><td data-l="Date">' + esc(n.date) + '</td><td data-l="Party">' + esc(n.party) + '</td><td data-l="Against">' + esc(n.ref) + '</td><td class="num" data-l="Taxable">' + money(n.taxable) + '</td><td class="num" data-l="GST">' + money(n.gst) + '</td><td class="num" data-l="Total">' + money(n.total) + '</td><td class="actions"><button class="btn sm outline" data-e="' + n.id + '">Edit</button><button class="btn sm red" data-d="' + n.id + '">Delete</button></td></tr>').join('') + '</tbody></table>' : '<div class="empty">No ' + label.toLowerCase() + ' yet.</div>') + '</div>');
+      const kind = p.kind || 'CN', isCN = kind === 'CN', label = isCN ? 'Credit Notes' : 'Debit Notes';
+      const notes = Store.list('notes').filter(n => n.kind === kind).sort((a, b) => String(b.no).localeCompare(String(a.no), undefined, { numeric: true }));
+      const root = App.view(App.header(label, '<button class="btn sm green" id="nNew">+ New ' + (isCN ? 'Credit' : 'Debit') + ' Note</button>') +
+        '<div class="hint" style="margin-bottom:12px">' + (isCN ? 'Issued to a customer against a sales invoice for returns, discounts or corrections. Reduces sales, output GST and what the customer owes.' : 'Issued to a supplier against a purchase for returns, shortages or rate differences. Reduces purchases, input GST and what you owe.') + '</div>' +
+        '<div class="tablewrap">' + (notes.length ? '<table class="list cards"><thead><tr><th>Note</th><th>Date</th><th>Party</th><th>Against</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th><th>Settlement</th><th></th></tr></thead><tbody>' +
+          notes.map(n => '<tr><td data-l="Note"><b>' + esc(n.no) + '</b></td><td data-l="Date">' + esc(n.date) + '</td><td data-l="Party">' + esc(n.party || '-') + (n.reason ? '<div class="small muted">' + esc(n.reason) + '</div>' : '') + '</td><td data-l="Against">' + esc(n.ref || '-') + '</td><td class="num" data-l="Taxable">' + money(n.taxable) + '</td><td class="num" data-l="GST">' + money(n.gst) + '</td><td class="num" data-l="Total">' + money(n.total) + '</td><td data-l="Settlement">' + esc(n.settle) + '</td>' +
+            '<td class="actions"><button class="btn sm" data-p="' + esc(n.id) + '">Print</button><button class="btn sm outline" data-e="' + esc(n.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(n.id) + '">Delete</button></td></tr>').join('') + '</tbody></table>' : '<div class="empty">No ' + label.toLowerCase() + ' yet.</div>') + '</div>');
       App.wireBack(root);
       $('#nNew').onclick = () => Notes.edit(kind, null);
+      $$('[data-p]', root).forEach(b => b.onclick = () => Print.show(Print.note(Store.find('notes', b.dataset.p), Store.company())));
       $$('[data-e]', root).forEach(b => b.onclick = () => Notes.edit(kind, Store.find('notes', b.dataset.e)));
-      $$('[data-d]', root).forEach(b => b.onclick = () => UI.confirm('Delete note', 'Delete this note?', () => { Store.delete('notes', b.dataset.d); Notes.open({ kind }); }, 'Delete'));
+      $$('[data-d]', root).forEach(b => b.onclick = () => { const n = Store.find('notes', b.dataset.d); UI.confirm('Delete ' + (isCN ? 'Credit Note' : 'Debit Note'), 'Delete ' + n.no + '?', () => { Store.delete('notes', n.id); Notes.open({ kind }); }, 'Delete'); });
     },
     edit(kind, n) {
       const isCN = kind === 'CN';
-      if (!n) { let max = 0; Store.list('notes').filter(x => x.kind === kind).forEach(x => { const m = /(\d+)$/.exec(x.no); if (m) max = Math.max(max, +m[1]); }); n = { kind, no: kind + '-' + String(max + 1).padStart(4, '0'), date: U.today(), party: '', partyGstin: '', ref: '', reason: '', taxable: '', rate: '18', settle: 'Credit' }; }
-      const parties = contactsOf(isCN ? 'Customer' : 'Supplier'), refs = isCN ? Store.list('invoices').map(i => i.no) : Store.list('purchases').filter(x => x.kind === 'PUR').map(x => x.no);
+      if (!n) { let max = 0; Store.list('notes').forEach(x => { const m = new RegExp('^' + kind + '-(\\d+)$').exec(x.no || ''); if (m) max = Math.max(max, +m[1]); }); n = { kind, no: kind + '-' + String(max + 1).padStart(4, '0'), date: U.today(), party: '', partyGstin: '', ref: '', reason: '', taxable: '', rate: '0', settle: 'Credit' }; }
+      // Reference document numbers come from the sales or purchase register
+      const parties = contactsOf(isCN ? null : 'Supplier'), refs = isCN ? invoices().map(i => i.no) : Store.list('purchases').filter(x => x.kind !== 'QTN' && x.kind !== 'STK').map(x => x.no);
       const bg = UI.modal({ title: (n.id ? 'Edit ' : 'New ') + (isCN ? 'Credit Note' : 'Debit Note'), body: '<div class="grid2">' +
         UI.field('Note No', UI.input('nNo', n.no)) + UI.field('Date', UI.dateInput('nDate', n.date), { req: true }) +
-        UI.field(isCN ? 'Customer' : 'Supplier', UI.input('nParty', n.party, { list: 'nPartyDl' }) + UI.datalist('nPartyDl', parties.map(x => x.name)), { req: true }) +
-        UI.field(isCN ? 'Against Invoice' : 'Against Purchase', UI.input('nRef', n.ref, { list: 'nRefDl' }) + UI.datalist('nRefDl', refs)) +
-        UI.field('Party GSTIN', UI.input('nGstin', n.partyGstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) + UI.field('Reason', UI.input('nReason', n.reason)) +
-        UI.field('Taxable Value', UI.input('nTax', n.taxable, { type: 'number', attrs: ' step="any" min="0"' }), { req: true }) + (chargesGst() ? UI.field('GST Rate %', UI.select('nRate', U.GST_RATES, n.rate)) : '') +
-        UI.field('Settlement', UI.select('nSettle', ['Credit', 'Cash', 'Online', 'Cheque'], n.settle)) + '<div class="field"><label>Total</label><div id="nTotal" class="bold" style="padding:10px 0">' + money(noteTotals(Object.assign({}, n)).total) + '</div></div></div>',
+        UI.field(isCN ? 'Customer' : 'Supplier', UI.input('nParty', n.party, { list: 'nPartyDl' }) + UI.datalist('nPartyDl', parties.map(x => x.name)), { req: true, span: true }) +
+        UI.field(isCN ? 'Against Invoice' : 'Against Purchase', UI.input('nRef', n.ref, { list: 'nRefDl', placeholder: isCN ? 'Invoice No' : 'Purchase No' }) + UI.datalist('nRefDl', refs)) +
+        UI.field('Party GSTIN', UI.input('nGstin', n.partyGstin, { attrs: ' maxlength="15" style="text-transform:uppercase"' })) +
+        UI.field('Reason', UI.input('nReason', n.reason, { placeholder: isCN ? 'e.g. Goods returned, rate difference' : 'e.g. Shortage, damaged goods' }), { span: true }) +
+        UI.field('Taxable Value', UI.input('nTax', n.taxable, { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' }), { req: true }) + (chargesGst() ? UI.field('GST Rate %', UI.select('nRate', U.GST_RATES, n.rate)) : '') +
+        UI.field('Settlement', UI.select('nSettle', ['Credit', 'Cash', 'Online', 'Cheque'], n.settle), { span: true, hint: isCN ? "Credit = adjust customer's account, else refunded" : "Credit = adjust supplier's account, else money received back" }) +
+        '<div class="field span"><div id="nTotal" class="bold"></div></div></div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
           const v = (id) => UI.val(id, bg);
-          Object.assign(n, { no: v('nNo').trim(), date: UI.dateVal('nDate', bg), party: v('nParty').trim(), ref: v('nRef').trim(), partyGstin: v('nGstin').trim().toUpperCase(), reason: v('nReason').trim(), taxable: num(v('nTax')), rate: chargesGst() ? v('nRate') : '0', settle: v('nSettle') });
-          if (!n.date) { UI.toast('Date is required'); return false; } if (!n.party) { UI.toast((isCN ? 'Customer' : 'Supplier') + ' is required'); return false; }
-          if (n.taxable <= 0) { UI.toast('Taxable value must be more than zero'); return false; } if (!U.isValidGstin(n.partyGstin)) { UI.toast('Enter a valid GSTIN'); return false; }
-          noteTotals(n); if (n.id) Store.update('notes', n); else Store.add('notes', n); UI.toast('Note saved'); Notes.open({ kind });
+          Object.assign(n, { no: v('nNo').trim(), date: UI.dateVal('nDate', bg), party: (parties.find(x => x.name.toLowerCase() === v('nParty').trim().toLowerCase()) || { name: U.nameCase(v('nParty')) }).name, ref: v('nRef').trim(), partyGstin: v('nGstin').trim().toUpperCase(), reason: v('nReason').trim(), taxable: num(v('nTax')), rate: chargesGst() ? v('nRate') : '0', settle: v('nSettle') });
+          if (!n.date) { UI.toast('Date is required'); return false; } if (!n.party) { UI.mark('nParty', true, bg); UI.toast('Party is required'); return false; }
+          if (n.taxable <= 0) { UI.mark('nTax', true, bg); UI.toast('Enter the taxable value'); return false; } if (!U.isValidGstin(n.partyGstin)) { UI.mark('nGstin', true, bg); UI.toast('Enter a valid party GSTIN (15 characters, e.g. 37ABCDE1234F1ZZ)'); return false; }
+          noteTotals(n); if (n.id) Store.update('notes', n); else Store.add('notes', n); UI.toast((isCN ? 'Credit Note ' : 'Debit Note ') + n.no + ' saved'); Notes.open({ kind });
         } }] });
-      const recalc = () => { const t = noteTotals({ taxable: UI.val('nTax', bg), rate: chargesGst() ? UI.val('nRate', bg) : 0, partyGstin: UI.val('nGstin', bg) }); $('#nTotal', bg).textContent = money(t.total) + (t.gst ? '  (GST ' + money(t.gst) + ')' : ''); };
-      ['nTax', 'nRate', 'nGstin'].forEach(id => { const el = $('#' + id, bg); if (el) el.addEventListener('input', recalc); });
-      $('#nParty', bg).addEventListener('change', e => { const c = parties.find(x => x.name === e.target.value); if (c) { $('#nGstin', bg).value = c.gstin || ''; recalc(); } });
+      const recalc = () => { const t = noteTotals({ taxable: UI.val('nTax', bg), rate: chargesGst() ? UI.val('nRate', bg) : 0, partyGstin: UI.val('nGstin', bg) }); $('#nTotal', bg).textContent = 'GST ' + money(t.gst) + '   Total ' + money(t.total); };
+      ['nTax', 'nRate', 'nGstin'].forEach(id => { const el = $('#' + id, bg); if (el) { el.addEventListener('input', recalc); el.addEventListener('change', recalc); } });
+      $('#nParty', bg).addEventListener('change', e => { const c = parties.find(x => x.name.toLowerCase() === e.target.value.trim().toLowerCase()); if (c && c.gstin) { $('#nGstin', bg).value = c.gstin; recalc(); } });
+      recalc();
     }
   };
   App.routes.notes = (p) => Notes.open(p);
 
-  global.Invoice = Invoice; global.Notes = Notes;
-  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, contactsOf, computeTotals, noteTotals };
+  global.Invoice = Invoice; global.Notes = Notes; global.Quick = Quick;
+  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, contactsOf, computeTotals, noteTotals, invoices,
+    findMaster, upsertMaster, hideMaster, categories, itemLabels, itemFromLabel };
 })(window);
