@@ -1,8 +1,9 @@
 # Hosting the sync server at api.blitzbook.co.in
 
-The app (`Sync.SERVER_URL`) and the published portal (`DEFAULT_SERVER_URL` in `webportal/js/sync.js`) are set
-to `https://api.blitzbook.co.in`. Whatever machine answers there with `server/server.js` becomes the sync
-server for everyone. It must be reachable from the internet, stay on, and keep `server/data` safe.
+Optional. Without a sync server the app and the portal each keep their own books and data moves between
+them by backup file (Export / Import on both sides). To have them sync live, host `server/server.js`
+somewhere that is reachable from the internet, stays on and keeps `server/data` safe, then put its https
+address in `Sync.SERVER_URL` (app) and `DEFAULT_SERVER_URL` in `webportal/js/sync.js` (portal).
 
 ## Quickest: Render, deployed from the GitHub repository
 

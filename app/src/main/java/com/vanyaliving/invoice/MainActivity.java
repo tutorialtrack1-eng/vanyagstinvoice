@@ -1255,7 +1255,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         box.addView(searchRow, searchLp);
 
         // Category filter chips
-        HorizontalScrollView catScroll = new HorizontalScrollView(this);
+            HorizontalScrollView catScroll = new HorizontalScrollView(this);
         catScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout catContainer = new LinearLayout(this);
         catContainer.setOrientation(LinearLayout.HORIZONTAL);

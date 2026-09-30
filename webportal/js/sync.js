@@ -6,9 +6,10 @@
    Without a reachable server the portal simply works on its own, as before. */
 (function (global) {
   'use strict';
-  // Address of the sync server for the published portal (blitzbook.co.in). When the portal is opened through
-  // server/server.js on this machine or the local network, that server is used instead.
-  const DEFAULT_SERVER_URL = 'https://api.blitzbook.co.in';
+  // Address of a sync server, if one is hosted (see server/README.md). Blank: the portal works on its own and
+  // data moves between app and portal by backup file (Export / Import). When the portal is opened through
+  // server/server.js on this machine or the local network, that server is used.
+  const DEFAULT_SERVER_URL = '';
   const POLL_MS = 10000, PUSH_DELAY_MS = 1200, TIMEOUT_MS = 20000;
   const URL_KEY = 'blitzbook.sync_url', SEEN_KEY = 'blitzbook.sync_seen';
 

@@ -23,9 +23,9 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 ## Web portal and sync
 
 - `webportal/` is the browser version with every screen of the app (see `webportal/README.md`).
-- `server/` is a small Node server that keeps the app and the portal on the same books: entries made on
-  one side appear on the other within seconds (see `server/README.md`). Set its address in
-  `app/src/main/java/com/vanyaliving/invoice/Sync.java` (`SERVER_URL`) or under *Sync* in the app.
+- Data moves between the app and the portal by backup file: Export / Import on either side reads and writes
+  the same file. Optionally, `server/` is a small Node server that keeps both on the same books live (see
+  `server/README.md`); its address goes in `Sync.java` (`SERVER_URL`) or under *Sync* in the app.
 - The trial after registering lasts 1 day; trial, validity and activation codes are shared between app and
   portal when sync is on.
 
