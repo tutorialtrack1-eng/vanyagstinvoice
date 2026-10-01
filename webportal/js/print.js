@@ -78,12 +78,12 @@
     let breakdown = '';
     if (!noGst && inv.kind !== 'challan') {
       const hdr = intra ? ['GST Rate', 'TAXABLE', 'CGST%', 'CGST AMT', 'SGST%', 'SGST AMT', 'Total Tax Amount'] : ['GST Rate', 'TAXABLE', 'IGST%', 'IGST AMT', 'Total Tax Amount'];
-      breakdown = '<div class="sect">GST Breakdown:</div><table class="grid small"><tr>' + hdr.map(h => '<th>' + h + '</th>').join('') + '</tr>' +
+      breakdown = '<div class="sect">GST Breakdown:</div><table class="grid small"><thead><tr>' + hdr.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' +
         rateGroups(inv).map(([rt, tx]) => {
           const r = num(rt);
           if (intra) { const h = tx * (r / 2) / 100; return '<tr><td class="c">' + rt + '%</td><td class="c">' + indianNumber(tx) + '</td><td class="c">' + (r / 2).toFixed(1) + '%</td><td class="c">' + indianNumber(h) + '</td><td class="c">' + (r / 2).toFixed(1) + '%</td><td class="c">' + indianNumber(h) + '</td><td class="c">' + indianNumber(h * 2) + '</td></tr>'; }
           const f = tx * r / 100; return '<tr><td class="c">' + rt + '%</td><td class="c">' + indianNumber(tx) + '</td><td class="c">' + r.toFixed(1) + '%</td><td class="c">' + indianNumber(f) + '</td><td class="c">' + indianNumber(f) + '</td></tr>';
-        }).join('') + '</table>';
+        }).join('') + '</tbody></table>';
     } else if (noGst && inv.kind !== 'challan') {
       breakdown = '<div class="sect">Declaration: ' + (company.gstType === 'Composition' ? 'Composition taxable person, not eligible to collect tax on supplies.' : 'Supplier not registered under GST. No GST charged on this invoice.') + '</div>';
     }
@@ -101,7 +101,7 @@
       (inv.kind === 'invoice' ? '<div><b>Payment:</b><span>' + esc(inv.payment) + '</span></div>' + (noGst ? '' : '<div><b>Reverse Charge:</b><span>' + (inv.rcm ? 'Yes' : 'No') + '</span></div>') : '') + '</div></div>' +
       '<table class="grid parties"><tr><th>BILL TO</th><th>SHIP TO</th><th>OTHER DETAILS</th></tr><tr><td>' + party(inv.buyer) + '</td><td>' + party(inv.consignee.name ? inv.consignee : inv.buyer) + '</td><td>' +
       other.map(o => '<div><b>' + o[0] + '</b> ' + esc(o[1]) + '</div>').join('') + '</td></tr></table>' +
-      '<table class="grid items"><tr>' + cols.map(h => '<th>' + h + '</th>').join('') + '</tr>' + rows + '</table>' +
+      '<table class="grid items"><thead><tr>' + cols.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table>' +
       breakdown +
       (inv.kind === 'challan' ? '<div class="sect">Goods sent for delivery. Not for sale. Total quantity: ' + fmtQty(inv.items.reduce((s, i) => s + num(i.qty), 0)) + '</div>' :
         '<div class="sect words">Amount in Words: ' + esc(t.words) + '</div>' +
@@ -157,9 +157,9 @@
       const g = hsnGroups(inv); let sT = 0, sA = 0, sTax = 0;
       const body = g.map(x => { const half = x.taxable * x.rate / 200, full = x.taxable * x.rate / 100; sT += x.taxable; sA += intra ? half : full; sTax += full;
         return '<tr><td>' + esc(x.hsn) + '</td><td class="r">' + indianNumber(x.taxable) + '</td>' + (intra ? '<td class="c">' + pct(x.rate / 2) + '</td><td class="r">' + indianNumber(half) + '</td><td class="c">' + pct(x.rate / 2) + '</td><td class="r">' + indianNumber(half) + '</td>' : '<td class="c">' + pct(x.rate) + '</td><td class="r">' + indianNumber(full) + '</td>') + '<td class="r">' + indianNumber(full) + '</td></tr>'; }).join('');
-      hsn = '<table class="grid hsn"><tr><th rowspan="2">HSN/SAC</th><th rowspan="2">Taxable Value</th>' + (intra ? '<th colspan="2">CGST</th><th colspan="2">SGST</th>' : '<th colspan="2">IGST</th>') + '<th rowspan="2">Total Tax Amount</th></tr>' +
-        '<tr><th>Rate</th><th>Amount</th>' + (intra ? '<th>Rate</th><th>Amount</th>' : '') + '</tr>' + body +
-        '<tr class="total"><td><b>Total</b></td><td class="r"><b>' + indianNumber(sT) + '</b></td><td></td><td class="r"><b>' + indianNumber(sA) + '</b></td>' + (intra ? '<td></td><td class="r"><b>' + indianNumber(sA) + '</b></td>' : '') + '<td class="r"><b>' + indianNumber(sTax) + '</b></td></tr></table>' +
+      hsn = '<table class="grid hsn"><thead><tr><th rowspan="2">HSN/SAC</th><th rowspan="2">Taxable Value</th>' + (intra ? '<th colspan="2">CGST</th><th colspan="2">SGST</th>' : '<th colspan="2">IGST</th>') + '<th rowspan="2">Total Tax Amount</th></tr>' +
+        '<tr><th>Rate</th><th>Amount</th>' + (intra ? '<th>Rate</th><th>Amount</th>' : '') + '</tr></thead><tbody>' + body +
+        '<tr class="total"><td><b>Total</b></td><td class="r"><b>' + indianNumber(sT) + '</b></td><td></td><td class="r"><b>' + indianNumber(sA) + '</b></td>' + (intra ? '<td></td><td class="r"><b>' + indianNumber(sA) + '</b></td>' : '') + '<td class="r"><b>' + indianNumber(sTax) + '</b></td></tr></tbody></table>' +
         '<div class="row"><b>Tax Amount (in words) : ' + esc(rupeesPaiseWords(sTax)) + '</b></div>';
     }
     const bank = [['Bank Name', company.bankName], ["A/c Holder's Name", (company.bankHolder || company.name).toUpperCase()], ['A/c No.', company.bankAccountNo], ['IFSC Code', (company.bankIfsc || '').toUpperCase()], ['Branch', company.bankBranch]];
@@ -171,7 +171,7 @@
       (inv.consignee.name ? party('Consignee (Ship to)', inv.consignee, (inv.consignee.gstin || '').toUpperCase(), stateNameCode(inv.consignee.state), (inv.consignee.email || '').toLowerCase(), inv.consignee.phone) : '') +
       party('Buyer (Bill to)', inv.buyer, (inv.buyer.gstin || '').toUpperCase(), stateNameCode(inv.buyer.state), (inv.buyer.email || '').toLowerCase(), inv.buyer.phone) +
       '</div><div class="right">' + cells.map(c => '<div class="cell"><div class="lb">' + c[0] + '</div><div class="vl">' + esc(c[1]) + '</div></div><div class="cell"><div class="lb">' + c[2] + '</div><div class="vl">' + esc(c[3]) + '</div></div>').join('') + '</div></div>' +
-      '<table class="grid items"><tr><th>Sl<br>No.</th>' + cols.map(h => '<th>' + (h === 'GST Rate' ? 'GST<br>Rate' : h) + '</th>').join('') + '</tr>' + rows + totRows + '</table>' +
+      '<table class="grid items"><thead><tr><th>Sl<br>No.</th>' + cols.map(h => '<th>' + (h === 'GST Rate' ? 'GST<br>Rate' : h) + '</th>').join('') + '</tr></thead><tbody>' + rows + totRows + '</tbody></table>' +
       (inv.kind === 'challan' ? '<div class="row">Goods sent for delivery. Not for sale.</div>' :
         '<div class="row words"><div class="two"><span>Amount Chargeable (in words)</span><span>E. &amp; O.E</span></div><b>' + esc(t.words) + '</b></div>' +
         (inv.rcm ? '<div class="row"><b>Tax payable under reverse charge by the recipient (Sec 9(3)/9(4) CGST Act). GST shown above is not included in the total.</b></div>' : '') +
@@ -186,9 +186,15 @@
 
   const CSS = `
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif; color: #000; font-size: 9.5pt; background: #fff; }
+    html, body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif; color: #000; font-size: 9.5pt; background: #fff; }
+    .sheet { width: 100%; border-collapse: collapse; } .sheet > thead > tr > td, .sheet > tbody > tr > td, .sheet > tfoot > tr > td { padding: 0; border: 0; vertical-align: top; }
     .doc { width: 100%; }
     table { border-collapse: collapse; width: 100%; }
+    thead { display: table-header-group; } tfoot { display: table-footer-group; }
+    /* A row, a party box or a closing block is never cut in two by a page break; long item lists break between rows */
+    .grid tr, .parties, .sect, .words, .note, .foot, .sign, .cg, .pw, .classic .head, .classic .row, .classic .hsn, .classic .foot, .std .small { break-inside: avoid; page-break-inside: avoid; }
+    .grid thead { break-after: avoid; page-break-after: avoid; }
     .grid th, .grid td { border: 1px solid #000; padding: 3px 4px; vertical-align: top; }
     .grid th { background: #e0e0e0; font-weight: bold; text-align: center; font-size: 9pt; }
     .c { text-align: center; } .r { text-align: right; white-space: nowrap; }
@@ -231,7 +237,7 @@
     .classic .bank { width: 52%; border-right: 1px solid #000; padding: 6px; font-size: 8.5pt; } .classic .bank > div { display: grid; grid-template-columns: 90pt 8pt 1fr; margin-top: 3px; }
     .classic .decl { flex: 1; padding: 6px; font-size: 8.5pt; position: relative; } .classic .dh { text-align: right; font-weight: bold; } .classic .dt { font-size: 8pt; margin-top: 4px; }
     /* Envelope */
-    .env { position: relative; height: 100vh; font-size: 9pt; }
+    .env { position: relative; font-size: 9pt; }
     .env .from { max-width: 45%; font-size: 8pt; } .env .from b { font-size: 9.5pt; }
     .env .to { position: absolute; left: 42%; top: 44%; font-size: 10pt; } .env .to .nm { font-size: 12pt; font-weight: bold; }
     .env .ref { position: absolute; left: 0; bottom: 0; font-size: 8pt; }
@@ -240,13 +246,13 @@
 
   function html(inv, company, layout, paper) {
     const p = PAPERS[paper] || PAPERS.A4;
-    return page(inv.no, p.css, '12mm 10mm', layout === 1 ? classic(inv, company) : standard(inv, company), p.scale);
+    return page((inv.kind === 'challan' ? 'Delivery Challan ' : inv.kind === 'quotation' ? 'Quotation ' : 'Invoice ') + inv.no, p.css, '12mm 10mm', layout === 1 ? classic(inv, company) : standard(inv, company), p.scale);
   }
 
   // ------------------------------------------------------------ envelope: sender top-left, buyer's postal address lower right
   function envelope(inv, company, paper) {
     const p = PAPERS[paper] || PAPERS.EnvDL, b = inv.buyer, lines = String(b.name || '').toUpperCase().split('\n').map(x => x.trim()).filter(Boolean);
-    return page(inv.no, p.css, '8mm 10mm', '<div class="env"><div class="from"><b>From: ' + esc(String(company.name || '').toUpperCase()) + '</b><div>' + nl2br(company.address) + '</div><div>Ph: ' + esc(company.phone) + (company.gstin ? '   GSTIN: ' + esc(company.gstin) : '') + '</div></div>' +
+    return page('Envelope ' + inv.no, p.css, '8mm 10mm', '<div class="env"><div class="from"><b>From: ' + esc(String(company.name || '').toUpperCase()) + '</b><div>' + nl2br(company.address) + '</div><div>Ph: ' + esc(company.phone) + (company.gstin ? '   GSTIN: ' + esc(company.gstin) : '') + '</div></div>' +
       '<div class="to"><div>To,</div><div class="nm">' + esc(lines[0] || '') + '</div>' + lines.slice(1).map(l => '<div>' + esc(l) + '</div>').join('') + '<div>' + esc(formatState(b.state)) + '</div>' +
       (b.phone ? '<div>Ph: ' + esc(b.phone) + '</div>' : '') + (b.gstin ? '<div>GSTIN: ' + esc(String(b.gstin).toUpperCase()) + '</div>' : '') + '</div>' +
       '<div class="ref">Ref: Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + '</div><div class="pw env-pw">Powered by BlitzBook</div></div>');
@@ -263,15 +269,15 @@
     const body = '<div class="doc std">' + head(quotation ? 'QUOTATION' : 'PURCHASE RECORD', company, [[quotation ? 'Quotation No:' : 'Purchase No:', p.no, 1], ['Date:', p.date, 1], quotation ? null : ['Payment:', p.paidBy], p.rcm ? ['Reverse Charge:', 'Yes'] : null]) +
       '<table class="grid parties"><tr><th style="text-align:left">' + (quotation ? 'QUOTATION FROM / PARTY' : 'SUPPLIER') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(p.supplier || '-').toUpperCase()) + '</div>' +
       (p.supplierGstin ? '<div>GSTIN: ' + esc(p.supplierGstin) + '</div>' : '') + (p.notes ? '<div>Notes: ' + esc(p.notes) + '</div>' : '') + '</td></tr></table>' +
-      '<table class="grid items"><tr>' + ['Sl', 'DESCRIPTION', 'HSN/SAC', 'Qty', 'Rate', 'GST%', 'Amount'].map(h => '<th>' + h + '</th>').join('') + '</tr>' +
-      p.items.map((it, n) => '<tr><td class="c">' + (n + 1) + '</td><td>' + esc(it.name) + (it.stock ? '  (stock)' : '') + '</td><td class="c">' + esc(it.hsn) + '</td><td class="c">' + esc(fmtQty(it.qty)) + ' ' + esc(it.uqc || 'NOS') + '</td><td class="c">' + indianNumber(it.rate) + '</td><td class="c">' + esc(it.gst) + '%</td><td class="c">' + indianNumber(it.amount) + '</td></tr>').join('') + '</table>' +
+      '<table class="grid items"><thead><tr>' + ['Sl', 'DESCRIPTION', 'HSN/SAC', 'Qty', 'Rate', 'GST%', 'Amount'].map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' +
+      p.items.map((it, n) => '<tr><td class="c">' + (n + 1) + '</td><td>' + esc(it.name) + (it.stock ? '  (stock)' : '') + '</td><td class="c">' + esc(it.hsn) + '</td><td class="c">' + esc(fmtQty(it.qty)) + ' ' + esc(it.uqc || 'NOS') + '</td><td class="c">' + indianNumber(it.rate) + '</td><td class="c">' + esc(it.gst) + '%</td><td class="c">' + indianNumber(it.amount) + '</td></tr>').join('') + '</tbody></table>' +
       '<div class="foot"><div></div><div class="totals" style="flex:0 0 230pt"><div><span><b>Taxable Value:</b></span><b>' + money(p.taxable) + '</b></div>' +
       (inter ? '<div><span><b>IGST:</b></span><span>' + money(p.igst) + '</span></div>' : '<div><span><b>CGST:</b></span><span>' + money(p.cgst) + '</span></div><div><span><b>SGST:</b></span><span>' + money(p.sgst) + '</span></div>') +
       '<div class="line"><span><b>' + (p.rcm ? 'Payable to Supplier:' : 'Total:') + '</b></span><b>' + money(p.total) + '</b></div></div></div>' +
       (p.rcm ? '<div class="note">GST of ' + money(p.gst) + ' payable under reverse charge by ' + esc(company.name) + '.</div>' : '') +
       '<div class="sect words">Amount in Words: ' + esc(U.toIndianWords(Math.round(num(p.total)))) + '</div>' +
       (quotation ? '<div class="note" style="font-weight:normal">This quotation is valid for 30 days from the date above unless stated otherwise.</div>' : '') + signBlock(company) + POWERED + '</div>';
-    return page(p.no, sheet.css, '12mm 10mm', body, sheet.scale);
+    return page((quotation ? 'Quotation ' : 'Purchase ') + p.no, sheet.css, '12mm 10mm', body, sheet.scale);
   }
 
   // ------------------------------------------------------------ credit / debit note on A4
@@ -280,28 +286,50 @@
     const body = '<div class="doc std">' + head(credit ? 'CREDIT NOTE' : 'DEBIT NOTE', company, [['Note No:', n.no, 1], ['Date:', n.date, 1], [credit ? 'Against Invoice:' : 'Against Purchase:', n.ref || '-']]) +
       '<table class="grid parties"><tr><th style="text-align:left">' + (credit ? 'ISSUED TO (CUSTOMER)' : 'ISSUED TO (SUPPLIER)') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(n.party || '').toUpperCase()) + '</div>' +
       (n.partyGstin ? '<div>GSTIN: ' + esc(n.partyGstin) + '</div>' : '') + (n.reason ? '<div>Reason: ' + esc(n.reason) + '</div>' : '') + '</td></tr></table>' +
-      '<table class="grid items"><tr><th>PARTICULARS</th><th style="width:80pt">GST %</th><th style="width:125pt">AMOUNT</th></tr>' +
+      '<table class="grid items"><thead><tr><th>PARTICULARS</th><th style="width:80pt">GST %</th><th style="width:125pt">AMOUNT</th></tr></thead><tbody>' +
       rows.map(r => '<tr><td>' + r[0] + '</td><td class="c">' + (r[1] === '' ? '' : esc(r[1]) + '%') + '</td><td class="r">' + indianNumber(r[2]) + '</td></tr>').join('') +
-      '<tr><td colspan="2" class="r"><b>TOTAL</b></td><td class="r"><b>' + money(n.total) + '</b></td></tr></table>' +
+      '<tr><td colspan="2" class="r"><b>TOTAL</b></td><td class="r"><b>' + money(n.total) + '</b></td></tr></tbody></table>' +
       '<div class="sect words">Amount in Words: ' + esc(U.toIndianWords(Math.round(num(n.total)))) + '</div>' +
       '<div>Settlement: ' + (n.settle === 'Credit' ? (credit ? "Adjusted against the customer's account" : "Adjusted against the supplier's account") : (credit ? 'Refunded by ' : 'Received back by ') + esc(n.settle)) + '</div>' + signBlock(company) + POWERED + '</div>';
-    return page(n.no, PAPERS.A4.css, '12mm 10mm', body);
+    return page((credit ? 'Credit Note ' : 'Debit Note ') + n.no, PAPERS.A4.css, '12mm 10mm', body);
   }
 
+  /* One printable page set. The sheet has no @page margin, which is what stops browsers printing their own
+     header and footer (title, date, "about:srcdoc", page numbers) on the PDF; the margins come from the
+     sheet table instead, whose header and footer rows repeat on every printed page. The title is what
+     "Save as PDF" suggests as the file name. */
   function page(title, size, margin, body, scale) {
-    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>@page { size: ' + size + '; margin: ' + margin + '; }' + CSS +
-      (scale && scale !== 1 ? ' body { zoom: ' + scale + '; }' : '') + '</style></head><body>' + body + '</body></html>';
+    const m = String(margin).trim().split(/\s+/), top = m[0], side = m[1] || m[0], bottom = m[2] || m[0];
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>@page { size: ' + size + '; margin: 0; } body { padding: 0 ' + side + '; }' + CSS +
+      ' .sheet .mt { height: ' + top + '; } .sheet .mb { height: ' + bottom + '; } .env { height: calc(100vh - ' + top + ' - ' + bottom + '); }' + (scale && scale !== 1 ? ' .sheet .doc, .sheet .env { zoom: ' + scale + '; }' : '') + '</style></head><body>' +
+      '<table class="sheet"><thead><tr><td><div class="mt"></div></td></tr></thead><tbody><tr><td>' + body + '</td></tr></tbody><tfoot><tr><td><div class="mb"></div></td></tr></tfoot></table></body></html>';
   }
 
   // Sends a finished document to the browser's print dialog
   function show(src) {
     let f = document.getElementById('printFrame');
-    if (!f) { f = document.createElement('iframe'); f.id = 'printFrame'; f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'; document.body.appendChild(f); }
+    if (!f) { f = document.createElement('iframe'); f.id = 'printFrame'; f.title = 'Print'; f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'; document.body.appendChild(f); }
+    f.onload = () => {
+      // Fonts and images must be in before the preview is built, or the first print comes out with the fallback font
+      const w = f.contentWindow, go = () => { try { w.focus(); w.print(); } catch (e) { const t = window.open('', '_blank'); t.document.write(src); t.document.close(); t.print(); } };
+      if (w.document.fonts && w.document.fonts.ready) w.document.fonts.ready.then(go, go); else go();
+    };
     f.srcdoc = src;
-    f.onload = () => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { const w = window.open('', '_blank'); w.document.write(src); w.document.close(); w.print(); } };
   }
   function open(inv, company, layout, paper) { show(html(inv, company, layout, paper)); }
   function preview(inv, company, layout, paper) { return html(inv, company, layout, paper); }
 
-  global.Print = { PAPERS, SHEETS, LAYOUTS, html, open, show, preview, docTitle, envelope, purchase, note };
+  // ------------------------------------------------------------ receipt / payment voucher on A4
+  function voucher(v, company) {
+    const receipt = v.vtype !== 'payment', amount = v.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0);
+    const body = '<div class="doc std">' + head(receipt ? 'RECEIPT' : 'PAYMENT VOUCHER', company, [[(receipt ? 'Receipt' : 'Voucher') + ' No:', v.no || '-', 1], ['Date:', v.date, 1], [receipt ? 'Against Invoice:' : 'Against Bill:', v.ref || '-']]) +
+      '<table class="grid parties"><tr><th style="text-align:left">' + (receipt ? 'RECEIVED FROM' : 'PAID TO') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(v.party || '').toUpperCase()) + '</div>' + (v.narration ? '<div>' + esc(v.narration) + '</div>' : '') + '</td></tr></table>' +
+      '<table class="grid items"><thead><tr><th>PARTICULARS</th><th style="width:125pt">AMOUNT</th></tr></thead><tbody><tr><td>' + (receipt ? 'Amount received' : 'Amount paid') + ' by ' + esc(v.mode || 'Bank Transfer') + (v.bankRef ? ' (ref ' + esc(v.bankRef) + ')' : '') + (v.ref ? ' against ' + esc(v.ref) : '') + '</td><td class="r">' + indianNumber(amount) + '</td></tr>' +
+      '<tr><td class="r"><b>TOTAL</b></td><td class="r"><b>' + money(amount) + '</b></td></tr></tbody></table>' +
+      '<div class="sect words">Amount in Words: ' + esc(rupeesPaiseWords(amount)) + '</div>' +
+      (receipt ? '<div class="note" style="font-weight:normal">Received with thanks. Subject to realisation of cheque / transfer where applicable.</div>' : '') + signBlock(company) + POWERED + '</div>';
+    return page((receipt ? 'Receipt ' : 'Payment ') + (v.no || ''), PAPERS.A4.css, '12mm 10mm', body);
+  }
+
+  global.Print = { PAPERS, SHEETS, LAYOUTS, html, open, show, preview, docTitle, envelope, purchase, note, voucher };
 })(window);

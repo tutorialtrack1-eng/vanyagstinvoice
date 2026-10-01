@@ -3,7 +3,7 @@
 # Data lives in /data (mount a volume there so it survives updates).
 FROM node:20-alpine
 WORKDIR /app
-COPY server/server.js server/server.js
+COPY server/server.js server/notify.js server/
 COPY webportal webportal
 RUN rm -rf webportal/tools
 ENV PORT=8080 BLITZBOOK_DATA=/data NODE_ENV=production

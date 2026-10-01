@@ -6611,6 +6611,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             LinearLayout row = row();
             row.setPadding(0, dp(6), 0, dp(6));
             StringBuilder sb = new StringBuilder(j.date);
+            if (j.isReceipt() || j.isPayment()) sb.append("   ").append(j.kind).append(' ').append(j.docNo).append(j.party.isEmpty() ? "" : (j.isReceipt() ? " from " : " to ") + j.party).append(j.refNo.isEmpty() ? "" : " against " + j.refNo);
             for (Ledger.JournalLine l : j.lines) sb.append('\n').append(l.debit ? "Dr " : "    Cr ").append(l.account).append("  ").append(money(l.amount));
             if (!j.narration.isEmpty()) sb.append('\n').append(j.narration);
             TextView tv = new TextView(this);

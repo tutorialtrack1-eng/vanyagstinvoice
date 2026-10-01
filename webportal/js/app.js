@@ -125,7 +125,8 @@
     plus: '<path d="M12 5v14M5 12h14"/>',
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     shield: '<path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/>',
-    sync: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>'
+    sync: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
+    bank: '<path d="M3 10h18L12 4z"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 21h18M4 18h16"/>'
   };
   function icon(name) { return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
 
@@ -138,6 +139,7 @@
     { key: 'purchases', t: 'Purchase', d: 'Bills and quotations', ic: 'cart', a: '#B45309', b: '#F59E0B' },
     { key: 'items', t: 'Stock', d: 'Items, prices, stock in hand', ic: 'box', a: '#15803D', b: '#22C55E' },
     { key: 'expenses', t: 'Expense', d: 'Rent, salaries and more', ic: 'wallet', a: '#BE123C', b: '#F43F5E' },
+    { key: 'money', t: 'Receipts', d: 'Payments, bank statement', ic: 'bank', a: '#0E7490', b: '#06B6D4' },
     { key: 'journal', t: 'Journal', d: 'Manual ledger entries', ic: 'book', a: '#6D28D9', b: '#8B5CF6' },
     { key: 'reports', t: 'Reports', d: 'Sales, P&L, balance sheet', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
   ];
@@ -148,6 +150,7 @@
     { key: 'salesReport', t: 'Sales Report', ic: 'trend' },
     { key: 'pnl', t: 'Profit & Loss', ic: 'pie' },
     { key: 'balance', t: 'Balance Sheet', ic: 'scale' },
+    { key: 'money', t: 'Receipts & Payments', ic: 'bank' },
     { key: 'stock', t: 'Stock in Hand', ic: 'box' },
     { key: 'backup', t: 'Export / Import', ic: 'download' },
     { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true },
@@ -295,43 +298,63 @@
       $('#lSync').onclick = () => SyncUI.dialog();
     },
     validPassword(p) { return p.length >= 6 && /[A-Za-z]/.test(p) && /\d/.test(p) && /[^A-Za-z0-9]/.test(p); },
+    // Where an OTP went, for the message shown after sending it
+    otpSentText(r, phone) {
+      if (r.test) return 'OTP for ' + phone + '\n\n(Test mode) Your 6-digit OTP is: ' + r.otp + '\n\nThe server has no SMS or email sender set up, so the OTP is shown here instead of being sent. See server/README.md.';
+      const to = [r.to && r.to.phone ? '+91 ' + r.to.phone : '', r.to && r.to.email ? r.to.email : ''].filter(Boolean).join(' and ');
+      return 'A 6-digit OTP was sent to ' + to + '. It is valid for 10 minutes.' + (r.to && r.to.email ? '\n\nNot in the inbox? Check the spam folder.' : '');
+    },
     register() {
       Auth.frame('<div class="brand">Create Account</div><div class="tag">Register to start your ' + Sub.TRIAL_LABEL + ' trial</div>' +
         UI.field('Full Name', UI.input('rName', ''), { req: true }) + UI.field('Mobile Number', UI.input('rPhone', '', { type: 'tel', placeholder: '10 digits', attrs: ' maxlength="10"' }), { req: true }) +
-        UI.field('Email (optional)', UI.input('rEmail', '', { type: 'email' })) + UI.field('Password', UI.input('rPw', '', { type: 'password' }), { req: true, hint: 'At least 6 characters with a letter, a digit and a special character' }) +
-        '<div id="otpBox" class="hidden">' + UI.field('OTP', UI.input('rOtp', '', { placeholder: '6-digit OTP', attrs: ' maxlength="6" inputmode="numeric"' })) + '</div>' +
+        UI.field('Email (optional)', UI.input('rEmail', '', { type: 'email' }), { hint: 'The OTP and your activation codes are sent to the mobile number and this email' }) + UI.field('Password', UI.input('rPw', '', { type: 'password' }), { req: true, hint: 'At least 6 characters with a letter, a digit and a special character' }) +
+        '<div id="otpBox" class="hidden">' + UI.field('OTP', UI.input('rOtp', '', { placeholder: '6-digit OTP', attrs: ' maxlength="6" inputmode="numeric"' }), { hint: 'Enter the OTP you received' }) + '</div>' +
         '<button class="btn block" id="rSend">Send OTP</button><div class="links"><button class="link hidden" id="rResend">Resend OTP</button><button class="link" id="rBack">Already registered? Login</button></div>');
-      let code = '', otpPhone = '', busy = false;
+      // viaServer: the OTP was issued by the sync server, which also checks it. Otherwise (no server, or the
+      // server could not be reached) the browser makes a test OTP and the account is created here.
+      let code = '', otpPhone = '', otpEmail = '', busy = false, viaServer = false;
+      const step2 = () => { $('#otpBox').classList.remove('hidden'); $('#rResend').classList.remove('hidden'); $('#rSend').textContent = 'Verify & Register'; $('#rSend').onclick = verify; $('#rOtp').value = ''; $('#rOtp').focus(); };
+      const localOtp = (phone) => { viaServer = false; code = otp(); UI.alert('OTP Sent', 'OTP sent to +91 ' + phone + '\n\n(Test mode) Your 6-digit OTP is: ' + code); step2(); };
       const send = async () => {
+        if (busy) return;
         const name = UI.val('rName').trim(), phone = UI.val('rPhone').trim(), email = UI.val('rEmail').trim().toLowerCase(), pw = UI.val('rPw');
         if (!name) return UI.toast('Enter your name');
         if (!Auth.validPassword(pw)) return UI.toast('Password needs 6+ characters with a letter, digit and special character');
         if (!/^[6-9][0-9]{9}$/.test(phone)) return UI.toast('Enter a valid 10-digit mobile number');
         if (email && !U.isValidEmail(email)) return UI.toast('Enter a valid email');
         if (Store.findUser(phone) || (email && Store.findUser(email))) return UI.toast('This mobile number or email is already registered');
-        if (await Sync.ready()) {
-          try { if ((await Sync.call('exists', { identity: phone })).exists || (email && (await Sync.call('exists', { identity: email })).exists)) return UI.toast('This mobile number or email already has an account. Please login.'); }
-          catch (e) { /* offline: the account is created here and joins the server later */ }
-        }
-        code = otp(); otpPhone = phone;
-        UI.alert('OTP Sent', 'OTP sent to +91 ' + phone + '\n\n(Test mode) Your 6-digit OTP is: ' + code);
-        $('#otpBox').classList.remove('hidden'); $('#rResend').classList.remove('hidden'); $('#rSend').textContent = 'Verify & Register';
-        $('#rSend').onclick = verify;
+        busy = true; $('#rSend').disabled = true;
+        try {
+          otpPhone = phone; otpEmail = email;
+          if (!(await Sync.ready())) { localOtp(phone); return; }
+          try {
+            const r = await Sync.call('otp', { purpose: 'register', phone, email });
+            viaServer = true; code = '';
+            UI.alert('OTP Sent', Auth.otpSentText(r, '+91 ' + phone));
+            step2();
+          } catch (e) {
+            if (e.status === 409) { UI.toast('This mobile number or email already has an account. Please login.', 5000); return; }
+            if (e.status) { UI.toast(e.message, 6000); return; }
+            localOtp(phone); // server set but unreachable: the account is created here and joins the server later
+          }
+        } finally { busy = false; $('#rSend').disabled = false; }
       };
       const verify = async () => {
         if (busy) return;
-        const name = UI.val('rName').trim(), phone = UI.val('rPhone').trim(), email = UI.val('rEmail').trim().toLowerCase();
-        if (phone !== otpPhone) return UI.toast('Mobile number changed. Please request a new OTP.');
-        if (UI.val('rOtp').trim() !== code) return UI.toast('Invalid OTP');
-        busy = true;
+        const name = UI.val('rName').trim(), phone = UI.val('rPhone').trim(), email = UI.val('rEmail').trim().toLowerCase(), entered = UI.val('rOtp').trim();
+        if (phone !== otpPhone || email !== otpEmail) return UI.toast('Mobile number or email changed. Please request a new OTP.');
+        if (!/^\d{6}$/.test(entered)) return UI.toast('Enter the 6-digit OTP');
+        if (!viaServer && entered !== code) return UI.toast('Invalid OTP');
+        busy = true; $('#rSend').disabled = true;
         try {
           const h = await hash(UI.val('rPw'));
           let token = '', createdAt = Date.now();
-          if (await Sync.ready()) {
-            try { const r = await Sync.call('register', { name, phone, email, pw: h }); token = r.token; createdAt = r.user.createdAt; }
+          if (viaServer || await Sync.ready()) {
+            try { const r = await Sync.call('register', Object.assign({ name, phone, email, pw: h }, viaServer ? { otp: entered } : {})); token = r.token; createdAt = r.user.createdAt; }
             catch (e) {
               if (e.status === 409) { UI.toast('This mobile number or email already has an account. Please login.'); Auth.login(); return; }
-              if (e.status) { UI.toast(e.message); return; }
+              if (e.status) { UI.toast(e.message, 5000); return; }
+              if (viaServer) { UI.toast('Cannot reach the server to check the OTP. Check the connection and try again.', 5000); return; }
             }
           }
           const users = Store.users();
@@ -339,42 +362,68 @@
           users.push(u); Store.saveUsers(users);
           UI.toast('Registered. Welcome, ' + u.name + '!');
           App.login(u, token);
-        } finally { busy = false; }
+        } finally { busy = false; const b = $('#rSend'); if (b) b.disabled = false; }
       };
       $('#rSend').onclick = send; $('#rResend').onclick = send; $('#rBack').onclick = () => Auth.login();
     },
     reset() {
-      let code = '', user = null;
-      const bg = UI.modal({ title: 'Reset Password', body: UI.field('Registered Mobile / Email', UI.input('xId', '')) + '<div id="xStep2" class="hidden">' + UI.field('OTP', UI.input('xOtp', '', { placeholder: 'Enter 6-digit OTP' })) + UI.field('New Password', UI.input('xPw', '', { type: 'password', placeholder: 'min 6 chars, letters, numbers & a special character' })) + UI.field('Confirm New Password', UI.input('xPw2', '', { type: 'password' })) + '</div>',
+      // viaServer: the sync server sent the OTP to the account's mobile / email and checks it, so the password
+      // can be reset from any device. Without a server the browser's own copy of the account is reset.
+      let code = '', user = null, identity = '', viaServer = false;
+      const bg = UI.modal({ title: 'Reset Password', body: UI.field('Registered Mobile / Email', UI.input('xId', '')) + '<div id="xStep2" class="hidden">' + UI.field('OTP', UI.input('xOtp', '', { placeholder: 'Enter 6-digit OTP', attrs: ' maxlength="6" inputmode="numeric"' })) + UI.field('New Password', UI.input('xPw', '', { type: 'password', placeholder: 'min 6 chars, letters, numbers & a special character' })) + UI.field('Confirm New Password', UI.input('xPw2', '', { type: 'password' })) + '</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Send Reset OTP', onClick: async (bg) => {
-          const online = await Sync.ready();
-          if (!user) {
-            const id = UI.val('xId', bg).trim();
-            user = Store.findUser(id);
-            if (!user) {
-              let elsewhere = false;
-              if (online && id) { try { elsewhere = (await Sync.call('exists', { identity: id })).exists; } catch (e) { /* offline */ } }
-              UI.toast(elsewhere ? 'This account has not been used on this browser. Log in with its password, or reset it on a device where it is signed in.' : 'Account not found with this mobile / email', 5000);
-              return false;
-            }
-            code = otp(); UI.alert('OTP Sent', 'Reset OTP sent to ' + id + '\n\n(Test mode) Your 6-digit OTP is: ' + code);
-            $('#xId', bg).disabled = true; $('#xStep2', bg).classList.remove('hidden'); $$('.mf .btn', bg)[1].textContent = 'Reset Password'; return false;
-          }
-          if (UI.val('xOtp', bg).trim() !== code) { UI.toast('Invalid OTP'); return false; }
-          const p = UI.val('xPw', bg); if (!Auth.validPassword(p)) { UI.toast('Password needs 6+ characters with a letter, digit and special character'); return false; }
-          if (p !== UI.val('xPw2', bg)) { UI.toast('Passwords do not match'); return false; }
-          const h = await hash(p);
-          // The account on the sync server can only be changed by a device that is signed in to it
-          if (online) {
-            const st = Store.peek(user.id, 'sync', {});
-            let done = false;
+          const btn = $$('.mf .btn', bg)[1];
+          const toStep2 = () => { $('#xId', bg).disabled = true; $('#xStep2', bg).classList.remove('hidden'); btn.textContent = 'Reset Password'; $('#xOtp', bg).focus(); };
+          if (!$('#xStep2', bg).classList.contains('hidden')) {
+            // Step 2: check the OTP and set the password
+            const entered = UI.val('xOtp', bg).trim();
+            if (!/^\d{6}$/.test(entered)) { UI.toast('Enter the 6-digit OTP'); return false; }
+            if (!viaServer && entered !== code) { UI.toast('Invalid OTP'); return false; }
+            const p = UI.val('xPw', bg); if (!Auth.validPassword(p)) { UI.toast('Password needs 6+ characters with a letter, digit and special character'); return false; }
+            if (p !== UI.val('xPw2', bg)) { UI.toast('Passwords do not match'); return false; }
+            const h = await hash(p);
+            btn.disabled = true;
             try {
-              if (st.token) { try { const r = await Sync.call('password', { token: st.token, pw: h }); st.token = r.token; Store.poke(user.id, 'sync', st); done = true; } catch (e) { if (e.status !== 401) throw e; } }
-              if (!done && (await Sync.call('exists', { identity: user.phone || user.email })).exists) { UI.toast('This browser is signed out of the account. Log in with the current password, or reset it on a device that is signed in.', 6000); return false; }
-            } catch (e) { UI.toast('Cannot reach the server. Connect to the internet to reset the password.', 5000); return false; }
+              if (viaServer) {
+                let r;
+                try { r = await Sync.call('reset', { identity, otp: entered, pw: h }); }
+                catch (e) { UI.toast(e.status ? e.message : 'Cannot reach the server. Connect to the internet to reset the password.', 5000); return false; }
+                const u = Auth.keep(r.user, h, user);
+                Store.poke(u.id, 'sync', Object.assign(Store.peek(u.id, 'sync', {}), { token: r.token }));
+              } else if (await Sync.ready()) {
+                // The account on the sync server can only be changed by a device that is signed in to it
+                const st = Store.peek(user.id, 'sync', {});
+                let done = false;
+                try {
+                  if (st.token) { try { const r = await Sync.call('password', { token: st.token, pw: h }); st.token = r.token; Store.poke(user.id, 'sync', st); done = true; } catch (e) { if (e.status !== 401) throw e; } }
+                  if (!done && (await Sync.call('exists', { identity: user.phone || user.email })).exists) { UI.toast('This browser is signed out of the account. Log in with the current password, or reset it on a device that is signed in.', 6000); return false; }
+                } catch (e) { UI.toast('Cannot reach the server. Connect to the internet to reset the password.', 5000); return false; }
+                const users = Store.users(); users.find(x => x.id === user.id).password = h; Store.saveUsers(users);
+              } else { const users = Store.users(); users.find(x => x.id === user.id).password = h; Store.saveUsers(users); }
+            } finally { btn.disabled = false; }
+            UI.toast('Password reset successfully! Please log in.'); return true;
           }
-          const users = Store.users(); users.find(x => x.id === user.id).password = h; Store.saveUsers(users);
-          UI.toast('Password reset successfully! Please log in.'); return true;
+          // Step 1: find the account and send the OTP
+          identity = UI.val('xId', bg).trim();
+          if (!identity) { UI.toast('Enter the registered mobile number or email'); return false; }
+          user = Store.findUser(identity);
+          btn.disabled = true;
+          try {
+            if (await Sync.ready()) {
+              try {
+                const r = await Sync.call('otp', { purpose: 'reset', identity });
+                viaServer = true; code = '';
+                UI.alert('OTP Sent', Auth.otpSentText(r, identity)); toStep2(); return false;
+              } catch (e) {
+                if (e.status === 404 && !user) { UI.toast('Account not found with this mobile / email', 5000); return false; }
+                if (e.status && e.status !== 404) { UI.toast(e.message, 6000); return false; }
+                if (!user) { UI.toast('Cannot reach the server. Connect to the internet to reset the password.', 5000); return false; }
+              }
+            }
+            if (!user) { UI.toast('Account not found with this mobile / email', 5000); return false; }
+            viaServer = false; code = otp(); UI.alert('OTP Sent', 'Reset OTP sent to ' + identity + '\n\n(Test mode) Your 6-digit OTP is: ' + code);
+            toStep2(); return false;
+          } finally { btn.disabled = false; }
         } }] });
       return bg;
     }

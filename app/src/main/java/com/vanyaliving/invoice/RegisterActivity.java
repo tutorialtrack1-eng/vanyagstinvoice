@@ -17,6 +17,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
 import java.util.Random;
 
 public class RegisterActivity extends Activity {
@@ -24,7 +26,9 @@ public class RegisterActivity extends Activity {
     private Button sendOtpBtn, registerBtn;
     private TextView resendLink;
     private String generatedOtp = "";
-    private String otpPhone = "";
+    private String otpPhone = "", otpEmail = "";
+    // true when the sync server sent the OTP (and checks it at registration); false for the on-screen test OTP
+    private boolean otpViaServer;
     private DatabaseHelper dbHelper;
 
     @Override
@@ -178,39 +182,74 @@ public class RegisterActivity extends Activity {
             return;
         }
 
-        generatedOtp = String.valueOf(new Random().nextInt(900000) + 100000);
-        otpPhone = phone;
-        sendOtpSms(phone, generatedOtp);
+        otpPhone = phone; otpEmail = email;
+        if (!Sync.enabled(this)) { localOtp(phone); return; }
 
+        // The sync server sends the OTP by SMS and email and checks it when the account is registered
+        sendOtpBtn.setEnabled(false); resendLink.setEnabled(false);
+        new Thread(() -> {
+            JSONObject reply = null; Sync.SyncException error = null;
+            try { reply = Sync.sendOtp(this, "register", phone, email, null); } catch (Sync.SyncException e) { error = e; }
+            final JSONObject fReply = reply; final Sync.SyncException fError = error;
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                sendOtpBtn.setEnabled(true); resendLink.setEnabled(true);
+                if (fReply != null) {
+                    otpViaServer = true; generatedOtp = "";
+                    new AlertDialog.Builder(this).setTitle("OTP Sent").setMessage(Sync.otpSentText(fReply, "+91 " + phone)).setPositiveButton("OK", null).show();
+                    showOtpStep();
+                } else if (fError.status == 409) {
+                    phoneInput.setError("This mobile number or email already has a BlitzBook account. Please log in.");
+                    phoneInput.requestFocus();
+                } else if (fError.status != 0) {
+                    Toast.makeText(this, fError.getMessage(), Toast.LENGTH_LONG).show();
+                } else {
+                    // No connection: the account is made on this phone and joins the server at the first sync
+                    localOtp(phone);
+                }
+            });
+        }).start();
+    }
+
+    // Without a sync server (or without a connection to it) the OTP is made here and shown on screen
+    private void localOtp(String phone) {
+        otpViaServer = false;
+        generatedOtp = String.valueOf(new Random().nextInt(900000) + 100000);
+        new AlertDialog.Builder(this)
+                .setTitle("OTP Sent")
+                .setMessage("OTP sent to +91 " + phone + "\n\n(Test mode) Your 6-digit OTP is: " + generatedOtp)
+                .setPositiveButton("OK", null)
+                .show();
+        showOtpStep();
+    }
+
+    private void showOtpStep() {
+        otpInput.setText("");
         otpInput.setVisibility(View.VISIBLE);
         registerBtn.setVisibility(View.VISIBLE);
         resendLink.setVisibility(View.VISIBLE);
         sendOtpBtn.setVisibility(View.GONE);
-    }
-
-    // Delivery point for the OTP SMS. Replace the dialog with a real SMS provider
-    // (Firebase Phone Auth, MSG91, Twilio, ...) once its credentials are available.
-    private void sendOtpSms(String phone, String otp) {
-        new AlertDialog.Builder(this)
-                .setTitle("OTP Sent")
-                .setMessage("OTP sent to +91 " + phone + "\n\n(Test mode) Your 6-digit OTP is: " + otp)
-                .setPositiveButton("OK", null)
-                .show();
+        otpInput.requestFocus();
     }
 
     private void handleRegister() {
         String phone = phoneInput.getText().toString().trim();
-        if (!phone.equals(otpPhone)) {
-            Toast.makeText(this, "Mobile number changed. Please request a new OTP.", Toast.LENGTH_SHORT).show();
+        String email = emailInput.getText().toString().trim();
+        if (!phone.equals(otpPhone) || !email.equalsIgnoreCase(otpEmail)) {
+            Toast.makeText(this, "Mobile number or email changed. Please request a new OTP.", Toast.LENGTH_SHORT).show();
             return;
         }
         String enteredOtp = otpInput.getText().toString().trim();
-        if (!enteredOtp.equals(generatedOtp)) {
+        if (!enteredOtp.matches("\\d{6}")) {
+            otpInput.setError("Enter the 6-digit OTP");
+            otpInput.requestFocus();
+            return;
+        }
+        if (!otpViaServer && !enteredOtp.equals(generatedOtp)) {
             Toast.makeText(this, "Invalid OTP", Toast.LENGTH_SHORT).show();
             return;
         }
         String name = nameInput.getText().toString().trim();
-        String email = emailInput.getText().toString().trim();
         String password = passwordInput.getText().toString().trim();
         if (!Sync.enabled(this)) { registerHere(name, phone, email, password, null); return; }
 
@@ -218,11 +257,12 @@ public class RegisterActivity extends Activity {
         registerBtn.setEnabled(false);
         new Thread(() -> {
             String token = null, problem = null;
-            try { token = Sync.register(this, name, phone, email, password).optString("token", ""); }
+            try { token = (otpViaServer ? Sync.register(this, name, phone, email, password, enteredOtp) : Sync.register(this, name, phone, email, password)).optString("token", ""); }
             catch (Sync.SyncException e) {
                 if (e.status == 409) problem = "This mobile number or email already has a BlitzBook account. Please log in.";
                 else if (e.status != 0) problem = e.getMessage();
-                // status 0 = no connection: the account is made on this phone and joins the server at the first sync
+                else if (otpViaServer) problem = "Cannot reach the server to check the OTP. Check the connection and try again.";
+                // status 0 with a local OTP = no connection: the account is made on this phone and joins the server at the first sync
             }
             final String fToken = token, fProblem = problem;
             runOnUiThread(() -> {

@@ -12,7 +12,8 @@ connect `tutorialtrack1-eng/vanyagstinvoice`, and Apply: Render builds from `mas
 keeps the books on a persistent disk and issues the https certificate. Then add at GoDaddy:
 `CNAME  api  ->  blitzbook-api.onrender.com` (Render shows the exact target under the service's Custom Domains).
 Check with `curl https://api.blitzbook.co.in/api/ping`. The persistent disk needs the paid Starter plan;
-the free plan has no disk and loses the data.
+the free plan has no disk and loses the data. Under the service's **Environment** tab add the `SMTP_*` and
+`SMS_*` settings from `server/README.md` so OTPs are sent by email and SMS instead of shown on screen.
 
 ## Your own machine instead
 

@@ -7,12 +7,16 @@
 
    API (JSON over POST, token in the body):
        GET  /api/ping
-       POST /api/register  {name, phone, email, pw}            -> {token, user}
+       POST /api/otp       {purpose: register|reset, phone, email | identity} -> {sent: {sms, email}, to, test?}
+       POST /api/register  {name, phone, email, pw, otp}       -> {token, user}
        POST /api/login     {identity, pw}                      -> {token, user}
        POST /api/exists    {identity}                          -> {exists}
        POST /api/password  {token, pw}                         -> {token}
+       POST /api/reset     {identity, otp, pw}                 -> {token, user}
        POST /api/sync      {token, epoch, since, changes[]}    -> {epoch, rev, changes[]}
    pw is never the plain password: clients send SHA-256("bb|" + password) and it is stored here under scrypt.
+   OTPs go out by SMS and email through notify.js (settings in the environment or <data>/config.json); with
+   nothing configured the server runs in test mode and hands the OTP back to the client, which shows it.
 
    Books are documents addressed by key ("inv:0007", "item:tea", "contact:<id>" ...). Every change gets the
    next revision number; a client sends what it changed and receives everything newer than the revision it
@@ -25,6 +29,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const notify = require('./notify.js');
 
 const PORT = parseInt(process.env.PORT, 10) || 8080;
 const DATA = path.resolve(process.env.BLITZBOOK_DATA || path.join(__dirname, 'data'));
@@ -32,6 +37,7 @@ const WEB = path.resolve(process.env.BLITZBOOK_WEB || path.join(__dirname, '..',
 const MAX_BODY = 24 * 1024 * 1024;
 const MAX_KEY = 300;
 const LOGIN_TRIES = 10, LOGIN_WINDOW = 10 * 60 * 1000;
+const OTP_TTL = 10 * 60 * 1000, OTP_TRIES = 5, OTP_SENDS = 5, OTP_GAP = 20 * 1000;
 
 // ------------------------------------------------------------ storage
 fs.mkdirSync(path.join(DATA, 'books'), { recursive: true });
@@ -94,13 +100,69 @@ function failed(key) {
 
 class Reply extends Error { constructor(status, message) { super(message); this.status = status; } }
 
+// ------------------------------------------------------------ one-time passwords
+const otps = new Map(); // "register|phone|email" or "reset|<user id>" -> {hash, exp, tries, phone, email}
+const sends = new Map(); // address + key -> times an OTP went out
+const hashOtp = (code, key) => crypto.createHmac('sha256', accounts.secret).update(key + '|' + code).digest('hex');
+function sweepOtps() { const now = Date.now(); for (const [k, v] of otps) if (now > v.exp) otps.delete(k); for (const [k, v] of sends) if (!v.some(t => now - t < LOGIN_WINDOW)) sends.delete(k); }
+const validPhone = (p) => /^[6-9][0-9]{9}$/.test(p), validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
+const maskPhone = (p) => p ? p.slice(0, 2) + 'XXXXXX' + p.slice(-2) : '';
+const maskEmail = (e) => { const i = e.indexOf('@'); return i > 0 ? e.slice(0, Math.min(2, i)) + '***' + e.slice(i) : ''; };
+// Issues and delivers an OTP for the key; what comes back is for the client (never the code itself, except in test mode)
+async function issueOtp(key, phone, email, purpose, req) {
+  sweepOtps();
+  const who = req.socket.remoteAddress + '|' + key, now = Date.now(), recent = (sends.get(who) || []).filter(t => now - t < LOGIN_WINDOW);
+  if (recent.length >= OTP_SENDS) throw new Reply(429, 'Too many OTP requests. Try again in a few minutes.');
+  if (recent.length && now - recent[recent.length - 1] < OTP_GAP) throw new Reply(429, 'Please wait a few seconds before asking for another OTP');
+  const st = notify.status(), test = !st.sms && !st.email;
+  if (!test && !((phone && st.sms) || (email && st.email))) throw new Reply(400, st.email ? 'Enter an email address to receive the OTP' : 'Enter a mobile number to receive the OTP');
+  const code = String(crypto.randomInt(100000, 1000000));
+  let sent = { sms: false, email: false };
+  if (!test) {
+    try { sent = await notify.sendOtp(phone, email, code, purpose); }
+    catch (e) { console.error('OTP delivery failed for ' + key + ': ' + e.message); throw new Reply(502, 'Could not send the OTP (' + e.message.slice(0, 120) + '). Try again in a moment.'); }
+  }
+  recent.push(now); sends.set(who, recent);
+  otps.set(key, { hash: hashOtp(code, key), exp: now + OTP_TTL, tries: 0, phone, email });
+  const out = { sent, to: { phone: sent.sms ? maskPhone(phone) : '', email: sent.email ? maskEmail(email) : '' }, expiresIn: OTP_TTL / 1000 };
+  if (test) { out.test = true; out.otp = code; console.log('OTP (test mode, no SMS / email configured) for ' + key + ': ' + code); }
+  return out;
+}
+function checkOtp(key, code) {
+  sweepOtps();
+  const o = otps.get(key);
+  if (!o) throw new Reply(400, 'Ask for an OTP first; it is valid for 10 minutes');
+  const c = String(code == null ? '' : code).trim();
+  if (!/^\d{6}$/.test(c) || hashOtp(c, key) !== o.hash) { if (++o.tries >= OTP_TRIES) otps.delete(key); throw new Reply(400, 'Invalid OTP'); }
+  otps.delete(key);
+}
+
 const api = {
+  // Sends an OTP: for a registration to the mobile number and email given, for a password reset to the
+  // mobile number and email of the account named by identity
+  async otp(b, req) {
+    const purpose = String(b.purpose || 'register');
+    if (purpose === 'reset') {
+      const u = findUser(b.identity);
+      if (!u) throw new Reply(404, 'No account with that mobile number or email');
+      return issueOtp('reset|' + u.id, u.phone, u.email, 'reset', req);
+    }
+    const phone = norm(b.phone), email = norm(b.email);
+    if (!validPhone(phone) && !validEmail(email)) throw new Reply(400, 'A valid mobile number or email is required');
+    if (phone && !validPhone(phone)) throw new Reply(400, 'Enter a valid 10-digit mobile number');
+    if (email && !validEmail(email)) throw new Reply(400, 'Enter a valid email address');
+    if ((phone && findUser(phone)) || (email && findUser(email))) throw new Reply(409, 'This mobile number or email is already registered');
+    return issueOtp('register|' + phone + '|' + email, phone, email, 'register', req);
+  },
   register(b) {
     const name = String(b.name || '').trim().slice(0, 120), phone = norm(b.phone), email = norm(b.email);
-    if (!/^[6-9][0-9]{9}$/.test(phone) && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) throw new Reply(400, 'A valid mobile number or email is required');
-    if (phone && !/^[6-9][0-9]{9}$/.test(phone)) throw new Reply(400, 'Enter a valid 10-digit mobile number');
+    if (!validPhone(phone) && !validEmail(email)) throw new Reply(400, 'A valid mobile number or email is required');
+    if (phone && !validPhone(phone)) throw new Reply(400, 'Enter a valid 10-digit mobile number');
     if (!validPw(b.pw)) throw new Reply(400, 'Invalid password');
     if ((phone && findUser(phone)) || (email && findUser(email))) throw new Reply(409, 'This mobile number or email is already registered');
+    // An account registered through the Register screen comes with the OTP that was sent to it. An account made
+    // on a device before it met the server (the first sync) arrives without one.
+    if (b.otp !== undefined) checkOtp('register|' + phone + '|' + email, b.otp);
     const salt = crypto.randomBytes(16).toString('hex');
     // The trial runs from when the account was first created, even if that was on a device before it went online
     const made = Number(b.createdAt) > 0 && Number(b.createdAt) < Date.now() ? Number(b.createdAt) : Date.now();
@@ -126,6 +188,16 @@ const api = {
     u.salt = crypto.randomBytes(16).toString('hex'); u.hash = hashPw(b.pw, u.salt); u.tv++;
     saveAccounts();
     return { token: tokenFor(u) };
+  },
+  // Forgot password: the OTP sent to the account's mobile / email stands in for the old password
+  reset(b) {
+    const u = findUser(b.identity);
+    if (!u) throw new Reply(404, 'No account with that mobile number or email');
+    if (!validPw(b.pw)) throw new Reply(400, 'Invalid password');
+    checkOtp('reset|' + u.id, b.otp);
+    u.salt = crypto.randomBytes(16).toString('hex'); u.hash = hashPw(b.pw, u.salt); u.tv++;
+    saveAccounts();
+    return { token: tokenFor(u), user: publicUser(u) };
   },
   sync(b) {
     const u = userFromToken(b.token);
@@ -198,7 +270,7 @@ const server = http.createServer(async (req, res) => {
       const name = urlPath.slice(5);
       if (name === 'ping') { send(res, 200, { app: 'BlitzBook', ok: true, time: Date.now() }); return; }
       if (req.method !== 'POST' || !Object.prototype.hasOwnProperty.call(api, name)) throw new Reply(404, 'Unknown request');
-      send(res, 200, api[name](await readBody(req), req));
+      send(res, 200, await api[name](await readBody(req), req));
       return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return; }
@@ -230,10 +302,12 @@ function main(argv) {
     throw e;
   });
   server.listen(PORT, () => {
+    const st = notify.load(DATA);
     console.log('BlitzBook sync server on port ' + server.address().port);
     console.log('  web portal : http://localhost:' + server.address().port + '/   (' + WEB + ')');
     console.log('  data       : ' + DATA);
+    console.log('  OTP by SMS : ' + (st.sms ? 'on (' + st.provider + ')' : 'off') + '   OTP by email: ' + (st.email ? 'on' : 'off') + (st.sms || st.email ? '' : '   -> TEST MODE: OTPs are shown on screen. Set SMTP_* / SMS_* (see server/README.md).'));
   });
 }
-if (require.main === module) main(process.argv.slice(2));
-module.exports = { server, api };
+if (require.main === module) main(process.argv.slice(2)); else notify.load(DATA);
+module.exports = { server, api, notify };

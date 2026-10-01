@@ -43,6 +43,41 @@ software (Jenkins, Tomcat...), hence 8090 here.
 
 Without a server both keep working on their own, as before.
 
+## OTP delivery (registration and password reset)
+
+Registering and resetting a password need a one-time password. The server sends it by **SMS** and by
+**email** when the settings below are given, as environment variables (Render: the service's Environment
+tab; Docker: `environment:` in the compose file; Windows task: set them before `install-task.ps1`) or in a
+file `config.json` inside the data folder with the same names. Until then the server runs in **test mode**:
+the OTP is handed back to the app / portal and shown on screen, and the start-up log says so.
+
+Email through Gmail (needs 2-step verification on the Google account and an *App password*):
+
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USER=yourname@gmail.com
+SMTP_PASS=xxxx xxxx xxxx xxxx        (the 16-character app password)
+SMTP_FROM=BlitzBook <yourname@gmail.com>
+```
+
+Any other mail service works the same way (port 465 for SSL, 587 for STARTTLS).
+
+SMS needs an Indian SMS gateway account; set `SMS_PROVIDER` to one of these and its keys:
+
+| Provider | Settings |
+|---|---|
+| `fast2sms` | `SMS_API_KEY` (OTP route; no sender id or template needed) |
+| `msg91` | `SMS_API_KEY` (authkey), `SMS_TEMPLATE_ID` (a DLT-approved OTP template with the `##OTP##` variable) |
+| `twilio` | `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, `SMS_FROM` (your Twilio number) |
+| `textlocal` | `SMS_API_KEY`, `SMS_SENDER` (6-letter sender id) |
+| `http` | `SMS_URL` with `{phone}`, `{otp}` and `{message}` placeholders (called with GET), optional `SMS_HEADERS` as JSON |
+
+With both set the OTP goes to the mobile number and to the email (when the account has one); with only
+one of them it goes that way. OTPs are valid for 10 minutes, 5 attempts, at most 5 per 10 minutes per
+device. The app and the portal have to point at this server (see below), otherwise they fall back to the
+on-screen test OTP.
+
 ## Accounts
 
 The account is the mobile number (or email) and password used to register, on whichever side it was
@@ -50,8 +85,8 @@ registered. The same account then logs in on the other side, and the books, the 
 validity and the activation codes already used are shared.
 
 Passwords never reach the server as typed: clients send a SHA-256 hash, and the server stores that under
-scrypt. Changing the password (Forgot / Reset) signs every other device out; it is only possible from a
-device that is signed in to the account, or with the admin command below.
+scrypt. Forgot / Reset sends an OTP to the account's mobile number and email and sets the new password
+when it is entered; this signs every other device out. The admin command below does the same without an OTP.
 
 ```
 node server/server.js users

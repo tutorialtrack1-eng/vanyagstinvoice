@@ -27,6 +27,8 @@ public class LoginActivity extends Activity {
     private SharedPreferences prefs;
     private String generatedResetOtp = "";
     private String resetUserAccount = "";
+    // true when the sync server sent the reset OTP to the account's mobile / email and checks it
+    private boolean resetViaServer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -245,31 +247,62 @@ public class LoginActivity extends Activity {
                 .setNegativeButton("Cancel", null)
                 .create();
 
+        Runnable showStep2 = () -> {
+            otpInput.setVisibility(View.VISIBLE);
+            newPassInput.setVisibility(View.VISIBLE);
+            confirmPassInput.setVisibility(View.VISIBLE);
+            sendOtpBtn.setVisibility(View.GONE);
+            accountInput.setEnabled(false);
+            otpInput.requestFocus();
+        };
+        // Without a server (or a connection) the OTP is made here and shown; the account must be on this phone
+        Runnable localOtp = () -> {
+            if (dbHelper.findUserId(resetUserAccount) < 0) {
+                accountInput.setError("Account not found with this mobile/email");
+                return;
+            }
+            resetViaServer = false;
+            generatedResetOtp = String.valueOf(new Random().nextInt(900000) + 100000);
+            new AlertDialog.Builder(LoginActivity.this)
+                    .setTitle("OTP Sent")
+                    .setMessage("Reset OTP sent to " + resetUserAccount + "\n\n(Test mode) Your 6-digit OTP is: " + generatedResetOtp)
+                    .setPositiveButton("OK", null)
+                    .show();
+            showStep2.run();
+        };
         sendOtpBtn.setOnClickListener(v -> {
             String target = accountInput.getText().toString().trim();
             if (target.isEmpty()) {
                 accountInput.setError("Enter registered mobile number or email");
                 return;
             }
-            long userId = dbHelper.findUserId(target);
-            if (userId < 0) {
-                accountInput.setError("Account not found with this mobile/email");
-                return;
-            }
-            generatedResetOtp = String.valueOf(new Random().nextInt(900000) + 100000);
             resetUserAccount = target;
-
-            new AlertDialog.Builder(LoginActivity.this)
-                    .setTitle("OTP Sent")
-                    .setMessage("Reset OTP sent to " + target + "\n\n(Test mode) Your 6-digit OTP is: " + generatedResetOtp)
-                    .setPositiveButton("OK", null)
-                    .show();
-
-            otpInput.setVisibility(View.VISIBLE);
-            newPassInput.setVisibility(View.VISIBLE);
-            confirmPassInput.setVisibility(View.VISIBLE);
-            sendOtpBtn.setVisibility(View.GONE);
-            accountInput.setEnabled(false);
+            if (!Sync.enabled(this)) { localOtp.run(); return; }
+            // The sync server sends the OTP to the mobile number and email of the account, wherever it was registered
+            sendOtpBtn.setEnabled(false);
+            new Thread(() -> {
+                JSONObject reply = null; Sync.SyncException error = null;
+                try { reply = Sync.sendOtp(this, "reset", null, null, target); } catch (Sync.SyncException e) { error = e; }
+                final JSONObject fReply = reply; final Sync.SyncException fError = error;
+                runOnUiThread(() -> {
+                    if (isFinishing()) return;
+                    sendOtpBtn.setEnabled(true);
+                    if (fReply != null) {
+                        resetViaServer = true; generatedResetOtp = "";
+                        new AlertDialog.Builder(LoginActivity.this).setTitle("OTP Sent").setMessage(Sync.otpSentText(fReply, target)).setPositiveButton("OK", null).show();
+                        showStep2.run();
+                    } else if (fError.status == 404) {
+                        if (dbHelper.findUserId(target) >= 0) localOtp.run(); // known here only (never synced)
+                        else accountInput.setError("Account not found with this mobile/email");
+                    } else if (fError.status != 0) {
+                        Toast.makeText(LoginActivity.this, fError.getMessage(), Toast.LENGTH_LONG).show();
+                    } else if (dbHelper.findUserId(target) >= 0) {
+                        localOtp.run();
+                    } else {
+                        Toast.makeText(LoginActivity.this, "Cannot reach the server. Connect to the internet to reset the password.", Toast.LENGTH_LONG).show();
+                    }
+                });
+            }).start();
         });
 
         dialog.setOnShowListener(d -> {
@@ -283,7 +316,7 @@ public class LoginActivity extends Activity {
                 String newPass = newPassInput.getText().toString().trim();
                 String confirmPass = confirmPassInput.getText().toString().trim();
 
-                if (!enteredOtp.equals(generatedResetOtp)) {
+                if (!enteredOtp.matches("\\d{6}") || (!resetViaServer && !enteredOtp.equals(generatedResetOtp))) {
                     otpInput.setError("Invalid OTP");
                     otpInput.requestFocus();
                     return;
@@ -307,6 +340,30 @@ public class LoginActivity extends Activity {
                         Toast.makeText(LoginActivity.this, "Failed to reset password. Try again.", Toast.LENGTH_SHORT).show();
                     }
                 };
+                if (resetViaServer) {
+                    // The server checks the OTP it sent and changes the password; this phone then follows
+                    posBtn.setEnabled(false);
+                    new Thread(() -> {
+                        JSONObject reply = null; Sync.SyncException error = null;
+                        try { reply = Sync.resetPassword(LoginActivity.this, resetUserAccount, enteredOtp, newPass); } catch (Sync.SyncException e) { error = e; }
+                        final JSONObject fReply = reply; final Sync.SyncException fError = error;
+                        runOnUiThread(() -> {
+                            if (isFinishing()) return;
+                            posBtn.setEnabled(true);
+                            if (fReply == null) {
+                                if (fError.status == 400) { otpInput.setError(fError.getMessage()); otpInput.requestFocus(); }
+                                else Toast.makeText(LoginActivity.this, fError.status == 0 ? "Cannot reach the server. Connect to the internet to reset the password." : fError.getMessage(), Toast.LENGTH_LONG).show();
+                                return;
+                            }
+                            JSONObject u = fReply.optJSONObject("user");
+                            long id = u == null ? -1 : dbHelper.saveServerUser(u.optString("name", ""), u.optString("phone", ""), u.optString("email", ""), newPass);
+                            if (id >= 0) Sync.saveToken(LoginActivity.this, id, fReply.optString("token", ""));
+                            Toast.makeText(LoginActivity.this, "Password reset successfully! Please log in.", Toast.LENGTH_LONG).show();
+                            dialog.dismiss();
+                        });
+                    }).start();
+                    return;
+                }
                 if (!Sync.enabled(LoginActivity.this)) { resetHere.run(); return; }
                 // The account on the sync server can only be changed by a device that is signed in to it
                 long uid = dbHelper.findUserId(resetUserAccount);

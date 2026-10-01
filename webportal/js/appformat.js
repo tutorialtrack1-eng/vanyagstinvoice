@@ -61,7 +61,12 @@
       return { kind: NOTE_KIND[n.kind] || 'Credit Note', note_no: s(n.no), date: s(n.date), party: s(n.party), party_gstin: s(n.partyGstin), ref_no: s(n.ref), reason: s(n.reason),
         taxable: num(n.taxable), gst_rate: s(n.rate || '0'), cgst: num(n.cgst), sgst: num(n.sgst), igst: num(n.igst), total: num(n.total), settlement: s(n.settle) || 'Credit' };
     },
-    journal(j) { return { date: s(j.date), narration: s(j.narration), lines: (j.lines || []).map(l => ({ account: s(l.account), side: l.side === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) }; },
+    // Receipts and payments are journal vouchers with a few more columns; a plain entry carries none of them
+    journal(j) {
+      const kind = j.vtype === 'receipt' ? 'Receipt' : j.vtype === 'payment' ? 'Payment' : '';
+      return clean({ date: s(j.date), narration: s(j.narration), kind: kind || null, doc_no: kind ? s(j.no) : null, party: kind ? s(j.party) : null, ref_no: kind ? s(j.ref) : null, mode: kind ? s(j.mode) : null, bank_ref: kind ? s(j.bankRef) : null,
+        lines: (j.lines || []).map(l => ({ account: s(l.account), side: l.side === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) });
+    },
     sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort() }; }
   };
 
@@ -123,7 +128,13 @@
       return Object.assign({}, old, { kind: /debit/i.test(s(r.kind)) ? 'DN' : 'CN', no: s(r.note_no), date: s(r.date), party: s(r.party), partyGstin: s(r.party_gstin), ref: s(r.ref_no), reason: s(r.reason),
         taxable: num(r.taxable), rate: s(r.gst_rate) || '0', settle: s(r.settlement) || 'Credit', gst: round2(cgst + sgst + igst), cgst, sgst, igst, total: num(r.total) });
     },
-    journal(r, old) { return Object.assign({}, old, { date: s(r.date), narration: s(r.narration), lines: (r.lines || []).map(l => ({ account: s(l.account), side: s(l.side) === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) }); }
+    journal(r, old) {
+      const kind = /^rec/i.test(s(r.kind)) ? 'receipt' : /^pay/i.test(s(r.kind)) ? 'payment' : '';
+      const j = Object.assign({}, old, { date: s(r.date), narration: s(r.narration), lines: (r.lines || []).map(l => ({ account: s(l.account), side: s(l.side) === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) });
+      ['vtype', 'no', 'party', 'ref', 'mode', 'bankRef'].forEach(k => delete j[k]);
+      if (kind) Object.assign(j, { vtype: kind, no: s(r.doc_no), party: s(r.party), ref: s(r.ref_no), mode: s(r.mode), bankRef: s(r.bank_ref) });
+      return j;
+    }
   };
 
   // ------------------------------------------------------------ keyed records for sync

@@ -11,9 +11,12 @@ it the data lives in the browser's local storage.
 - double-click `index.html`, or serve the folder with any static server / web host. The portal then works
   on its own; enter the sync server's address under **Sync** in the top bar to connect it.
 
-Register with a mobile number and password. The OTP is shown on screen (test mode), as in the app's
-test build. A 1-day trial starts on first login, after which an activation code is needed. With sync on,
-the account made in the app logs in here and vice versa, and the trial and activation are shared.
+Register with a mobile number and password. The sync server sends the OTP by SMS and email (see
+`server/README.md`, *OTP delivery*); without a server, or on a server with no SMS / email settings, the OTP
+is shown on screen (test mode). Forgot / Reset Password works the same way: the OTP goes to the mobile
+number and email of the account, so a password can be reset from any device. A 1-day trial starts on
+first login, after which an activation code is needed. With sync on, the account made in the app logs in
+here and vice versa, and the trial and activation are shared.
 
 ## What is inside
 
@@ -26,10 +29,11 @@ the account made in the app logs in here and vice versa, and the trial and activ
 | `js/appformat.js` | The app's table layout: converts every record to and from the app's rows, for sync and for backup files |
 | `js/sync.js` | Keeps this browser and the app on the same books through the sync server |
 | `js/subscription.js` | Trial, plans, UPI link, activation server and codes (same SHA-256 scheme as the app, so `tools/LicenceKeyGen.java` codes work) |
-| `js/print.js` | Printable documents: Standard (BlitzBook) and Classic boxed (Tally style) invoices, delivery challan, envelopes, purchase record / quotation, credit and debit notes |
+| `js/print.js` | Printable documents: Standard (BlitzBook) and Classic boxed (Tally style) invoices, delivery challan, envelopes, purchase record / quotation, credit and debit notes, receipt / payment vouchers. Pages carry their own margins so the browser adds no header or footer to the PDF; long item lists repeat the table heading on every page |
 | `js/app.js` | Shell, login / register / reset (with the sync server when there is one), dashboard, top navigation, company profile, backup, subscription, sync dialogs |
 | `js/invoice.js` | New Invoice editor, quick item picker, Save and Print / PDF, Print Settings (layout previews, paper, envelopes), e-way bill warning, Sales list, Credit / Debit notes |
-| `js/ledger.js` | Books (Profit & Loss, Balance Sheet and stock figures, a port of Ledger.java), Customers / Suppliers, Item master, Purchases & Quotations, Expenses, Journal, Stock in hand |
+| `js/ledger.js` | Books (Profit & Loss, Balance Sheet with party-wise receivables / payables, stock figures; a port of Ledger.java), Customers / Suppliers, Item master, Purchases & Quotations, Expenses, Journal, Stock in hand |
+| `js/money.js` | Receipts & Payments (kept as journal vouchers), receipt / payment voucher printout, bank statement upload |
 | `js/reports.js` | Sales report, Profit & Loss, Balance sheet, period picker, Excel export |
 
 ## Screens
@@ -48,7 +52,7 @@ Everything the app has:
 - Quick items: starter items for the line of activity plus the item master, with search, category chips
   (rename / remove), list or grid view, quantity steppers, per-invoice price and GST, add / customise /
   remove items.
-- Printing: Save keeps the invoice, Print / PDF prints straight away with the layout picked from previews under Print Settings (A4 unless changed); delivery challan (composition dealers), envelopes
+- Printing: Save keeps the invoice and moves on to the next invoice number, Print / PDF prints straight away with the layout picked from previews under Print Settings (A4 unless changed); delivery challan (composition dealers), envelopes
   (DL, C5, #10), purchase record / quotation, credit and debit notes; paper sizes A4 / A5 / Letter / Legal;
   e-way bill warning above ₹50,000 (₹1,00,000 in Maharashtra, Delhi, Tamil Nadu and Bihar). The browser's
   print dialog saves the PDF. Every printout ends with "Powered by BlitzBook".
@@ -58,11 +62,19 @@ Everything the app has:
 - Item master with codes, categories, bulk category / GST / delete; items invoiced or bought as stock join
   it automatically; removed starter items stay hidden.
 - Purchases and quotations (convert to purchase), reverse charge, GST-inclusive rates, TDS from the
-  supplier's record, stock flag per item; stock in hand with CSV / Excel upload of opening stock.
+  supplier's record, stock flag per item; stock in hand with CSV / Excel upload of opening stock, delete
+  one stock item or many at once (optionally from the item master too).
 - Expenses with GST (bill value or taxable value), vendor GSTIN, reverse charge.
+- Receipts & Payments: money received from a customer (against an invoice, with the outstanding balance
+  shown) or any other income, money paid to a supplier (against a purchase) or any other outgoing; cash or
+  bank with UPI / cheque reference; printable receipt voucher. Upload a bank statement (CSV or Excel export
+  of any bank, or the template) and every line becomes a receipt or payment: parties are matched from the
+  narration (and remembered for next time), lines already recorded are spotted on a re-upload.
 - Journal vouchers with any number of debit and credit lines, auto-balancing, account picker with
-  natures, create party / account in place.
+  natures, create party / account in place. Receipts and payments appear here too.
 - Sales report, Profit & Loss and Balance Sheet with the same lines and figures as the app, Excel export.
+  Receivables and payables are party-wise: credit sales, credit purchases, notes on account and receipts /
+  payments net off per customer or supplier, and each outstanding party is listed.
 
 ## Sync with the app
 

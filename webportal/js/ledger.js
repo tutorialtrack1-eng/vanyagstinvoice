@@ -104,11 +104,16 @@
        is the balancing figure (accumulated profit). */
     balanceSheet(asAt) {
       const bs = { cash: 0, bank: 0, receivables: 0, stockValue: 0, payables: 0, rcmPayable: 0, tdsPayable: 0, outCgst: 0, outSgst: 0, outIgst: 0, inCgst: 0, inSgst: 0, inIgst: 0, parties: [], assets: [], liabilities: [] };
+      // What each party owes us (positive) or is owed by us (negative): credit sales and purchases, credit and
+      // debit notes settled on account, and every journal line on the party, which is how receipts and
+      // payments against those bills bring the balance down
+      const party = new Map();
+      const addParty = (name, v) => { const n = String(name || '').trim(); if (!n) return false; const k = n.toLowerCase(), cur = party.get(k) || { name: n, bal: 0 }; cur.bal += v; party.set(k, cur); return true; };
       const money = (mode, amt, credit) => { const m = String(mode || '').toLowerCase(); if (m === 'credit') credit(amt); else if (m === 'cash') bs.cash += amt; else bs.bank += amt; };
       Store.list('invoices').forEach(i => {
         if (i.kind !== 'invoice' || !this.inRange(i.date, null, asAt)) return;
         if (!i.rcm) { bs.outCgst += num(i.totals.cgst); bs.outSgst += num(i.totals.sgst); bs.outIgst += num(i.totals.igst); }
-        money(i.payment, num(i.totals.rounded) || num(i.totals.grand), (v) => bs.receivables += v);
+        money(i.payment, num(i.totals.rounded) || num(i.totals.grand), (v) => { if (!addParty(this.partyName(i.buyer.name), v)) bs.receivables += v; });
       });
       Store.list('purchases').forEach(p => {
         if (p.kind !== 'PUR' || !this.inRange(p.date, null, asAt)) return;
@@ -116,7 +121,7 @@
         const s = this.gstSplit(p); bs.inCgst += s[0]; bs.inSgst += s[1]; bs.inIgst += s[2];
         // Reverse charge GST is owed to the government by us (and claimable as input credit once paid)
         if (p.rcm) bs.rcmPayable += num(p.gst);
-        money(p.paidBy, -(num(p.total) - num(p.tds)), (v) => bs.payables -= v);
+        money(p.paidBy, -(num(p.total) - num(p.tds)), (v) => { if (!addParty(p.supplier, v)) bs.payables -= v; });
       });
       Store.list('expenses').forEach(x => {
         if (!this.inRange(x.date, null, asAt)) return;
@@ -128,8 +133,8 @@
       Store.list('notes').forEach(n => {
         if (!this.inRange(n.date, null, asAt)) return;
         const total = num(n.total);
-        if (n.kind === 'CN') { bs.outCgst -= num(n.cgst); bs.outSgst -= num(n.sgst); bs.outIgst -= num(n.igst); money(n.settle, -total, (v) => bs.receivables += v); }
-        else { bs.inCgst -= num(n.cgst); bs.inSgst -= num(n.sgst); bs.inIgst -= num(n.igst); money(n.settle, total, (v) => bs.payables -= v); }
+        if (n.kind === 'CN') { bs.outCgst -= num(n.cgst); bs.outSgst -= num(n.sgst); bs.outIgst -= num(n.igst); money(n.settle, -total, (v) => { if (!addParty(n.party, v)) bs.receivables += v; }); }
+        else { bs.inCgst -= num(n.cgst); bs.inSgst -= num(n.sgst); bs.inIgst -= num(n.igst); money(n.settle, total, (v) => { if (!addParty(n.party, v)) bs.payables -= v; }); }
       });
       bs.stockValue = this.stock(asAt).reduce((s, l) => s + l.value, 0);
       const nature = this.natures();
@@ -138,7 +143,7 @@
         switch (nature(b.name)) {
           case N.CASH: bs.cash += bal; break;
           case N.BANK: if (b.name.toLowerCase() === 'bank') bs.bank += bal; else bs.assets.push([b.name, bal]); break;
-          case N.CUSTOMER: case N.SUPPLIER: bs.parties.push([b.name, bal]); if (bal > 0) bs.receivables += bal; else bs.payables -= bal; break;
+          case N.CUSTOMER: case N.SUPPLIER: addParty(b.name, bal); break;
           case N.OUT_CGST: bs.outCgst -= bal; break;
           case N.OUT_SGST: bs.outSgst -= bal; break;
           case N.OUT_IGST: bs.outIgst -= bal; break;
@@ -152,12 +157,17 @@
           default: break; // capital, drawings, income, expenses, purchases sit in the balancing capital
         }
       });
+      Array.from(party.values()).sort(byName).forEach(p => { if (Math.abs(p.bal) < 0.005) return; bs.parties.push([p.name, p.bal]); if (p.bal > 0) bs.receivables += p.bal; else bs.payables -= p.bal; });
       const sum = (l) => l.reduce((s, x) => s + x[1], 0);
       bs.totalAssets = bs.cash + bs.bank + bs.receivables + bs.stockValue + bs.inCgst + bs.inSgst + bs.inIgst + sum(bs.assets);
       bs.totalLiabilities = bs.payables + bs.outCgst + bs.outSgst + bs.outIgst + bs.rcmPayable + bs.tdsPayable + sum(bs.liabilities);
       bs.capital = bs.totalAssets - bs.totalLiabilities;
       return bs;
-    }
+    },
+    // The party an invoice is billed to: the first line of the buyer box
+    partyName(nameAddr) { return String(nameAddr || '').split('\n')[0].trim(); },
+    // Outstanding balance of one party as at today (positive = owed to us, negative = owed by us), 0 when unknown
+    partyBalance(name) { const k = String(name || '').trim().toLowerCase(); const hit = this.balanceSheet(null).parties.find(p => p[0].toLowerCase() === k); return hit ? hit[1] : 0; }
   };
 
   // PUR-0001 / QTN-0001 / STK-0001: one running series per kind
@@ -287,7 +297,7 @@
   const Purchases = {
     open() {
       const list = Store.list('purchases').slice().sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || String(b.no).localeCompare(String(a.no), undefined, { numeric: true }));
-      const root = App.view(App.header('Purchases & Quotations', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="pNew">+ Purchase</button><button class="btn sm blue" id="qNew">+ Quotation</button><button class="btn sm outline" id="pStock">Stock</button><button class="btn sm outline" id="pDN">Debit Notes</button></div>') +
+      const root = App.view(App.header('Purchases & Quotations', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="pNew">+ Purchase</button><button class="btn sm blue" id="qNew">+ Quotation</button><button class="btn sm outline" id="pStock">Stock</button><button class="btn sm outline" id="pDN">Debit Notes</button><button class="btn sm outline" id="pPay">Payments</button></div>') +
         listTable(['No', 'Date', 'Supplier', '#Total', 'Paid By', ''], list.map(p => {
           const stock = p.items.filter(i => i.stock).map(i => i.name + ' x ' + U.fmtQty(i.qty)).join(', ');
           return '<tr>' + td('No', '<b>' + esc(p.no) + '</b> <span class="pill">' + KIND_LABEL[p.kind] + '</span>') + td('Date', esc(p.date)) +
@@ -296,7 +306,7 @@
             '<td class="actions">' + (p.kind === 'QTN' ? '<button class="btn sm green" data-conv="' + esc(p.id) + '">To Purchase</button>' : '') + '<button class="btn sm" data-p="' + esc(p.id) + '">Print</button><button class="btn sm outline" data-e="' + esc(p.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(p.id) + '">Delete</button></td></tr>';
         }), 'No purchases or quotations yet. Tick "Stock" on an item while recording a purchase and it appears under Stock.'));
       App.wireBack(root);
-      $('#pNew').onclick = () => Purchases.edit({ kind: 'PUR' }); $('#qNew').onclick = () => Purchases.edit({ kind: 'QTN' }); $('#pStock').onclick = () => App.go('stock'); $('#pDN').onclick = () => App.go('notes', { kind: 'DN' });
+      $('#pNew').onclick = () => Purchases.edit({ kind: 'PUR' }); $('#qNew').onclick = () => Purchases.edit({ kind: 'QTN' }); $('#pStock').onclick = () => App.go('stock'); $('#pDN').onclick = () => App.go('notes', { kind: 'DN' }); $('#pPay').onclick = () => App.go('money', { kind: 'payment' });
       $$('[data-e]', root).forEach(b => b.onclick = () => Purchases.edit(Store.find('purchases', b.dataset.e)));
       $$('[data-p]', root).forEach(b => b.onclick = () => { const p = Store.find('purchases', b.dataset.p); UI.menu('Print ' + KIND_LABEL[p.kind], Print.SHEETS.map(k => Print.PAPERS[k].label), (i) => Print.show(Print.purchase(p, Store.company(), Print.SHEETS[i]))); });
       $$('[data-conv]', root).forEach(b => b.onclick = () => { const q = Store.find('purchases', b.dataset.conv); UI.confirm('Convert Quotation', 'Record ' + q.no + ' as a purchase? It will then count in stock, profit & loss and the balance sheet.', () => { q.kind = 'PUR'; q.no = nextNo('PUR'); Store.update('purchases', purchaseTotals(q)); stockItemsToMaster(q); Purchases.open(); }, 'Convert'); });
@@ -436,13 +446,14 @@
     open() {
       const list = Store.list('journal').slice().sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || num(b.createdAt) - num(a.createdAt));
       const drTotal = (j) => j.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0);
-      const root = App.view(App.header('Journal Entries', '<button class="btn sm green" id="jNew">+ Add Journal Entry</button>') +
+      const root = App.view(App.header('Journal Entries', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="jNew">+ Add Journal Entry</button><button class="btn sm outline" id="jMoney">Receipts &amp; Payments</button></div>') +
         '<div class="hint" style="margin-bottom:10px">' + (list.length ? list.length + ' entries. Debit the account that receives value, credit the account that gives it.' : 'No journal entries yet. Use them for capital introduced, drawings, loans, asset purchases, depreciation, payments received or made, and corrections. An entry can have any number of debit and credit lines.') + '</div>' +
-        listTable(['Date', 'Lines', 'Narration', '#Amount', ''], list.map(j => '<tr>' + td('Date', esc(j.date)) + td('Lines', '<div class="jl">' + j.lines.map(l => '<div class="' + (l.side === 'Dr' ? '' : 'cr') + '">' + l.side + ' ' + esc(l.account) + '  <b>' + money(l.amount) + '</b></div>').join('') + '</div>') + td('Narration', esc(j.narration)) + td('Amount', money(drTotal(j)), 'num') +
+        listTable(['Date', 'Lines', 'Narration', '#Amount', ''], list.map(j => '<tr>' + td('Date', esc(j.date) + (j.vtype ? '<div><span class="pill ' + (j.vtype === 'receipt' ? 'ok' : 'warn') + '">' + (j.vtype === 'receipt' ? 'Receipt' : 'Payment') + (j.no ? ' ' + esc(j.no) : '') + '</span></div>' : '')) + td('Lines', '<div class="jl">' + j.lines.map(l => '<div class="' + (l.side === 'Dr' ? '' : 'cr') + '">' + l.side + ' ' + esc(l.account) + '  <b>' + money(l.amount) + '</b></div>').join('') + '</div>') + td('Narration', esc(j.narration)) + td('Amount', money(drTotal(j)), 'num') +
           '<td class="actions"><button class="btn sm outline" data-e="' + esc(j.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(j.id) + '">Delete</button></td></tr>'), 'No journal entries yet.'));
       App.wireBack(root);
+      $('#jMoney').onclick = () => App.go('money');
       $('#jNew').onclick = () => Journal.edit(null);
-      $$('[data-e]', root).forEach(b => b.onclick = () => Journal.edit(Store.find('journal', b.dataset.e)));
+      $$('[data-e]', root).forEach(b => b.onclick = () => { const j = Store.find('journal', b.dataset.e); if (j.vtype && global.Money) Money.edit(j.vtype, j, () => Journal.open()); else Journal.edit(j); });
       $$('[data-d]', root).forEach(b => b.onclick = () => { const j = Store.find('journal', b.dataset.d); UI.confirm('Delete Journal Entry', 'Delete this entry of ' + money(drTotal(j)) + '?', () => { Store.delete('journal', j.id); Journal.open(); }, 'Delete'); });
     },
     // Parties are saved as contacts so they also appear in the customer / supplier lists and invoice suggestions
@@ -519,13 +530,45 @@
   App.routes.journal = () => Journal.open();
 
   // ------------------------------------------------------------ stock in hand
+  // Removing an item from stock: its lines leave the stock-upload documents and its purchase lines lose the
+  // "Stock" tick, so it no longer counts in stock in hand. Purchases themselves stay in the books. Optionally
+  // the item also leaves the item master. Returns the number of items removed.
+  function removeFromStock(names, fromMaster) {
+    const keys = new Set(names.map(n => String(n).trim().toLowerCase()));
+    const purchases = Store.list('purchases').filter(p => {
+      if (p.kind === 'QTN') return true;
+      p.items.forEach(it => { if (it.stock && keys.has(String(it.name || '').trim().toLowerCase())) it.stock = false; });
+      if (p.kind === 'STK') { p.items = p.items.filter(it => !keys.has(String(it.name || '').trim().toLowerCase())); return p.items.length > 0; }
+      return true;
+    });
+    purchases.forEach(p => { if (p.kind === 'STK') purchaseTotals(p); });
+    Store.saveList('purchases', purchases);
+    if (fromMaster) Store.saveList('items', Store.list('items').filter(i => !keys.has(String(i.name || '').trim().toLowerCase())));
+    return keys.size;
+  }
+  const Stock = { select: false };
   App.routes.stock = function () {
-    const rows = Books.stock(null), total = rows.reduce((s, r) => s + r.value, 0);
-    const root = App.view(App.header('Stock in Hand', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="stUp">Upload Stock</button><button class="btn sm outline" id="stTpl">Template</button></div>') +
+    const rows = Books.stock(null), total = rows.reduce((s, r) => s + r.value, 0), sel = Stock.select && rows.length > 0;
+    const root = App.view(App.header(sel ? 'Select Stock Items' : 'Stock in Hand', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="stUp">Upload Stock</button><button class="btn sm outline" id="stTpl">Template</button><button class="btn sm outline" id="stItems">Item Master</button>' + (rows.length ? '<button class="btn sm outline" id="stSel">' + (sel ? 'Done' : 'Select') + '</button>' : '') + '</div>') +
+      (sel ? '<div class="btnrow"><label class="check"><input type="checkbox" id="selAll"> Select all</label><button class="btn sm red" id="bDel">Delete selected</button></div>' : '') +
       (rows.length ? '<div class="hint bold" style="margin-bottom:10px">Stock value (at last purchase rate): ' + money(total) + '</div>' : '') +
-      listTable(['Item', '#Bought', '#Sold', '#In Hand', '#Rate', '#Value'], rows.map(s => '<tr>' + td('Item', '<b>' + esc(s.name) + '</b>' + (s.uqc ? ' (' + esc(s.uqc) + ')' : '')) + td('Bought', U.fmtQty(s.purchased), 'num') + td('Sold', U.fmtQty(s.sold), 'num') + td('In Hand', '<span class="' + (s.onHand <= 0 ? 'red bold' : '') + '">' + U.fmtQty(s.onHand) + '</span>', 'num') + td('Rate', U.indianNumber(s.lastRate), 'num') + td('Value', money(s.value), 'num') + '</tr>'),
+      listTable(['', 'Item', '#Bought', '#Sold', '#In Hand', '#Rate', '#Value', ''], rows.map(s => '<tr>' + td('', sel ? '<input type="checkbox" class="selbox" data-n="' + esc(s.name) + '">' : '') + td('Item', '<b>' + esc(s.name) + '</b>' + (s.uqc ? ' (' + esc(s.uqc) + ')' : '')) + td('Bought', U.fmtQty(s.purchased), 'num') + td('Sold', U.fmtQty(s.sold), 'num') + td('In Hand', '<span class="' + (s.onHand <= 0 ? 'red bold' : '') + '">' + U.fmtQty(s.onHand) + '</span>', 'num') + td('Rate', U.indianNumber(s.lastRate), 'num') + td('Value', money(s.value), 'num') +
+        '<td class="actions">' + (sel ? '' : '<button class="btn sm red" data-d="' + esc(s.name) + '">Delete</button>') + '</td></tr>'),
         'No stock items yet. When you record a purchase, tick "Stock" on the items you keep in stock. Quantities sold on invoices are deducted automatically.'));
     App.wireBack(root);
+    // Confirms, with the choice of also dropping the items from the item master
+    const confirmDelete = (names) => {
+      const one = names.length === 1;
+      UI.modal({ title: one ? 'Delete Stock Item' : 'Delete Stock Items', body: '<p>' + (one ? 'Remove <b>' + esc(names[0]) + '</b>' : 'Remove <b>' + names.length + ' items</b>') + ' from stock? Uploaded stock quantities are deleted and purchase lines stop counting as stock. Purchases and invoices themselves are kept.</p>' + UI.check('stMaster', 'Also delete from the item master (no longer offered on invoices)', false),
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Delete', cls: 'red', onClick: (bg) => { const n = removeFromStock(names, UI.val('stMaster', bg)); UI.toast(n + (n === 1 ? ' item' : ' items') + ' removed from stock'); Stock.select = false; App.go('stock'); } }] });
+    };
+    $('#stItems').onclick = () => App.go('items');
+    if ($('#stSel')) $('#stSel').onclick = () => { Stock.select = !Stock.select; App.go('stock'); };
+    if (sel) {
+      $('#selAll').onchange = e => $$('.selbox', root).forEach(b => b.checked = e.target.checked);
+      $('#bDel').onclick = () => { const names = $$('.selbox:checked', root).map(b => b.dataset.n); if (!names.length) return UI.toast('Tick the items first'); confirmDelete(names); };
+    }
+    $$('[data-d]', root).forEach(b => b.onclick = () => confirmDelete([b.dataset.d]));
     $('#stTpl').onclick = () => { UI.download('BlitzBook_Stock_Template.csv', 'Item,HSN,Qty,UQC,Rate,GST%\nWooden Chair,9401,10,NOS,1500,18\nDining Table,9403,2,NOS,12000,18\n', 'text/csv'); UI.toast('Template downloaded'); };
     // Columns: Item, HSN, Qty, UQC, Rate, GST%. Rows become one opening-stock document dated today, and each
     // item joins the item master so it can be invoiced straight away.
@@ -540,5 +583,5 @@
   };
 
   global.Books = Books;
-  global.Ledger = { EXPENSE_CATS, TDS_SECTIONS, purchaseTotals, Contacts, Items, Purchases, Expenses, Journal };
+  global.Ledger = { EXPENSE_CATS, TDS_SECTIONS, purchaseTotals, Contacts, Items, Purchases, Expenses, Journal, listTable, td, columns, nextNo };
 })(window);

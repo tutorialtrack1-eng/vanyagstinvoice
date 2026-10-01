@@ -75,7 +75,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
   check('sync is on', (await page.textContent('#syncTx')) === 'Synced');
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
-  check('dashboard tiles in the agreed order', await page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join()) === 'Invoice,Sales,Customer,Supplier,Purchase,Stock,Expense,Journal,Reports');
+  check('dashboard tiles in the agreed order', await page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join()) === 'Invoice,Sales,Customer,Supplier,Purchase,Stock,Expense,Receipts,Journal,Reports');
 
   // invoice
   await page.click('.tiles [data-go=invoice]');
@@ -117,9 +117,10 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('layout previews shown', (await page.$$('.pv iframe')).length === 2 && (await page.$$('[data-env]')).length === 3 && (await page.inputValue('#pvPaper')) === 'A4');
   await page.click('.pv:nth-child(2) input'); await page.waitForTimeout(400); await page.screenshot({ path: OUT + '/03d-print-settings.png' }); await page.click('.modal .mf .btn.green');
   check('layout remembered', await page.evaluate(() => Store.company().pdfLayout === 1 && Store.company().paper === 'A4'));
-  // save without printing, then print without any questions
+  // save without printing: the invoice is kept and the editor moves on to the next number; then print the saved one
   await page.click('#iSave'); await page.waitForSelector('.toast');
-  check('save keeps the invoice without printing', (await toast(page)).includes('saved') && (await page.evaluate(() => Store.list('invoices').length)) === 1 && (await page.evaluate(() => window.__printed || 0)) === 0);
+  check('save keeps the invoice without printing and moves to the next number', (await toast(page)).includes('saved') && (await page.evaluate(() => Store.list('invoices').length)) === 1 && (await page.evaluate(() => window.__printed || 0)) === 0 && (await page.inputValue('#iNo')) === 'OFFSI27-00002', [await toast(page), await page.inputValue('#iNo')]);
+  await page.evaluate(() => App.go('invoice', { id: Store.list('invoices')[0].id })); await page.waitForSelector('#rows');
   await page.click('#iPrint');
   await page.waitForSelector('.modal .mh');
   await page.waitForFunction(() => { const f = document.getElementById('printFrame'); return f && f.srcdoc.includes('OFFSI27-00001') && f.srcdoc.includes('classic'); });
@@ -147,7 +148,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.fill('#pName', 'Solara Appliances'); await page.fill('#pGstin', '29AADCW0665P1ZX'); await page.check('#pTds'); await page.fill('#pTdsRate', '2');
   const gstOk = await page.evaluate(() => { const g = '29AADCW0665P1Z'; const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'; let s = 0; for (let i = 0; i < 14; i++) { const v = chars.indexOf(g[i]) * (i % 2 === 0 ? 1 : 2); s += Math.floor(v / 36) + v % 36; } return g + chars[(36 - s % 36) % 36]; });
   await page.fill('#pGstin', gstOk); await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
-  await page.evaluate(() => App.go('purchases')); await page.click('#pNew'); await page.fill('#pSup', 'Solara Appliances'); await page.dispatchEvent('#pSup', 'change');
+  await page.evaluate(() => App.go('purchases')); await page.click('#pNew'); await page.fill('#pSup', 'Solara Appliances'); await page.dispatchEvent('#pSup', 'change'); await page.selectOption('#pPaid', 'Credit');
   check('supplier fills GSTIN and TDS', (await page.inputValue('#pGstin')) === gstOk && await page.isChecked('#pTds'));
   await page.fill('#pRows tr [data-k=name]', 'Air Fryer 4.5L - Black (See Through)'); await page.fill('#pRows tr [data-k=qty]', '10'); await page.fill('#pRows tr [data-k=rate]', '1800'); await page.check('#pRows tr [data-k=stock]');
   const ptot = (await page.textContent('#pTot')).replace(/\s+/g, ' ');
@@ -193,9 +194,17 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.waitForFunction(() => Store.list('purchases').some(p => p.kind === 'STK'));
   const stock = (await page.textContent('table.list')).replace(/\s+/g, ' ');
   check('stock in hand: bought less sold, at the last rate', stock.includes('Air Fryer 4.5L - Black (See Through) (NOS)10551,800.00₹ 9,000.00') && stock.includes('Dining Table') && stock.includes('Wooden Chair'), stock.slice(0, 260));
+  // stock items can be deleted one at a time or in bulk, with or without the item master entry
+  await page.click('#stSel'); await page.waitForSelector('.selbox');
+  await page.check('.selbox[data-n="Dining Table"]'); await page.click('#bDel'); await page.waitForSelector('#stMaster'); await page.click('.modal .mf .btn.red');
+  await page.waitForFunction(() => !document.querySelector('table.list').textContent.includes('Dining Table'));
+  check('bulk delete removes the stock line but keeps the item in the master', await page.evaluate(() => !Books.stock(null).some(s => s.name === 'Dining Table') && Store.items().some(i => i.name === 'Dining Table')));
+  await page.click('[data-d="Wooden Chair"]'); await page.waitForSelector('#stMaster'); await page.check('#stMaster'); await page.click('.modal .mf .btn.red');
+  await page.waitForFunction(() => !document.querySelector('table.list').textContent.includes('Wooden Chair'));
+  check('delete with "also from item master" removes both', await page.evaluate(() => !Books.stock(null).some(s => s.name === 'Wooden Chair') && !Store.items().some(i => i.name === 'Wooden Chair') && Store.list('purchases').some(p => p.no === 'PUR-0002')));
 
   // every screen renders; statements export
-  const shots = [['sales', '06-sales'], ['items', '07-items'], ['purchases', '08-purchases'], ['expenses', '09-expenses'], ['journal', '10-journal'], ['salesReport', '11-sales-report'], ['pnl', '12-pnl'], ['balance', '13-balance'], ['stock', '14-stock'], ['backup', '17-backup']];
+  const shots = [['sales', '06-sales'], ['items', '07-items'], ['purchases', '08-purchases'], ['expenses', '09-expenses'], ['journal', '10-journal'], ['money', '16a-money'], ['salesReport', '11-sales-report'], ['pnl', '12-pnl'], ['balance', '13-balance'], ['stock', '14-stock'], ['backup', '17-backup']];
   for (const [r, n] of shots) { await page.evaluate((r) => App.go(r), r); await page.waitForTimeout(80); await page.screenshot({ path: OUT + '/' + n + '.png', fullPage: true }); }
   await page.evaluate(() => App.go('contacts', { type: 'Customer' })); await page.screenshot({ path: OUT + '/15-contacts.png', fullPage: true });
   await page.evaluate(() => App.go('pnl'));
@@ -207,6 +216,42 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   const bs = (await page.textContent('.kv')).replace(/\s+/g, ' ');
   const bsNums = await page.evaluate(() => { const b = Books.balanceSheet(U.dateMs(U.today())); return [b.totalAssets, b.totalLiabilities + b.capital, b.tdsPayable, b.receivables]; });
   check('balance sheet balances, carries TDS payable and receivables', Math.abs(bsNums[0] - bsNums[1]) < 0.01 && bsNums[2] === 360 && bsNums[3] === 32114 - 1180 && bs.includes('TDS payable'), bsNums);
+  check('balance sheet lists the customer under receivables', bs.includes('The Chef Store - Banjara Hills₹ 30,934.00'), bs.slice(0, 300));
+
+  // receipts and payments: a receipt against the credit invoice brings the customer's outstanding down
+  await page.evaluate(() => App.go('money')); await page.click('#mRct'); await page.waitForSelector('#vParty');
+  await page.selectOption('#vParty', 'The Chef Store - Banjara Hills');
+  check('receipt form shows the outstanding balance', (await page.textContent('#vBal')).includes('30,934.00'), await page.textContent('#vBal'));
+  check('open invoices of the party are offered', (await page.innerHTML('#vRefDl')).includes('OFFSI27-00001'));
+  await page.fill('#vRef', 'OFFSI27-00001'); await page.dispatchEvent('#vRef', 'change');
+  check('choosing the invoice fills its amount', (await page.inputValue('#vAmt')) === '32114.00', await page.inputValue('#vAmt'));
+  await page.fill('#vAmt', '10000'); await page.selectOption('#vMode', 'UPI'); await page.fill('#vBankRef', 'UTR123'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  const moneyList = (await page.textContent('table.list')).replace(/\s+/g, ' ');
+  check('receipt listed', moneyList.includes('RCT-0001') && moneyList.includes('Receipt') && moneyList.includes('10,000.00') && moneyList.includes('UTR123'), moneyList.slice(0, 300));
+  const bsAfter = await page.evaluate(() => { const b = Books.balanceSheet(U.dateMs(U.today())); return [b.receivables, b.bank, Math.abs(b.totalAssets - b.totalLiabilities - b.capital)]; });
+  check('receipt moves money to the bank and cuts receivables', bsAfter[0] === 32114 - 1180 - 10000 && bsAfter[1] === 50000 + 10000 && bsAfter[2] < 0.01, bsAfter);
+  check('receipt prints as a voucher', (await page.evaluate(() => Print.voucher(Store.list('journal').find(j => j.vtype === 'receipt'), Store.company()))).includes('RECEIPT'));
+  check('receipt is a journal entry too', await page.evaluate(() => { App.go('journal'); return document.querySelector('table.list').textContent.includes('Receipt RCT-0001'); }));
+  // a bank statement in a bank's own export layout: parties matched from the narration, duplicates spotted on re-upload
+  const bank = path.join(process.env.BLITZBOOK_DATA, 'statement.csv');
+  fs.writeFileSync(bank, 'Date,Narration,Chq./Ref.No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance\n02/10/2026,UPI-THE CHEF STORE - BANJARA HILLS-9849194056@ybl,UTR555,02/10/2026,,"5,000.00","65,000.00"\n03-Oct-2026,NEFT SOLARA APPLIANCES PUR-0001,N123,03/10/2026,"20,880.00",,"44,120.00"\n04/10/26,BANK CHARGES,,04/10/2026,118.00,,"44,002.00"\n');
+  await page.evaluate(() => App.go('money'));
+  [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#mBank')]); await chooser.setFiles(bank);
+  await page.waitForSelector('#bkRows tr');
+  const picked = await page.evaluate(() => Array.from(document.querySelectorAll('#bkRows [data-k=party]')).map(s => s.value));
+  check('statement lines matched to parties by name', picked[0] === 'The Chef Store - Banjara Hills' && picked[1] === 'Solara Appliances' && picked[2] === '', picked);
+  check('statement summary', (await page.textContent('#bkSum')).includes('3 selected') && (await page.textContent('.modal .mh')).includes('3 transactions'), await page.textContent('#bkSum'));
+  await page.click('.modal .mf .btn.green'); await page.waitForSelector('.toast');
+  check('two lines recorded, the unmatched one skipped', (await toast(page)).includes('2 transactions recorded') && (await toast(page)).includes('1 skipped'), await toast(page));
+  const vouchers = await page.evaluate(() => Store.list('journal').filter(j => j.vtype).map(v => [v.vtype, v.no, v.party, v.lines[0].amount, v.date]));
+  check('receipt and payment from the statement', vouchers.some(v => v[0] === 'receipt' && v[1] === 'RCT-0002' && v[2] === 'The Chef Store - Banjara Hills' && v[3] === 5000 && v[4] === '02/10/2026') && vouchers.some(v => v[0] === 'payment' && v[1] === 'PMT-0001' && v[2] === 'Solara Appliances' && v[3] === 20880 && v[4] === '03/10/2026'), vouchers);
+  [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#mBank')]); await chooser.setFiles(bank);
+  await page.waitForSelector('#bkRows tr');
+  check('re-upload spots the lines recorded earlier', (await page.textContent('.modal .mb')).includes('2 lines were recorded earlier') && (await page.textContent('#bkSum')).includes('1 selected'), await page.textContent('#bkSum'));
+  await page.click('.modal .mf .btn.outline');
+  const settled = await page.evaluate(() => [Books.partyBalance('Solara Appliances'), Books.balanceSheet(null).receivables, Books.balanceSheet(null).parties]);
+  check('supplier payable settled by the payment', Math.abs(settled[0]) < 0.01 && settled[1] === 32114 - 1180 - 10000 - 5000, settled);
+  await page.screenshot({ path: OUT + '/16b-money.png', fullPage: true });
   await page.evaluate(() => App.go('backup'));
   [dl] = await Promise.all([page.waitForEvent('download'), page.click('#bExp')]);
   const backup = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
@@ -227,7 +272,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   const same = async (what) => JSON.stringify(await page.evaluate(what)) === JSON.stringify(await B.evaluate(what));
   check('same invoices', await same(() => Store.list('invoices').map(i => [i.no, i.date, i.payment, i.totals, i.items.map(x => [x.desc, x.hsn, x.gst, +x.qty, +x.rate, x.taxable])])));
   check('same items, contacts, purchases, expenses, notes, journal', await same(() => [Store.items().map(i => [i.name, i.hsn, i.gst, +i.rate, i.category]).sort(), Store.list('contacts').map(c => [c.id, c.name, c.type, c.state, c.tds]).sort(),
-    Store.list('purchases').map(p => [p.id, p.no, p.kind, p.total, p.tds, p.items.length]).sort(), Store.list('expenses').map(e => [e.id, e.category, e.amount]), Store.list('notes').map(n => [n.id, n.no, n.total]), Store.list('journal').map(j => [j.id, j.lines])]));
+    Store.list('purchases').map(p => [p.id, p.no, p.kind, p.total, p.tds, p.items.length]).sort(), Store.list('expenses').map(e => [e.id, e.category, e.amount]), Store.list('notes').map(n => [n.id, n.no, n.total]), Store.list('journal').map(j => [j.id, j.lines, j.vtype, j.no, j.party, j.bankRef])]));
   check('same statements', await same(() => { const b = Books.balanceSheet(U.dateMs(U.today())), p = Books.profitLoss(null, null); return [b.totalAssets, b.capital, b.stockValue, p.netProfit, p.outputGst, p.inputGst].map(U.round2); }));
   check('same trial clock', await same(() => Store.get('registered_at')));
   await B.screenshot({ path: OUT + '/30-second-browser.png', fullPage: true });

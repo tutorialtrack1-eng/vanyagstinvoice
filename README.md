@@ -28,6 +28,8 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   `server/README.md`); its address goes in `Sync.java` (`SERVER_URL`) or under *Sync* in the app.
 - The trial after registering lasts 1 day; trial, validity and activation codes are shared between app and
   portal when sync is on.
+- Registration and password reset OTPs are sent by SMS and email by the server (`server/README.md`, *OTP
+  delivery*); with no server, or a server without those settings, the OTP is shown on screen (test mode).
 
 ## Build
 Open this folder in Android Studio and let Gradle sync. Then select:

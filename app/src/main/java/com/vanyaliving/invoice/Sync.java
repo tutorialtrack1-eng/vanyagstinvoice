@@ -156,6 +156,31 @@ final class Sync {
         return post(c, "register", json("name", name, "phone", phone, "email", email, "pw", pwHash(password)));
     }
 
+    /** Registration from the Register screen: the server checks the OTP it sent to the number / email. */
+    static JSONObject register(Context c, String name, String phone, String email, String password, String otp) throws SyncException {
+        return post(c, "register", json("name", name, "phone", phone, "email", email, "pw", pwHash(password), "otp", otp));
+    }
+
+    /** Asks the server to send an OTP: purpose "register" (to phone / email) or "reset" (to the account named by identity).
+     *  The reply says where it went; in test mode (server without SMS / email settings) it carries the code itself. */
+    static JSONObject sendOtp(Context c, String purpose, String phone, String email, String identity) throws SyncException {
+        return post(c, "otp", json("purpose", purpose, "phone", phone, "email", email, "identity", identity));
+    }
+
+    /** Forgot password: the OTP sent to the account stands in for the old password. Returns {token, user}. */
+    static JSONObject resetPassword(Context c, String identity, String otp, String password) throws SyncException {
+        return post(c, "reset", json("identity", identity, "otp", otp, "pw", pwHash(password)));
+    }
+
+    /** Text for the "OTP Sent" dialog from the server's reply. */
+    static String otpSentText(JSONObject r, String target) {
+        if (r.optBoolean("test", false)) return "OTP for " + target + "\n\n(Test mode) Your 6-digit OTP is: " + r.optString("otp", "") + "\n\nThe server has no SMS or email sender set up, so the OTP is shown here instead of being sent.";
+        JSONObject to = r.optJSONObject("to");
+        String phone = to == null ? "" : to.optString("phone", ""), email = to == null ? "" : to.optString("email", "");
+        String where = (phone.isEmpty() ? "" : "+91 " + phone) + (!phone.isEmpty() && !email.isEmpty() ? " and " : "") + email;
+        return "A 6-digit OTP was sent to " + where + ". It is valid for 10 minutes." + (email.isEmpty() ? "" : "\n\nNot in the inbox? Check the spam folder.");
+    }
+
     static boolean exists(Context c, String identity) throws SyncException {
         return post(c, "exists", json("identity", identity)).optBoolean("exists", false);
     }

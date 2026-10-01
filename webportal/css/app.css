@@ -248,7 +248,8 @@ table.list .actions button { margin-left: 4px; }
 .tile:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 .tile .t, .tile .d { display: block; }
 .tile .t { font-weight: 700; font-size: 13.5px; color: var(--text); }
-.tiles.dash { gap: 16px; }
+.tiles.dash { gap: 16px; grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 1100px) { .tiles.dash { grid-template-columns: repeat(2, 1fr); } }
 .tiles.dash .tile { position: relative; overflow: hidden; flex-direction: row; justify-content: flex-start; gap: 14px; min-height: 76px; padding: 12px 16px; text-align: left; border: 1px solid #fff; border-radius: 22px; background: linear-gradient(180deg, #fff, #FBFBFF); box-shadow: var(--shadow); }
 .tiles.dash .tile::before { content: ""; position: absolute; right: -44px; top: -54px; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(circle, var(--b), transparent 70%); opacity: .2; transition: transform .4s, opacity .4s; }
 .tiles.dash .tile:hover { transform: translateY(-5px); border-color: var(--b); box-shadow: 0 24px 40px -22px var(--a); }
@@ -262,7 +263,7 @@ table.list .actions button { margin-left: 4px; }
 .tile .go { position: relative; margin-left: auto; color: var(--a); opacity: 0; transform: translateX(-8px); transition: opacity .25s, transform .25s; }
 .tile:hover .go { opacity: 1; transform: none; }
 @media (max-width: 760px) {
-  .tiles.dash { gap: 10px; }
+  .tiles.dash { gap: 10px; grid-template-columns: repeat(2, 1fr); }
   .tiles.dash .tile { flex-direction: column; justify-content: center; gap: 8px; min-height: 92px; padding: 12px 6px; text-align: center; border-radius: 16px; }
   .tile .badge { width: 40px; height: 40px; border-radius: 13px; }
   .tile .badge svg.ic { width: 20px; height: 20px; }
@@ -378,4 +379,7 @@ table.list .actions button { margin-left: 4px; }
 @media (max-width: 760px) { .previews { grid-template-columns: 1fr; } }
 .jl div { white-space: nowrap; } .jl .cr { padding-left: 22px; }
 .items input.auto { color: #4338CA; font-weight: 700; }
+.items.bank td.desc input[disabled] { background: #fff; color: var(--text); text-overflow: ellipsis; }
+.items.bank select { min-height: 40px; padding: 4px 6px; font-size: 13px; border-radius: 8px; }
+@media (min-width: 901px) { .modal .items.bank { min-width: 820px; } }
 @media (max-width: 760px) { .qlist.grid { grid-template-columns: 1fr 1fr; } table.list.cards td .jl { text-align: right; } .jl .cr { padding-left: 0; } }

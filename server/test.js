@@ -5,7 +5,8 @@
 const fs = require('fs'), os = require('os'), path = require('path'), vm = require('vm'), crypto = require('crypto');
 
 process.env.BLITZBOOK_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'blitzbook-test-'));
-const { server } = require('./server.js');
+const { server, notify } = require('./server.js');
+const net = require('net');
 const WEB = path.join(__dirname, '..', 'webportal', 'js');
 const pwHash = (p) => crypto.createHash('sha256').update('bb|' + p).digest('hex');
 
@@ -18,7 +19,8 @@ function browser(url) {
   const ctx = { localStorage, fetch, AbortController, setTimeout, clearTimeout, setInterval, clearInterval, console, crypto: globalThis.crypto, TextEncoder, TextDecoder, DecompressionStream: globalThis.DecompressionStream, Blob, Response };
   ctx.window = ctx; ctx.globalThis = ctx;
   vm.createContext(ctx);
-  ['util.js', 'store.js', 'subscription.js', 'appformat.js', 'sync.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(WEB, f), 'utf8'), ctx, { filename: f }));
+  ctx.App = { routes: {} }; ctx.UI = {}; ctx.Biz = { contactsOf: () => [], invoices: () => ctx.Store.list('invoices').filter(i => i.kind === 'invoice'), partyName: null };
+  ['util.js', 'store.js', 'subscription.js', 'appformat.js', 'sync.js', 'ledger.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(WEB, f), 'utf8'), ctx, { filename: f }));
   ctx.Sync.setServerUrl(url);
   ctx.signIn = (u) => { ctx.Store.uid = 1; ctx.Store.saveUsers([Object.assign({ id: 1 }, u)]); ctx.Sync.user = ctx.Store.users()[0]; ctx.Store.onChange = null; ctx.Sub.markRegistered(); };
   ctx.round = () => ctx.Sync.run();
@@ -41,6 +43,61 @@ async function post(url, name, body) { const r = await fetch(url + '/api/' + nam
   check('login by email works', (await post(url, 'login', { identity: 'P@Example.com', pw: user.password })).status === 200);
   check('sync without a token is refused', (await post(url, 'sync', { token: 'x', changes: [] })).status === 401);
 
+  console.log('OTP: registration and password reset (test mode: no SMS / email configured)');
+  let r = await post(url, 'otp', { purpose: 'register', phone: '9000000002', email: 'otp@example.com' });
+  check('otp issued in test mode carries the code', r.status === 200 && r.json.test === true && /^\d{6}$/.test(r.json.otp) && r.json.sent.sms === false, r.json);
+  check('otp for a registered number is refused', (await post(url, 'otp', { purpose: 'register', phone: user.phone })).status === 409);
+  check('otp for a bad number is refused', (await post(url, 'otp', { purpose: 'register', phone: '12345' })).status === 400);
+  check('a second request straight away is told to wait', (await post(url, 'otp', { purpose: 'register', phone: '9000000002', email: 'otp@example.com' })).status === 429);
+  const reg = { name: 'OTP User', phone: '9000000002', email: 'otp@example.com', pw: pwHash('Otp@1234') };
+  check('registration with the wrong otp fails', (await post(url, 'register', Object.assign({ otp: '000000' }, reg))).status === 400);
+  check('registration without an otp request fails', (await post(url, 'register', Object.assign({ otp: r.json.otp, phone: '9000000003' }, { name: 'x', pw: reg.pw }))).status === 400);
+  r = await post(url, 'register', Object.assign({ otp: r.json.otp }, reg));
+  check('registration with the right otp succeeds', r.status === 200 && !!r.json.token && r.json.user.phone === '9000000002', r.json);
+  check('an otp is single use', (await post(url, 'register', { name: 'x', phone: '9000000002', email: '', pw: reg.pw, otp: '123456' })).status !== 200 && (await post(url, 'register', { name: 'x', phone: '9000000004', email: '', pw: reg.pw, otp: '123456' })).status === 400);
+  r = await post(url, 'otp', { purpose: 'reset', identity: 'OTP@example.com' });
+  check('reset otp goes to the account (looked up by email)', r.status === 200 && r.json.test === true, r.json);
+  check('reset otp for an unknown account is 404', (await post(url, 'otp', { purpose: 'reset', identity: '9111111111' })).status === 404);
+  check('reset with the wrong otp fails', (await post(url, 'reset', { identity: '9000000002', otp: '000000', pw: pwHash('New@1234') })).status === 400);
+  const rs = await post(url, 'reset', { identity: '9000000002', otp: r.json.otp, pw: pwHash('New@1234') });
+  check('reset with the right otp changes the password', rs.status === 200 && !!rs.json.token && (await post(url, 'login', { identity: '9000000002', pw: pwHash('New@1234') })).status === 200 && (await post(url, 'login', { identity: '9000000002', pw: reg.pw })).status === 401, rs.json);
+  check('a device signed in before the reset is signed out', (await post(url, 'sync', { token: r.json.token || 'x', epoch: '', since: 0, changes: [] })).status === 401);
+
+  console.log('OTP: SMTP client against a fake mail server');
+  const mail = { lines: [], data: '' };
+  const smtp = net.createServer(sock => {
+    let inData = false;
+    sock.write('220 fake ESMTP\r\n');
+    sock.on('data', d => {
+      for (const line of d.toString().split('\r\n')) {
+        if (line === '' && !inData) continue;
+        if (inData) { if (line === '.') { inData = false; sock.write('250 queued\r\n'); } else mail.data += line + '\n'; continue; }
+        mail.lines.push(line);
+        if (/^EHLO/i.test(line)) sock.write('250-fake\r\n250-SIZE 1000000\r\n250 AUTH LOGIN PLAIN\r\n');
+        else if (/^AUTH LOGIN/i.test(line)) sock.write('334 VXNlcm5hbWU6\r\n');
+        else if (line === Buffer.from('mailer@example.com').toString('base64')) sock.write('334 UGFzc3dvcmQ6\r\n');
+        else if (line === Buffer.from('app-password').toString('base64')) sock.write('235 ok\r\n');
+        else if (/^MAIL FROM/i.test(line) || /^RCPT TO/i.test(line)) sock.write('250 ok\r\n');
+        else if (/^DATA/i.test(line)) { inData = true; sock.write('354 go\r\n'); }
+        else if (/^QUIT/i.test(line)) { sock.write('221 bye\r\n'); sock.end(); }
+        else sock.write('500 what\r\n');
+      }
+    });
+  });
+  await new Promise(res => smtp.listen(0, res));
+  // Plain port (no STARTTLS offered) is refused: credentials never go out in the clear
+  Object.assign(process.env, { SMTP_HOST: '127.0.0.1', SMTP_PORT: String(smtp.address().port), SMTP_USER: 'mailer@example.com', SMTP_PASS: 'app-password', SMTP_FROM: 'BlitzBook <mailer@example.com>' });
+  notify.load(process.env.BLITZBOOK_DATA);
+  check('email is configured', notify.status().email === true);
+  let refused = '';
+  try { await notify.sendMail('to@example.com', 'Test', 'hello'); } catch (e) { refused = e.message; }
+  check('a server without STARTTLS is refused', /STARTTLS/.test(refused), refused);
+  check('the greeting and the multi-line EHLO reply were read, then the dialogue stopped before AUTH', mail.lines.some(l => /^EHLO/i.test(l)) && !mail.lines.some(l => /^AUTH/i.test(l)), mail.lines);
+  smtp.close();
+  ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'].forEach(k => delete process.env[k]);
+  notify.load(process.env.BLITZBOOK_DATA);
+  check('back in test mode', notify.status().email === false && notify.status().sms === false);
+
   console.log('portal A -> portal B');
   A.Store.saveCompany(Object.assign(A.Store.company(), { name: 'Win The Buy Box Pvt Ltd', gstin: '36AADCW0665P1ZS', address: 'HYDERABAD', phone: '9849194056', email: 'a@b.in', gstType: 'Regular', activity: 'Wholesale', invoiceFormat: 'INV/{FY}/####', signature: 'data:image/png;base64,AAAA' }));
   A.Store.add('contacts', { type: 'Customer', name: 'The Chef Store', phone: '9849194056', email: '', gstin: '36AAOFT3399K1ZB', state: 'Telangana (36)', address: 'BANJARA HILLS', tds: false });
@@ -57,6 +114,7 @@ async function post(url, name, body) { const r = await fetch(url + '/api/' + nam
   A.Store.add('journal', { date: '30/09/2026', narration: 'Capital', lines: [{ account: 'Bank', side: 'Dr', amount: 50000 }, { account: 'Capital', side: 'Cr', amount: 50000 }] });
   A.Store.add('notes', { kind: 'CN', no: 'CN-0001', date: '30/09/2026', party: 'The Chef Store', partyGstin: '36AAOFT3399K1ZB', ref: '0001', reason: 'Return', taxable: 1000, rate: '18', settle: 'Credit', gst: 180, cgst: 90, sgst: 90, igst: 0, total: 1180 });
   A.Store.add('accounts', { name: 'Vehicle', nature: 'Asset' });
+  A.Store.add('journal', { vtype: 'receipt', no: 'RCT-0001', date: '30/09/2026', party: 'The Chef Store', mode: 'UPI', ref: '0001', bankRef: 'UTR1', narration: 'part payment', lines: [{ account: 'Bank', side: 'Dr', amount: 5000 }, { account: 'The Chef Store', side: 'Cr', amount: 5000 }] });
   check('A pushes', await A.round(), A.Sync.lastError);
 
   B.signIn(user);
@@ -65,8 +123,11 @@ async function post(url, name, body) { const r = await fetch(url + '/api/' + nam
   const bInv = B.Store.list('invoices')[0];
   check('invoice arrives intact', bInv && bInv.no === '0001' && bInv.items[0].qty === 5 && bInv.items[0].subSerial === 'SN1' && bInv.totals.rounded === 13121 && bInv.other.orderNo === 'PO-77' && bInv.buyer.name.startsWith('The Chef Store') && bInv.totals.intra === true, bInv);
   check('contact keeps its id', B.Store.list('contacts')[0].id === A.Store.list('contacts')[0].id);
+  const bRct = B.Store.list('journal').find(j => j.vtype === 'receipt');
+  check('receipt arrives with its details', bRct && bRct.no === 'RCT-0001' && bRct.party === 'The Chef Store' && bRct.mode === 'UPI' && bRct.ref === '0001' && bRct.bankRef === 'UTR1' && bRct.lines[1].account === 'The Chef Store', bRct);
+  check('receipt brings the customer balance down on the balance sheet', (() => { const bs = B.Books.balanceSheet(null); const p = bs.parties.find(x => x[0] === 'The Chef Store'); return p && Math.abs(p[1] - (13121 - 1180 - 5000)) < 0.01 && Math.abs(bs.receivables - (13121 - 1180 - 5000)) < 0.01 && Math.abs(bs.bank - 55000) < 0.01; })(), B.Books.balanceSheet(null));
   check('item, expense, purchase, journal, note, account arrive', B.Store.list('items')[0].code === 'AF45' && B.Store.list('expenses')[0].taxable === 10000 && B.Store.list('purchases')[0].items[0].stock === true &&
-    B.Store.list('purchases')[0].igst === 3240 && B.Store.list('journal')[0].lines.length === 2 && B.Store.list('notes')[0].kind === 'CN' && B.Store.list('accounts')[0].nature === 'Asset');
+    B.Store.list('purchases')[0].igst === 3240 && B.Store.list('journal').find(j => !j.vtype).lines.length === 2 && B.Store.list('notes')[0].kind === 'CN' && B.Store.list('accounts')[0].nature === 'Asset');
   const revBefore = B.Sync.state().since;
   await B.round(); await A.round(); await B.round();
   check('nothing bounces back and forth when idle', B.Sync.state().since === revBefore && A.Sync.state().since === revBefore, [revBefore, A.Sync.state().since, B.Sync.state().since]);
@@ -93,6 +154,9 @@ async function post(url, name, body) { const r = await fetch(url + '/api/' + nam
   const login = (await post(url, 'login', { identity: user.phone, pw: user.password })).json;
   let pull = (await post(url, 'sync', { token: login.token, epoch: '', since: 0, changes: [] })).json;
   const keys = pull.changes.map(x => x.k).sort();
+  const rowRct = pull.changes.find(x => x.k.startsWith('jrn:') && x.d.kind === 'Receipt');
+  check('receipt row uses the app columns', rowRct && rowRct.d.doc_no === 'RCT-0001' && rowRct.d.party === 'The Chef Store' && rowRct.d.ref_no === '0001' && rowRct.d.mode === 'UPI' && rowRct.d.bank_ref === 'UTR1' && rowRct.d.lines.length === 2, rowRct);
+  check('a plain journal row carries no voucher columns', pull.changes.some(x => x.k.startsWith('jrn:') && x.d.kind === undefined && x.d.party === undefined));
   check('app sees every record as a row', keys.includes('company') && keys.includes('inv:0001') && keys.includes('item:air fryer 4.5l') && keys.some(k => k.startsWith('contact:')) && keys.some(k => k.startsWith('pur:')) && keys.some(k => k.startsWith('jrn:')) && keys.includes('acct:vehicle') && keys.includes('sub'), keys);
   const rowInv = pull.changes.find(x => x.k === 'inv:0001').d;
   check('invoice row uses the app columns', rowInv.invoice_no === '0001' && rowInv.buyer_name_addr.startsWith('The Chef Store') && rowInv.same_as_billing === 1 && rowInv.consignee_gstin === '36AAOFT3399K1ZB' && rowInv.rounded_total === 13121 && rowInv.items[0].particulars === 'Air Fryer 4.5L' && rowInv.items[0].amount === 11119.7, rowInv);
@@ -147,10 +211,10 @@ async function post(url, name, body) { const r = await fetch(url + '/api/' + nam
   console.log('backup file in the app layout');
   const backup = A.Store.exportAll();
   check('tables present', ['company_master', 'items_master', 'contacts', 'invoices', 'invoice_items', 'purchases', 'purchase_items', 'journal_vouchers', 'journal_lines', 'ledger_accounts', 'notes'].every(t => Array.isArray(backup[t])));
-  check('child rows point at their parent', backup.invoice_items.every(r => backup.invoices.some(i => i.id === r.invoice_id)) && backup.purchase_items[0].purchase_id === backup.purchases[0].id && backup.journal_lines.length === 2);
+  check('child rows point at their parent', backup.invoice_items.every(r => backup.invoices.some(i => i.id === r.invoice_id)) && backup.purchase_items[0].purchase_id === backup.purchases[0].id && backup.journal_lines.length === 4 && backup.journal_vouchers.some(v => v.kind === 'Receipt' && v.doc_no === 'RCT-0001'));
   const E = browser(url); E.Store.uid = 1;
   const counts = E.Store.importAll(JSON.parse(JSON.stringify(backup)));
-  check('restores in a fresh portal', counts.invoices === A.Store.list('invoices').length && E.Store.company().name === A.Store.company().name && E.Store.list('purchases')[0].items.length === 1 && E.Store.list('journal')[0].lines.length === 2, counts);
+  check('restores in a fresh portal', counts.invoices === A.Store.list('invoices').length && E.Store.company().name === A.Store.company().name && E.Store.list('purchases')[0].items.length === 1 && E.Store.list('journal').find(j => !j.vtype).lines.length === 2 && E.Store.list('journal').find(j => j.vtype === 'receipt').bankRef === 'UTR1', counts);
   check('round trip is lossless', JSON.stringify(E.AppFormat.snapshot()['inv:0001']) === JSON.stringify(A.AppFormat.snapshot()['inv:0001']));
   const old = { company_master: [{ id: 1, company_name: 'Old Co', gstin: '', address: 'X', phone: '9876543210', email: 'x@y.in' }], journal: [{ id: 1, date: '01/04/2026', debit_account: 'Cash', credit_account: 'Capital', amount: 500, narration: 'old style' }] };
   E.Store.importAll(old);

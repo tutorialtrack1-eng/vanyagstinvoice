@@ -124,6 +124,8 @@ final class Ledger {
         for (String col : new String[]{"taxable REAL DEFAULT 0", "gst_rate TEXT", "gst REAL DEFAULT 0", "cgst REAL DEFAULT 0", "sgst REAL DEFAULT 0", "igst REAL DEFAULT 0", "rcm INTEGER DEFAULT 0", "vendor_gstin TEXT"})
             addColumn(db, "expenses", col);
         addColumn(db, "invoices", "rcm INTEGER DEFAULT 0");
+        // Receipts and payments are journal vouchers with a few more details (entered in the web portal)
+        for (String col : new String[]{"kind TEXT", "doc_no TEXT", "party TEXT", "ref_no TEXT", "mode TEXT", "bank_ref TEXT"}) addColumn(db, "journal_vouchers", col);
         for (String col : new String[]{"tds_applicable INTEGER DEFAULT 0", "tds_section TEXT", "tds_rate REAL DEFAULT 0"}) addColumn(db, "contacts", col);
         migrateJournal(db);
     }
@@ -189,7 +191,12 @@ final class Ledger {
     static class JournalVoucher {
         long id = -1;
         String date = "", narration = "";
+        // Receipt / Payment vouchers (made in the web portal) carry who paid or was paid, the bill they settle,
+        // the mode and the bank reference; a plain journal entry leaves these empty
+        String kind = "", docNo = "", party = "", refNo = "", mode = "", bankRef = "";
         final List<JournalLine> lines = new ArrayList<>();
+        boolean isReceipt() { return "Receipt".equalsIgnoreCase(kind); }
+        boolean isPayment() { return "Payment".equalsIgnoreCase(kind); }
         double debitTotal() { double t = 0; for (JournalLine l : lines) if (l.debit) t += l.amount; return t; }
         double creditTotal() { double t = 0; for (JournalLine l : lines) if (!l.debit) t += l.amount; return t; }
         boolean balanced() { return Math.abs(debitTotal() - creditTotal()) < 0.005 && debitTotal() > 0; }
@@ -202,6 +209,7 @@ final class Ledger {
             JournalVoucher v = new JournalVoucher();
             v.id = c.getLong(c.getColumnIndexOrThrow("id"));
             v.date = str(c, "date"); v.narration = str(c, "narration");
+            v.kind = str(c, "kind"); v.docNo = str(c, "doc_no"); v.party = str(c, "party"); v.refNo = str(c, "ref_no"); v.mode = str(c, "mode"); v.bankRef = str(c, "bank_ref");
             byId.put(v.id, v);
         }
         c.close();
@@ -217,6 +225,9 @@ final class Ledger {
     static void saveJournal(SQLiteDatabase db, JournalVoucher v) {
         ContentValues cv = new ContentValues();
         cv.put("date", v.date); cv.put("narration", v.narration);
+        boolean voucher = v.isReceipt() || v.isPayment();
+        cv.put("kind", voucher ? v.kind : null); cv.put("doc_no", voucher ? v.docNo : null); cv.put("party", voucher ? v.party : null);
+        cv.put("ref_no", voucher ? v.refNo : null); cv.put("mode", voucher ? v.mode : null); cv.put("bank_ref", voucher ? v.bankRef : null);
         db.beginTransaction();
         try {
             if (v.id < 0 || db.update("journal_vouchers", cv, "id=?", new String[]{String.valueOf(v.id)}) == 0) v.id = db.insert("journal_vouchers", null, cv);
@@ -624,16 +635,21 @@ final class Ledger {
 
     static BalanceSheet balanceSheet(SQLiteDatabase db, Date asAt) {
         BalanceSheet bs = new BalanceSheet();
-        Cursor c = db.query("invoices", new String[]{"date", "rounded_total", "grand_total", "cgst", "sgst", "igst", "payment_mode", "rcm"}, null, null, null, null, null);
+        // What each party owes us (positive) or is owed by us (negative): credit sales and purchases, credit and
+        // debit notes settled on account, and every journal line on the party, which is how receipts and
+        // payments against those bills bring the balance down
+        Map<String, Double> party = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        Cursor c = db.query("invoices", new String[]{"date", "rounded_total", "grand_total", "cgst", "sgst", "igst", "payment_mode", "rcm", "buyer_name_addr"}, null, null, null, null, null);
         while (c.moveToNext()) {
             if (!inRange(c.getString(0), null, asAt)) continue;
             double total = c.isNull(1) || c.getDouble(1) == 0 ? c.getDouble(2) : c.getDouble(1);
             if (c.getInt(7) != 1) { bs.outCgst += c.getDouble(3); bs.outSgst += c.getDouble(4); bs.outIgst += c.getDouble(5); }
             String mode = c.getString(6);
-            if (isCredit(mode)) bs.receivables += total; else if (isCash(mode)) bs.cash += total; else bs.bank += total;
+            if (isCredit(mode)) { if (!addParty(party, partyName(c.getString(8)), total)) bs.receivables += total; }
+            else if (isCash(mode)) bs.cash += total; else bs.bank += total;
         }
         c.close();
-        Cursor p = db.query("purchases", new String[]{"date", "total", "gst", "payment_mode", "rcm", "cgst", "sgst", "igst", "tds"}, "kind=?", new String[]{KIND_PURCHASE}, null, null, null);
+        Cursor p = db.query("purchases", new String[]{"date", "total", "gst", "payment_mode", "rcm", "cgst", "sgst", "igst", "tds", "supplier"}, "kind=?", new String[]{KIND_PURCHASE}, null, null, null);
         while (p.moveToNext()) {
             if (!inRange(p.getString(0), null, asAt)) continue;
             double paid = p.getDouble(1) - p.getDouble(8);
@@ -643,7 +659,8 @@ final class Ledger {
             // Reverse charge GST is owed to the government by us (and claimable as input credit once paid)
             if (p.getInt(4) == 1) bs.rcmPayable += p.getDouble(2);
             String mode = p.getString(3);
-            if (isCredit(mode)) bs.payables += paid; else if (isCash(mode)) bs.cash -= paid; else bs.bank -= paid;
+            if (isCredit(mode)) { if (!addParty(party, p.getString(9), -paid)) bs.payables += paid; }
+            else if (isCash(mode)) bs.cash -= paid; else bs.bank -= paid;
         }
         p.close();
         for (Expense e : expenses(db)) {
@@ -652,16 +669,16 @@ final class Ledger {
             if (e.rcm) bs.rcmPayable += e.gst;
             if (isCredit(e.paymentMode)) bs.payables += e.amount; else if (isCash(e.paymentMode)) bs.cash -= e.amount; else bs.bank -= e.amount;
         }
-        Cursor n = db.query("notes", new String[]{"date", "kind", "cgst", "sgst", "igst", "total", "settlement"}, null, null, null, null, null);
+        Cursor n = db.query("notes", new String[]{"date", "kind", "cgst", "sgst", "igst", "total", "settlement", "party"}, null, null, null, null, null);
         while (n.moveToNext()) {
             if (!inRange(n.getString(0), null, asAt)) continue;
             double total = n.getDouble(5); String how = n.getString(6);
             if (NOTE_CREDIT.equals(n.getString(1))) {
                 bs.outCgst -= n.getDouble(2); bs.outSgst -= n.getDouble(3); bs.outIgst -= n.getDouble(4);
-                if (isCredit(how)) bs.receivables -= total; else if (isCash(how)) bs.cash -= total; else bs.bank -= total;
+                if (isCredit(how)) { if (!addParty(party, n.getString(7), -total)) bs.receivables -= total; } else if (isCash(how)) bs.cash -= total; else bs.bank -= total;
             } else {
                 bs.inCgst -= n.getDouble(2); bs.inSgst -= n.getDouble(3); bs.inIgst -= n.getDouble(4);
-                if (isCredit(how)) bs.payables -= total; else if (isCash(how)) bs.cash += total; else bs.bank += total;
+                if (isCredit(how)) { if (!addParty(party, n.getString(7), total)) bs.payables -= total; } else if (isCash(how)) bs.cash += total; else bs.bank += total;
             }
         }
         n.close();
@@ -674,7 +691,7 @@ final class Ledger {
             switch (nature) {
                 case N_CASH: bs.cash += bal; break;
                 case N_BANK: if ("Bank".equalsIgnoreCase(name)) bs.bank += bal; else bs.assets.put(name, bal); break;
-                case N_CUSTOMER: case N_SUPPLIER: bs.parties.put(name, bal); if (bal > 0) bs.receivables += bal; else bs.payables -= bal; break;
+                case N_CUSTOMER: case N_SUPPLIER: addParty(party, name, bal); break;
                 case N_OUT_CGST: bs.outCgst -= bal; break;
                 case N_OUT_SGST: bs.outSgst -= bal; break;
                 case N_OUT_IGST: bs.outIgst -= bal; break;
@@ -688,7 +705,28 @@ final class Ledger {
                 default: break; // capital, drawings, income, expenses, purchases sit in the balancing capital
             }
         }
+        for (Map.Entry<String, Double> en : party.entrySet()) {
+            double bal = en.getValue();
+            if (Math.abs(bal) < 0.005) continue;
+            bs.parties.put(en.getKey(), bal);
+            if (bal > 0) bs.receivables += bal; else bs.payables -= bal;
+        }
         return bs;
+    }
+
+    /** The party an invoice is billed to: the first line of the buyer box. */
+    static String partyName(String nameAddr) {
+        if (nameAddr == null) return "";
+        int nl = nameAddr.indexOf('\n');
+        return (nl < 0 ? nameAddr : nameAddr.substring(0, nl)).trim();
+    }
+
+    // Adds to a party's balance; false when there is no party name (the amount then stays in the aggregate)
+    private static boolean addParty(Map<String, Double> party, String name, double v) {
+        String n = name == null ? "" : name.trim();
+        if (n.isEmpty()) return false;
+        add(party, n, v);
+        return true;
     }
 
     // ---------------------------------------------------------------- helpers
