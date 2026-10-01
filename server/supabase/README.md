@@ -67,9 +67,18 @@ key. The key is meant to be public: row-level security, not the key, protects th
 - App: put them in `SUPABASE_URL` / `SUPABASE_KEY` at the top of `Supabase.java` and the URL in
   `Sync.SERVER_URL` before building, or enter both under **Sync** in the app (also from the login screen).
 
-The top bar chip (portal) and the Sync line (app) then say **Synced**. Registering, logging in, Forgot /
-Reset Password, the trial clock and the activation codes all go through Supabase from then on; the Node
+Export / Import (portal) and the Sync line (app) then say **Synced**. Registering, logging in, Forgot /
+Reset Password, the free 30 days and the activation codes all go through Supabase from then on; the Node
 sync server is not needed.
+
+## 5. Activation codes
+
+Run `activation.sql` in the SQL Editor the same way. It creates `public.activation_codes` and the
+`redeem_code` function, and loads the first 20 codes (also listed in `activation-codes.txt`): five of
+1 month, five of 3 months, four of 6 months, four of 1 year and two of 2 years. A code works once, on any
+account, and the validity runs from the moment it is entered. To issue more, insert rows the same way
+(16 letters / digits, uppercase, no dashes). **Table Editor → activation_codes** shows which codes are used
+and by whom.
 
 ## How it is used
 

@@ -8,10 +8,11 @@
 
   // ------------------------------------------------------------ UI helpers
   const UI = {
-    toast(msg, ms) {
+    // A short note at the bottom that fades out; cls "ok" makes it green (good news such as an activation)
+    toast(msg, ms, cls) {
       $$('.toast').forEach(t => t.remove());
-      const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t);
-      setTimeout(() => t.remove(), ms || 2600);
+      const t = document.createElement('div'); t.className = 'toast' + (cls ? ' ' + cls : ''); t.textContent = msg; document.body.appendChild(t);
+      setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 700); }, ms || 2600);
     },
     modal(opt) {
       const bg = document.createElement('div'); bg.className = 'modal-bg';
@@ -153,9 +154,10 @@
     { key: 'money', t: 'Receipts & Payments', ic: 'bank' },
     { key: 'stock', t: 'Stock in Hand', ic: 'box' },
     { key: 'backup', t: 'Export / Import', ic: 'download' },
-    { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true },
-    { key: 'sync', t: 'Sync', ic: 'sync', dlg: true }
+    { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true }
   ];
+  // The Android app, served next to the portal
+  const APK_URL = 'BlitzBook.apk';
   const BRAND = '<span class="logo">' + icon('bolt') + '</span><span>Blitz<b>Book</b></span>';
 
   const App = {
@@ -187,19 +189,19 @@
       $('#root').innerHTML =
         '<header class="appbar"><button class="brandmark" id="homeBtn" title="Dashboard">' + BRAND + '</button>' +
         '<nav class="nav" id="nav" aria-label="Main">' + NAV.map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('') + '</nav>' +
-        '<div class="bar-right"><button class="syncchip" id="syncBtn"><i></i><span id="syncTx"></span></button>' +
+        '<div class="bar-right"><a class="navlink dl" id="dlApp" href="' + APK_URL + '" download="BlitzBook.apk" title="Download the BlitzBook Android app">' + icon('download') + '<span>Download App</span></a>' +
         '<button class="cochip" id="barCo" title="Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
         '<button class="navlink logout" id="logoutBtn" title="Logout">' + icon('logout') + '<span>Logout</span></button></div></header>' +
         '<main class="main" id="view"></main>';
       $('#homeBtn').onclick = () => this.go('dashboard');
       $('#barCo').onclick = () => this.go('company');
-      $('#syncBtn').onclick = () => this.go('sync');
       $('#logoutBtn').onclick = () => UI.confirm('Logout', 'Do you want to logout?', () => this.logout(), 'Logout');
       $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
       this.refreshBar(); this.refreshSync();
     },
     refreshBar() { if (!this.user || !$('#barSub')) return; const c = Store.company(); $('#barSub').textContent = c.name || 'Set up company'; $('#barAv').textContent = ((c.name || this.user.name || 'B').trim()[0] || 'B').toUpperCase(); },
-    refreshSync() { const b = $('#syncBtn'); if (!b) return; b.className = 'syncchip ' + Sync.status; $('#syncTx').textContent = Sync.statusText(); b.title = Sync.lastError || 'Sync with the BlitzBook app'; },
+    // The sync state is no longer in the top bar; Export / Import shows it
+    refreshSync() { const s = $('#syncState'); if (s) s.textContent = Sync.statusText(); },
     // Highlights the current screen in the top navigation and scrolls it into view on narrow screens
     markNav(route) {
       const nav = $('#nav'); let on = null;
@@ -305,7 +307,7 @@
       return 'A 6-digit OTP was sent to ' + to + '. It is valid for 10 minutes.' + (r.to && r.to.email ? '\n\nNot in the inbox? Check the spam folder.' : '');
     },
     register() {
-      Auth.frame('<div class="brand">Create Account</div><div class="tag">Register to start your ' + Sub.TRIAL_LABEL + ' trial</div>' +
+      Auth.frame('<div class="brand">Create Account</div><div class="tag">Register and use BlitzBook free for 30 days</div>' +
         UI.field('Full Name', UI.input('rName', ''), { req: true }) + UI.field('Mobile Number', UI.input('rPhone', '', { type: 'tel', placeholder: '10 digits', attrs: ' maxlength="10"' }), { req: true }) +
         UI.field('Email (optional)', UI.input('rEmail', '', { type: 'email' }), { hint: 'The OTP and your activation codes are sent to the mobile number and this email' }) + UI.field('Password', UI.input('rPw', '', { type: 'password' }), { req: true, hint: 'At least 6 characters with a letter, a digit and a special character' }) +
         '<div id="otpBox" class="hidden">' + UI.field('OTP', UI.input('rOtp', '', { placeholder: '6-digit OTP', attrs: ' maxlength="6" inputmode="numeric"' }), { hint: 'Enter the OTP you received' }) + '</div>' +
@@ -360,7 +362,7 @@
           const users = Store.users();
           const u = { id: (users.reduce((m, x) => Math.max(m, x.id), 0) + 1), name, phone, email, password: h, createdAt };
           users.push(u); Store.saveUsers(users);
-          UI.toast('Registered. Welcome, ' + u.name + '!');
+          UI.toast('Welcome, ' + u.name + '! BlitzBook is activated for 30 days.', 6000, 'ok');
           App.login(u, token);
         } finally { busy = false; const b = $('#rSend'); if (b) b.disabled = false; }
       };
@@ -447,20 +449,19 @@
     const salesMonth = month.reduce((s, i) => s + total(i), 0);
     const credit = invs.filter(i => i.payment === 'Credit').reduce((s, i) => s + total(i), 0);
     const recent = []; invs.forEach(i => i.items.forEach(it => { const d = String(it.desc || '').trim(); if (d && recent.length < 8 && !recent.some(r => r.toLowerCase() === d.toLowerCase())) recent.push(d); }));
-    const active = Sub.isActive();
     const stat = (id, ic, a, b, k, v, s) => '<div class="stat" style="--a:' + a + ';--b:' + b + '"><div class="ic-badge">' + icon(ic) + '</div><div class="meta"><div class="k">' + k + '</div><div class="v" id="' + id + '">' + v + '</div><div class="s">' + esc(s) + '</div></div></div>';
     const root = App.view(
       '<section class="hero"><span class="orb o1"></span><span class="orb o2"></span>' +
       '<div class="art" aria-hidden="true"><div class="sheet s1"><i></i><i></i><i></i><i></i><u></u></div><div class="sheet s2"><i></i><i></i><i></i><i></i><u></u></div><div class="coin">₹</div></div>' +
       '<div class="greet">' + esc(greet) + '</div><h1 class="co">' + esc(c.name || 'Set up your Company Profile') + '</h1>' +
-      '<div class="chips"><span class="chip">' + (c.gstin ? 'GSTIN ' + esc(c.gstin) : 'No GSTIN') + '</span><span class="chip">' + esc(c.activity || 'General') + '</span><button class="chip sub ' + (active ? '' : 'bad') + '" id="subChip">' + esc(Sub.statusText()) + '</button></div>' +
+      '<div class="chips"><span class="chip">' + (c.gstin ? 'GSTIN ' + esc(c.gstin) : 'No GSTIN') + '</span><span class="chip">' + esc(c.activity || 'General') + '</span></div>' +
       '<div class="cta"><button class="btn light" data-go="invoice">' + icon('plus') + 'New Invoice</button><button class="btn ghost" data-go="sales">View Sales' + icon('arrow') + '</button></div></section>' +
       '<div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
       stat('stCount', 'receipt', '#059669', '#34D399', 'Invoices', month.length, 'Raised this month') +
       stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), 'Across all credit invoices') + '</div>' +
       (recent.length ? '<div class="section-title">Recent products</div><div class="recent">' + recent.map(r => '<button data-item="' + esc(r) + '">' + esc(r) + '</button>').join('') + '</div>' : '') +
       '<div class="section-title">What would you like to do?</div><div class="tiles dash">' +
-      TILES.map(t => '<button class="tile" data-go="' + t.key + '" style="--a:' + t.a + ';--b:' + t.b + '"><span class="badge">' + icon(t.ic) + '</span><span class="tx"><span class="t">' + esc(t.t) + '</span><span class="d">' + esc(t.d) + '</span></span><span class="go">' + icon('arrow') + '</span></button>').join('') + '</div>');
+      TILES.map(t => '<button class="tile" data-go="' + t.key + '" style="--a:' + t.a + ';--b:' + t.b + '"><span class="badge">' + icon(t.ic) + '</span><span class="tx"><span class="t">' + esc(t.t) + '</span></span><span class="go">' + icon('arrow') + '</span></button>').join('') + '</div>');
     countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
     $$('[data-go]', root).forEach(el => el.onclick = () => {
       const k = el.dataset.go;
@@ -470,7 +471,6 @@
       else App.go(k);
     });
     $$('[data-item]', root).forEach(el => el.onclick = () => App.go('invoice', { quickItem: el.dataset.item }));
-    $('#subChip').onclick = () => Subscription.dialog(false);
   };
 
   // ------------------------------------------------------------ company profile
@@ -492,6 +492,7 @@
         '<div class="field">' + '<label>IFSC Code</label>' + UI.input('cIfsc', (c.bankIfsc || '').toUpperCase(), { placeholder: 'e.g. UTIB0001234', attrs: ' maxlength="11" style="text-transform:uppercase"' }) + '<div class="hint" id="cIfscMsg">Bank and branch fill in automatically from the IFSC</div></div>' +
         UI.field('Bank Name', UI.input('cBank', c.bankName, { placeholder: 'Filled automatically from IFSC' })) + UI.field('Branch Name', UI.input('cBranch', c.bankBranch, { placeholder: 'Filled automatically from IFSC' })) +
         '<div class="field span"><label>Authorised Signature</label><div class="hint" id="cSigMsg"></div><div class="btnrow" style="margin:4px 0"><img id="cSigImg" src="' + (c.signature || '') + '" alt="" style="max-height:48px;max-width:160px;' + (c.signature ? '' : 'display:none') + '"><button class="btn sm outline" id="cSigAdd">Attach Signature</button><button class="btn sm red" id="cSigDel" ' + (c.signature ? '' : 'disabled') + '>Remove</button></div></div>' +
+        '<div class="field span subleft"><label>Activation</label><div class="' + (Sub.isActive() ? 'green' : 'red') + ' bold" id="cSubLeft">' + esc(Sub.statusText()) + (Sub.isActive() ? '   ·   ' + Sub.daysLeft() + ' day' + (Sub.daysLeft() === 1 ? '' : 's') + ' remaining' : '') + '</div><div class="hint">Activation codes are entered under Subscription in the top bar.</div></div>' +
         '</div>';
       let signature = c.signature;
       const bg = UI.modal({ title: 'Company Master Profile', body, wide: true, cancelable: !firstTime, buttons: [{ label: firstTime ? 'Later' : 'Cancel', cls: 'outline' }, { label: 'Save Profile', cls: 'green', onClick: (bg) => {
@@ -545,9 +546,10 @@
     const root = App.view(App.header('Export / Import Data') +
       '<div class="card white"><div class="hd">Backup</div><div class="bd"><p>Export saves your company profile, items, contacts, invoices, purchases, expenses, journal and notes as one backup file. Import restores a backup file and replaces the data currently here.</p>' +
       '<p>The file is the same one the BlitzBook app writes and reads: a backup taken here restores in the app (Export / Import &rsaquo; Import Backup), and a backup taken in the app restores here.</p>' +
-      '<div class="btnrow"><button class="btn green" id="bExp">Export Backup</button><button class="btn red" id="bImp">Import Backup</button></div>' +
+      '<div class="btnrow"><button class="btn green" id="bExp">Export Backup</button><button class="btn red" id="bImp">Import Backup</button><button class="btn outline" id="bSync">Sync settings</button><span class="hint">Sync: <b id="syncState">' + esc(Sync.statusText()) + '</b></span></div>' +
       '<div class="hint">' + (Sync.status === 'idle' || Sync.status === 'syncing' ? 'These books are also kept on the sync server and in the app. A backup file is still worth keeping.' : 'Data is stored in this browser only. Export regularly and keep the file safe, or import it on another device to move your books.') + '</div></div></div>');
     App.wireBack(root);
+    $('#bSync').onclick = () => App.go('sync');
     $('#bExp').onclick = () => { UI.download('BlitzBook_Backup_' + U.stamp() + '.json', JSON.stringify(Store.exportAll()), 'application/json'); UI.toast('Backup downloaded. Keep this file safe.'); };
     $('#bImp').onclick = () => UI.confirm('Import Backup', 'Importing replaces all invoices, items, contacts and the company profile here with the data from the backup file' + (Sync.status === 'idle' ? ', and in the app once it syncs' : '') + '. This cannot be undone.\n\nTip: take an Export first if you want to keep the current data.', () => {
       UI.pickFile('.json,application/json,text/plain', (text) => {
@@ -566,7 +568,7 @@
     dialog(locked) {
       if ($('#subDlg')) { if (!locked || $('#subDlg.locked')) return; $('#subDlg').remove(); }
       const pending = Sub.pendingRequest();
-      const msg = (locked ? (Sub.isOnTrial() ? 'Your ' + Sub.TRIAL_LABEL + ' trial has ended.' : Sub.statusText() + '.') + '\n\nA subscription is needed to continue.' : Sub.statusText() + '.') +
+      const msg = (locked ? (Sub.isOnTrial() ? 'Your free ' + Sub.TRIAL_LABEL + ' activation has ended.' : Sub.statusText() + '.') + '\n\nA subscription is needed to continue.' : Sub.statusText() + '.') +
         '\n\nTap "Buy / Renew" to choose a plan and pay by UPI. The activation code is then sent to your mobile' + (App.user.email ? ' and email' : '') + '. Enter it below.' + (pending ? '\n\n' + pending : '');
       const bg = UI.modal({ title: locked ? 'Subscription Required' : 'Subscription', cancelable: !locked,
         body: '<p style="white-space:pre-line">' + esc(msg) + '</p>' + UI.field('Activation Code', UI.input('sCode', '', { placeholder: 'XXXX-XXXX-XXXX-XXXX', attrs: ' maxlength="19" style="text-transform:uppercase;letter-spacing:1px"' })),

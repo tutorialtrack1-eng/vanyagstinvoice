@@ -47,14 +47,18 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   // The built-in default points at the real Supabase project; this part must stay off any backend
   await page.addInitScript(() => { try { localStorage.setItem('blitzbook.sync_url', 'http://127.0.0.1:9'); } catch (e) { /* storage blocked */ } });
   await page.goto(FILE_URL);
-  check('register page names the 1-day trial', (await page.click('#lReg'), await page.textContent('.auth .tag')).includes('1-day trial'));
+  check('register page names the 30 free days', (await page.click('#lReg'), await page.textContent('.auth .tag')).includes('30 days'));
   await page.click('#rBack');
   await register(page, 'Local User', '9000000001', 'Test@123');
   await page.click('.modal .mf .btn.outline'); // company profile: Later
   await page.waitForSelector('.hero');
-  check('works without a reachable server', ['This device only', 'Not connected'].includes(await page.textContent('#syncTx')), await page.textContent('#syncTx'));
-  const trial = await page.textContent('#subChip');
-  check('trial runs for a day', /^Trial: (24 hr|23 hr \d+ min) left$/.test(trial), trial);
+  check('works without a reachable server', ['This device only', 'Not connected'].includes(await page.evaluate(() => Sync.statusText())), await page.evaluate(() => Sync.statusText()));
+  check('no sync chip or trial chip in the header and hero, download link instead', (await page.$('#syncBtn')) === null && (await page.$('#subChip')) === null && (await page.getAttribute('#dlApp', 'href')) === 'BlitzBook.apk');
+  const trial = await page.evaluate(() => Sub.statusText());
+  check('activated for 30 days on registration', /^Activated till \d{2}\/\d{2}\/\d{4} \(30 days left\)$/.test(trial), trial);
+  await page.evaluate(() => App.go('company'));
+  check('company profile shows the remaining days', (await page.textContent('#cSubLeft')).includes('30 days remaining'), await page.textContent('#cSubLeft'));
+  await page.click('.modal .mf .btn.outline');
   await page.context().close();
 
   // ------------------------------------------------------------ part 2: served by the sync server
@@ -75,9 +79,9 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('.modal .mf .btn.green');
   await page.waitForSelector('.hero');
   await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
-  check('sync is on', (await page.textContent('#syncTx')) === 'Synced');
+  check('sync is on', await page.evaluate(() => Sync.status === 'idle'));
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
-  check('dashboard tiles in the agreed order', await page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join()) === 'Invoice,Sales,Customer,Supplier,Purchase,Stock,Expense,Receipts,Journal,Reports');
+  check('dashboard tiles in the agreed order, without descriptions', await page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join()) === 'Invoice,Sales,Customer,Supplier,Purchase,Stock,Expense,Receipts,Journal,Reports' && (await page.$('.tiles.dash .d')) === null);
 
   // invoice
   await page.click('.tiles [data-go=invoice]');

@@ -5,7 +5,7 @@
    are shared with the app: one trial and one activation per account, whichever device it is used on. */
 (function (global) {
   'use strict';
-  const TRIAL_MILLIS = 24 * 60 * 60 * 1000;
+  const TRIAL_MILLIS = 30 * 24 * 60 * 60 * 1000;
   const PLAN_DAYS = [1, 30, 90, 180, 365, 730];
   const PLAN_PRICES = [49, 299, 799, 1499, 2499, 3999];
   const SECRET = 'VANYA-INVOICE-BOOK-2026';
@@ -27,7 +27,7 @@
 
   const Sub = {
     TRIAL_MILLIS, PLAN_DAYS, PLAN_PRICES, VENDOR_UPI_ID, VENDOR_NAME, VENDOR_PHONE, ACTIVATION_SERVER_URL,
-    TRIAL_LABEL: '1-day',
+    TRIAL_LABEL: '30-day',
     planLabel(i) { return PLAN_DAYS[i] + (PLAN_DAYS[i] === 1 ? ' day' : ' days') + '  -  Rs ' + PLAN_PRICES[i]; },
     upiUri(phone, days, amount) {
       return 'upi://pay?pa=' + encodeURIComponent(VENDOR_UPI_ID) + '&pn=' + encodeURIComponent(VENDOR_NAME) +
@@ -47,29 +47,46 @@
     expiresAt() { const paid = this.subscriptionUntil(); if (paid > 0) return paid; return Store.get('registered_at', Date.now()) + TRIAL_MILLIS; },
     isActive() { return Date.now() < this.expiresAt(); },
     isOnTrial() { return this.subscriptionUntil() <= 0; },
-    // "Trial: 24 hr left", "Trial: 23 hr 10 min left", "Trial: 7 min left", "Subscription valid till 31/03/2027 (180 days)" or "Subscription expired on ..."
+    daysLeft() { return Math.max(0, Math.floor((this.expiresAt() - Date.now() + DAY - 1) / DAY)); },
+    // "Activated till 31/10/2026 (29 days left)", "Subscription valid till 31/03/2027 (180 days)" or "Activation expired on ..."
     statusText() {
       const end = this.expiresAt(), left = end - Date.now();
       const d = new Date(end), date = U.pad(d.getDate()) + '/' + U.pad(d.getMonth() + 1) + '/' + d.getFullYear();
-      if (left <= 0) return 'Subscription expired on ' + date;
-      if (this.isOnTrial()) { const mins = Math.max(1, Math.floor((left + 59999) / 60000)); return 'Trial: ' + (mins >= 60 ? Math.floor(mins / 60) + ' hr' + (mins % 60 ? ' ' : '') : '') + (mins % 60 || mins < 60 ? (mins % 60) + ' min' : '') + ' left'; }
-      return 'Subscription valid till ' + date + ' (' + Math.floor((left + DAY - 1) / DAY) + ' days)';
+      if (left <= 0) return 'Activation expired on ' + date;
+      const days = Math.floor((left + DAY - 1) / DAY);
+      if (this.isOnTrial()) return 'Activated till ' + date + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' left)';
+      return 'Subscription valid till ' + date + ' (' + days + ' days)';
     },
-    // Returns plan days, -1 wrong code, -2 already used
+    // A code issued in Supabase (one use, any account): the plan days, -1 unknown, -2 used, -3 not reachable
+    async redeemOnline(code) {
+      if (!global.Sync || !Sync.isSupabase || !Sync.isSupabase() || !Sync.user) return -3;
+      try {
+        Supabase.configure(Sync.serverUrl(), Sync.supabaseKey());
+        let st = Sync.state();
+        if (!st.token) { await Sync.link(st); st = Sync.state(); }
+        const ask = () => Supabase.http('POST', '/rest/v1/rpc/redeem_code', { code_in: code }, Sync.state().token);
+        let r;
+        try { r = await ask(); } catch (e) { if (e.status !== 401) throw e; st.token = ''; Sync.save(st); await Sync.link(st); r = await ask(); }
+        const n = parseInt(r, 10);
+        return isNaN(n) || n === -3 ? -3 : n;
+      } catch (e) { return -3; }
+    },
+    // Returns plan days, -1 wrong code, -2 already used. Codes issued in Supabase are tried first, then the
+    // codes made for this login with tools/LicenceKeyGen.java. The validity runs from now for the plan days.
     async activate(identity, code) {
       const entered = normalize(code);
       if (entered.length !== 16) return -1;
       const used = Store.get('used_codes', []);
-      for (const days of PLAN_DAYS) {
-        if (entered !== normalize(await makeCode(identity, days))) continue;
-        if (used.includes(entered)) return -2;
-        const from = Math.max(Date.now(), this.subscriptionUntil());
-        used.push(entered);
-        Store.set('used_codes', used);
-        Store.set('valid_until', from + days * DAY);
-        return days;
-      }
-      return -1;
+      if (used.includes(entered)) return -2;
+      let days = await this.redeemOnline(entered);
+      if (days === -2) return -2;
+      if (days <= 0) { days = -1; for (const d of PLAN_DAYS) if (entered === normalize(await makeCode(identity, d))) { days = d; break; } }
+      if (days < 0) return -1;
+      const from = Date.now(); // the validity starts the moment the code is entered
+      used.push(entered);
+      Store.set('used_codes', used);
+      Store.set('valid_until', from + days * DAY);
+      return days;
     },
     pendingRequest() { return Store.get('pending_activation', ''); },
     savePendingRequest(t) { Store.set('pending_activation', t); },

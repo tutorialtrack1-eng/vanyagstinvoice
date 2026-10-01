@@ -14,10 +14,12 @@ import java.util.Set;
 /**
  * Trial and subscription validity.
  *
- * A freshly registered account may use the app for {@link #TRIAL_MILLIS} (1 day). After that the
- * app is locked until an activation code is entered. A code is tied to the account's login
- * (phone number or email) and to a plan length, so the app works out the validity from the code
- * itself: it tries every plan in {@link #PLAN_DAYS} and accepts the one whose code matches.
+ * A freshly registered account may use the app for {@link #TRIAL_MILLIS} (30 days). After that the
+ * app is locked until an activation code is entered. Codes issued in Supabase (server/supabase/activation.sql)
+ * work once, on any account, for the number of days they carry. A code made offline is tied to the
+ * account's login (phone number or email) and to a plan length, so the app works out the validity from the
+ * code itself: it tries every plan in {@link #PLAN_DAYS} and accepts the one whose code matches.
+ * Either way the validity starts the moment the code is entered.
  *
  * Codes are produced offline with tools/LicenceKeyGen.java using the same {@link #SECRET}:
  *     java tools/LicenceKeyGen.java 9876543210 365
@@ -33,9 +35,9 @@ import java.util.Set;
 final class Subscription {
     private Subscription() {}
 
-    static final long TRIAL_MILLIS = 24 * 60 * 60 * 1000L;
-    // How the trial is named in messages
-    static final String TRIAL_LABEL = "1-day";
+    static final long TRIAL_MILLIS = 30L * 24 * 60 * 60 * 1000L;
+    // How the free period is named in messages
+    static final String TRIAL_LABEL = "30-day";
     static final int[] PLAN_DAYS = {1, 30, 90, 180, 365, 730};
     static final int[] PLAN_PRICES = {49, 299, 799, 1499, 2499, 3999};
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
@@ -103,6 +105,17 @@ final class Subscription {
         if (p.getLong("registered_at_" + userId, 0) == 0) p.edit().putLong("registered_at_" + userId, System.currentTimeMillis()).apply();
     }
 
+    /** Set when the account has just been registered on this phone, so the dashboard can say so once. */
+    static void markWelcome(Context c, long userId) { prefs(c).edit().putBoolean("welcome_" + userId, true).apply(); }
+
+    /** True once, right after registration: the dashboard shows the "activated for 30 days" note and fades it out. */
+    static boolean takeWelcome(Context c, long userId) {
+        SharedPreferences p = prefs(c);
+        if (!p.getBoolean("welcome_" + userId, false)) return false;
+        p.edit().remove("welcome_" + userId).apply();
+        return true;
+    }
+
     static long subscriptionUntil(Context c, long userId) { return prefs(c).getLong("valid_until_" + userId, 0); }
 
     /** Paid subscription end if there is one, otherwise the end of the trial. */
@@ -116,23 +129,53 @@ final class Subscription {
 
     static boolean isOnTrial(Context c, long userId) { return subscriptionUntil(c, userId) <= 0; }
 
-    /** "Trial: 23 hr 10 min left", "Valid till 31/03/2027" or "Expired on ..." for the dashboard banner. */
+    static long daysLeft(Context c, long userId) { return Math.max(0, (expiresAt(c, userId) - System.currentTimeMillis() + DAY_MILLIS - 1) / DAY_MILLIS); }
+
+    /** "Activated till 31/10/2026 (29 days left)", "Subscription valid till 31/03/2027 (180 days)" or "Activation expired on ...". */
     static String statusText(Context c, long userId) {
         long end = expiresAt(c, userId), left = end - System.currentTimeMillis();
         String date = new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(new Date(end));
-        if (left <= 0) return "Subscription expired on " + date;
-        if (isOnTrial(c, userId)) {
-            long mins = Math.max(1, (left + 59_999) / 60_000), hours = mins / 60, rest = mins % 60;
-            return "Trial: " + (hours > 0 ? hours + " hr" + (rest > 0 ? " " : "") : "") + (rest > 0 || hours == 0 ? rest + " min" : "") + " left";
-        }
+        if (left <= 0) return "Activation expired on " + date;
         long days = (left + DAY_MILLIS - 1) / DAY_MILLIS;
+        if (isOnTrial(c, userId)) return "Activated till " + date + " (" + days + (days == 1 ? " day" : " days") + " left)";
         return "Subscription valid till " + date + " (" + days + " days)";
     }
 
     /**
+     * Redeems a code without blocking the screen: codes issued in Supabase (one use, any account) are tried
+     * first, then the codes made for this login. The result (plan days, -1 wrong, -2 used) reaches cb on the
+     * main thread.
+     */
+    static void activateAsync(android.app.Activity a, long userId, String identity, String code, java.util.function.IntConsumer cb) {
+        String entered = normalize(code);
+        new Thread(() -> {
+            int result;
+            if (entered.length() != 16) result = -1;
+            else if (prefs(a).getStringSet("used_codes_" + userId, new HashSet<>()).contains(entered)) result = -2;
+            else {
+                int online = Supabase.enabled(a) ? Supabase.redeem(a, userId, entered) : -3;
+                if (online > 0) { applyDays(a, userId, entered, online); result = online; }
+                else if (online == -2) result = -2;
+                else result = activate(a, userId, identity, code);
+            }
+            final int r = result;
+            a.runOnUiThread(() -> { if (!a.isFinishing()) cb.accept(r); });
+        }).start();
+    }
+
+    /** The validity runs from now for the given days: a code entered today starts today, whatever was left before. */
+    private static void applyDays(Context c, long userId, String entered, int days) {
+        SharedPreferences p = prefs(c);
+        Set<String> used = new HashSet<>(p.getStringSet("used_codes_" + userId, new HashSet<>()));
+        long from = System.currentTimeMillis();
+        used.add(entered);
+        p.edit().putLong("valid_until_" + userId, from + days * DAY_MILLIS).putStringSet("used_codes_" + userId, used).apply();
+    }
+
+    /**
      * Redeems an activation code for this account. Returns the plan length in days, or -1 when the code
-     * is wrong for this login, or -2 when it was already used. A code entered while a subscription is
-     * still running extends it from its current end rather than from today.
+     * is wrong for this login, or -2 when it was already used. The validity starts the moment the code is
+     * entered.
      */
     static int activate(Context c, long userId, String identity, String code) {
         String entered = normalize(code);
@@ -142,10 +185,7 @@ final class Subscription {
         for (int days : PLAN_DAYS) {
             if (!entered.equals(normalize(makeCode(identity, days)))) continue;
             if (used.contains(entered)) return -2;
-            long now = System.currentTimeMillis();
-            long from = Math.max(now, subscriptionUntil(c, userId));
-            used.add(entered);
-            p.edit().putLong("valid_until_" + userId, from + days * DAY_MILLIS).putStringSet("used_codes_" + userId, used).apply();
+            applyDays(c, userId, entered, days);
             return days;
         }
         return -1;

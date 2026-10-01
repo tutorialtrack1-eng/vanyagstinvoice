@@ -52,7 +52,9 @@ svg.ic { width: 18px; height: 18px; flex: none; }
 .navlink:hover { background: rgba(255,255,255,.12); color: #fff; }
 .navlink:active { transform: scale(.96); }
 .navlink.active { background: var(--grad); color: #fff; box-shadow: 0 8px 20px -8px rgba(192,132,252,.95), inset 0 0 0 1px rgba(255,255,255,.2); }
-.navlink.logout { border-color: rgba(255,255,255,.22); }
+.navlink.logout, .navlink.dl { border-color: rgba(255,255,255,.22); }
+.navlink.dl { background: rgba(255,255,255,.1); }
+.navlink.dl:hover { background: rgba(103,232,249,.25); border-color: rgba(103,232,249,.8); }
 .navlink.logout:hover { background: rgba(248,113,113,.22); border-color: rgba(252,165,165,.7); }
 .main { max-width: 1240px; margin: 0 auto; padding: 22px 18px 56px; }
 .main > * { animation: rise .4s cubic-bezier(.2,.7,.2,1) both; }
@@ -69,8 +71,8 @@ svg.ic { width: 18px; height: 18px; flex: none; }
   .appbar { padding: 0 12px; }
   .nav { margin: 0 -12px; padding: 0 12px 10px; }
   .cochip { max-width: 170px; }
-  .navlink.logout { width: 38px; padding: 0; justify-content: center; }
-  .navlink.logout span { display: none; }
+  .navlink.logout, .navlink.dl { width: 38px; padding: 0; justify-content: center; }
+  .navlink.logout span, .navlink.dl span { display: none; }
   .main { padding: 14px 12px 44px; }
 }
 
@@ -205,8 +207,6 @@ table.list .actions button { margin-left: 4px; }
 .hero .co { font-size: clamp(25px, 3.6vw, 42px); line-height: 1.12; font-weight: 800; letter-spacing: -.8px; margin: 10px 0 16px; max-width: 22ch; text-shadow: 0 2px 18px rgba(30,27,75,.35); }
 .hero .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.16); backdrop-filter: blur(6px); color: #fff; font-size: 12px; font-weight: 700; }
-.chip.sub { background: #ECFDF5; border-color: #A7F3D0; color: #047857; cursor: pointer; } .chip.sub.bad { background: #FEF2F2; border-color: #FECACA; color: #B91C1C; }
-.chip.sub::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 7px; animation: pulse 1.8s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; transform: scale(.8); } }
 .hero .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
 .hero .cta .btn { min-height: 46px; padding: 8px 22px; border-radius: 14px; font-size: 14.5px; }
@@ -296,6 +296,8 @@ table.list .actions button { margin-left: 4px; }
 .menu-list button.sel { font-weight: 800; color: var(--brand); background: #F5F3FF; }
 .menu-list button.sel::after { content: "✓"; font-weight: 800; }
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: rgba(15,23,42,.94); color: #fff; padding: 12px 22px; border-radius: 999px; font-size: 14px; font-weight: 600; z-index: 60; box-shadow: 0 16px 36px -12px rgba(15,23,42,.7); max-width: 92vw; animation: toast .3s cubic-bezier(.2,.9,.3,1.2) both; }
+.toast.out { opacity: 0; transition: opacity .7s ease; }
+.toast.ok { background: linear-gradient(135deg, #047857, #10B981); box-shadow: 0 16px 36px -12px rgba(5,150,105,.7); }
 @keyframes toast { from { opacity: 0; transform: translate(-50%, 16px); } }
 @media (max-width: 600px) {
   .modal-bg { align-items: flex-end; padding: 0; } .modal { border-radius: 22px 22px 0 0; max-height: 94vh; animation-name: sheet; }

@@ -52,7 +52,7 @@ public class RegisterActivity extends Activity {
         root.addView(title);
 
         TextView trial = new TextView(this);
-        trial.setText("Register to start your " + Subscription.TRIAL_LABEL + " trial");
+        trial.setText("Register and use BlitzBook free for 30 days");
         trial.setTextSize(13);
         trial.setTextColor(0xFF607D8B);
         trial.setPadding(0, 0, 0, dp(20));
@@ -276,8 +276,10 @@ public class RegisterActivity extends Activity {
 
     private void registerHere(String name, String phone, String email, String password, String token) {
         if (dbHelper.registerUser(name, phone, email, password)) {
-            if (token != null && !token.isEmpty()) Sync.saveToken(this, dbHelper.findUserId(phone), token);
-            Toast.makeText(this, "Registration Successful", Toast.LENGTH_SHORT).show();
+            long newId = dbHelper.findUserId(phone);
+            if (token != null && !token.isEmpty()) Sync.saveToken(this, newId, token);
+            Subscription.markWelcome(this, newId);
+            Toast.makeText(this, "Registered. BlitzBook is activated for 30 days.", Toast.LENGTH_LONG).show();
             finish();
         } else {
             Toast.makeText(this, "Mobile number or email already registered", Toast.LENGTH_SHORT).show();

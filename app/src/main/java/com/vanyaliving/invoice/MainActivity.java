@@ -514,7 +514,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         TextView msg = new TextView(this);
         msg.setTextSize(13.5f);
         String pending = Subscription.pendingRequest(this, userId);
-        msg.setText((locked ? (Subscription.isOnTrial(this, userId) ? "Your " + Subscription.TRIAL_LABEL + " trial has ended." : Subscription.statusText(this, userId) + ".")
+        msg.setText((locked ? (Subscription.isOnTrial(this, userId) ? "Your free " + Subscription.TRIAL_LABEL + " activation has ended." : Subscription.statusText(this, userId) + ".")
                 + "\n\nA subscription is needed to continue." : Subscription.statusText(this, userId) + ".")
                 + "\n\nTap \"Buy / Renew\" to choose a plan and pay by UPI. The activation code is then sent to your mobile"
                 + (accountsDb.userEmail(userId).isEmpty() ? "" : " and email") + ". Enter it below."
@@ -539,15 +539,19 @@ public class MainActivity extends Activity implements Sync.Listener {
         subscriptionDialog = b.create();
         subscriptionDialogLocked = locked;
         subscriptionDialog.setOnShowListener(d -> {
-            subscriptionDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                int days = Subscription.activate(this, userId, identity, code.getText().toString());
-                if (days == -2) { code.setError("This code has already been used"); return; }
-                if (days < 0) { code.setError("Invalid activation code for this account"); return; }
-                Subscription.clearPendingRequest(this, userId);
-                Toast.makeText(this, "Activated: " + Subscription.statusText(this, userId), Toast.LENGTH_LONG).show();
-                subscriptionDialog.dismiss();
-                checkSubscription();
-                showDashboardView();
+            Button activateBtn = subscriptionDialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            activateBtn.setOnClickListener(v -> {
+                activateBtn.setEnabled(false);
+                Subscription.activateAsync(this, userId, identity, code.getText().toString(), days -> {
+                    activateBtn.setEnabled(true);
+                    if (days == -2) { code.setError("This code has already been used"); return; }
+                    if (days < 0) { code.setError("Invalid activation code"); return; }
+                    Subscription.clearPendingRequest(this, userId);
+                    Toast.makeText(this, "Activated: " + Subscription.statusText(this, userId), Toast.LENGTH_LONG).show();
+                    subscriptionDialog.dismiss();
+                    checkSubscription();
+                    showDashboardView();
+                });
             });
             // Buying keeps the lock dialog underneath when the validity has run out
             subscriptionDialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> showPlanChooser());
@@ -629,15 +633,15 @@ public class MainActivity extends Activity implements Sync.Listener {
             runOnUiThread(() -> {
                 if (isFinishing()) return;
                 if (code != null && !code.isEmpty()) {
-                    int got = Subscription.activate(this, userId, phone, code);
-                    if (got > 0) {
+                    Subscription.activateAsync(this, userId, phone, code, got -> {
+                        if (got <= 0) { Toast.makeText(this, "Enter the activation code under Subscription > Activate.", Toast.LENGTH_LONG).show(); return; }
                         Subscription.clearPendingRequest(this, userId);
                         if (subscriptionDialog != null && subscriptionDialog.isShowing()) subscriptionDialog.dismiss();
                         new AlertDialog.Builder(this).setTitle("Subscription Activated")
                                 .setMessage(Subscription.statusText(this, userId) + ".\n\nThe activation code has also been sent to " + phone + (email.isEmpty() ? "" : " and " + email) + ".")
                                 .setPositiveButton("OK", (d, w) -> { checkSubscription(); showDashboardView(); }).show();
-                        return;
-                    }
+                    });
+                    return;
                 }
                 if (code != null) {
                     new AlertDialog.Builder(this).setTitle("Payment Received")
@@ -1587,14 +1591,23 @@ public class MainActivity extends Activity implements Sync.Listener {
         chips.addView(chip(sellerGstinStr.isEmpty() ? "No GSTIN" : "GSTIN " + sellerGstinStr, 0x33FFFFFF, Color.WHITE));
         chips.addView(chip(lineOfActivityStr.isEmpty() || lineOfActivityStr.startsWith("Select") ? "General" : lineOfActivityStr, 0x33FFFFFF, Color.WHITE));
         banner.addView(chips);
-        LinearLayout chips2 = new LinearLayout(this);
-        chips2.setOrientation(LinearLayout.HORIZONTAL);
-        boolean active = Subscription.isActive(this, userId);
-        TextView subChip = chip(Subscription.statusText(this, userId), active ? 0xFFEFF7F1 : 0xFFFFEBEE, active ? GREEN : RED);
-        subChip.setOnClickListener(v -> showSubscriptionDialog(false));
-        chips2.addView(subChip);
-        banner.addView(chips2);
         root.addView(banner);
+
+        // Right after registration: one green note that fades away on its own
+        if (Subscription.takeWelcome(this, userId)) {
+            TextView welcome = new TextView(this);
+            welcome.setText("Activated for 30 days  \u00b7  " + Subscription.statusText(this, userId));
+            welcome.setTextSize(13); welcome.setTypeface(Typeface.DEFAULT, Typeface.BOLD); welcome.setTextColor(GREEN);
+            welcome.setGravity(Gravity.CENTER);
+            welcome.setPadding(dp(14), dp(10), dp(14), dp(10));
+            GradientDrawable wbg = new GradientDrawable(); wbg.setColor(0xFFEFF7F1); wbg.setCornerRadius(dp(12)); wbg.setStroke(dp(1), 0xFFB7D8C0);
+            welcome.setBackground(wbg);
+            LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(-1, -2);
+            wlp.setMargins(0, 0, 0, dp(12));
+            welcome.setLayoutParams(wlp);
+            root.addView(welcome);
+            welcome.animate().alpha(0f).setStartDelay(5000).setDuration(1500).withEndAction(() -> { if (welcome.getParent() == root) root.removeView(welcome); }).start();
+        }
 
         // Items from the latest invoices, one tap away for the next bill
         View recent = recentItemsStrip();
@@ -4699,6 +4712,20 @@ public class MainActivity extends Activity implements Sync.Listener {
         box.addView(sigCard);
 
         refreshSignaturePreview();
+
+        // Activation left, at the bottom of the profile
+        LinearLayout subCard = createPastelCard("Activation", 0xFFFFF8E1, 0xFFFFE082);
+        TextView subTv = new TextView(this);
+        boolean subActive = Subscription.isActive(this, userId);
+        long left = Subscription.daysLeft(this, userId);
+        subTv.setText(Subscription.statusText(this, userId) + (subActive ? "\n" + left + (left == 1 ? " day" : " days") + " remaining" : ""));
+        subTv.setTextSize(13.5f); subTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD); subTv.setTextColor(subActive ? GREEN : RED);
+        subCard.addView(subTv);
+        TextView subHint = new TextView(this);
+        subHint.setText("Activation codes are entered under Subscription in the menu.");
+        subHint.setTextSize(11.5f); subHint.setTextColor(0xFF607D8B); subHint.setPadding(0, dp(4), 0, 0);
+        subCard.addView(subHint);
+        box.addView(subCard);
 
         ScrollView sc = new ScrollView(this);
         sc.addView(box);

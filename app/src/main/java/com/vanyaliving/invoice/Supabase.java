@@ -286,6 +286,36 @@ final class Supabase {
         return new JSONObject().put("epoch", epoch).put("rev", rev).put("changes", out);
     }
 
+    /** Redeems an activation code issued in Supabase for the signed-in account: plan days, -1 unknown code,
+     *  -2 already used, -3 not reachable / not signed in. Signs in again with the stored password when the token has expired. */
+    static int redeem(Context c, long userId, String code) {
+        try {
+            String token = Sync.token(c, userId);
+            if (token.isEmpty()) token = freshToken(c, userId);
+            if (token.isEmpty()) return -3;
+            Object r;
+            try { r = http(c, "POST", "/rest/v1/rpc/redeem_code", json("code_in", code), token, null); }
+            catch (Sync.SyncException e) {
+                if (e.status != 401) throw e;
+                token = freshToken(c, userId);
+                if (token.isEmpty()) return -3;
+                r = http(c, "POST", "/rest/v1/rpc/redeem_code", json("code_in", code), token, null);
+            }
+            int n = Integer.parseInt(String.valueOf(r).trim());
+            return n == -3 ? -3 : n;
+        } catch (Exception e) { return -3; }
+    }
+
+    private static String freshToken(Context c, long userId) {
+        try {
+            String[] u = new DatabaseHelper(c).userRecord(userId);
+            if (u == null) return "";
+            String token = call(c, "login", json("identity", u[1].isEmpty() ? u[2] : u[1], "pw", Sync.pwHash(u[3]))).optString("token", "");
+            if (!token.isEmpty()) Sync.saveToken(c, userId, token);
+            return token;
+        } catch (Exception e) { return ""; }
+    }
+
     /** Unused helper kept for symmetry with the portal: rows as a list. */
     static List<JSONObject> list(JSONArray a) throws JSONException { List<JSONObject> out = new ArrayList<>(); for (int i = 0; i < a.length(); i++) out.add(a.getJSONObject(i)); return out; }
 }
