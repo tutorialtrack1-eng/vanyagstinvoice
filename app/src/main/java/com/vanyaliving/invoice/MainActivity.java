@@ -4589,8 +4589,11 @@ public class MainActivity extends Activity implements Sync.Listener {
         EditText eName = edit("Company Name *", false); eName.setText(sellerNameStr);
         EditText eGstin = gstinEdit("GSTIN Number *"); eGstin.setText(sellerGstinStr);
         EditText eAddress = edit("Company Address *", false); eAddress.setText(sellerAddressStr);
-        EditText ePhone = phoneEdit(); ePhone.setHint("Phone Number (10 digits) *"); ePhone.setText(sellerPhoneStr);
-        EditText eEmail = edit("Email Address *", false); eEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS); eEmail.setText(sellerEmailStr);
+        // A profile without a phone or email starts with the ones the account was registered with
+        String[] account = accountsDb.userRecord(userId);
+        String phone0 = sellerPhoneStr.isEmpty() && account != null ? account[1] : sellerPhoneStr, email0 = sellerEmailStr.isEmpty() && account != null ? account[2] : sellerEmailStr;
+        EditText ePhone = phoneEdit(); ePhone.setHint("Phone Number (10 digits) *"); ePhone.setText(phone0);
+        EditText eEmail = edit("Email Address *", false); eEmail.setInputType(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS); eEmail.setText(email0);
         Spinner sGstType = spinner(GST_REG_TYPES);
         sGstType.setSelection(Math.max(0, Arrays.asList(GST_REG_TYPES).indexOf(sellerGstTypeStr)));
 

@@ -485,7 +485,8 @@
         UI.field('Line of Activity (Optional)', UI.select('cAct', U.LINE_OF_ACTIVITIES, c.activity, { blank: 'Select Line of Activity' })) +
         UI.field('Invoice Number Format', UI.input('cFmt', c.invoiceFormat, { placeholder: '####' }), { hint: '# = digits, {FY} = financial year, e.g. INV/{FY}/####' }) +
         UI.field('Address', '<textarea id="cAddr">' + esc(c.address) + '</textarea>', { req: true, span: true }) +
-        UI.field('Phone (10 digits)', UI.input('cPhone', c.phone, { type: 'tel', attrs: ' maxlength="10"' }), { req: true }) + UI.field('Email', UI.input('cEmail', c.email, { type: 'email' }), { req: true }) +
+        // A profile without a phone or email starts with the ones the account was registered with
+        UI.field('Phone (10 digits)', UI.input('cPhone', c.phone || (App.user && App.user.phone) || '', { type: 'tel', attrs: ' maxlength="10"' }), { req: true }) + UI.field('Email', UI.input('cEmail', c.email || (App.user && App.user.email) || '', { type: 'email' }), { req: true }) +
         '<div class="field span"><label>Bank Account Details</label></div>' +
         UI.field('Account Number', UI.input('cAcc', c.bankAccountNo, { attrs: ' inputmode="numeric"' })) + UI.field('Account Holder Name', UI.input('cHolder', (c.bankHolder || c.name).toUpperCase(), { attrs: ' style="text-transform:uppercase"' })) +
         '<div class="field">' + '<label>IFSC Code</label>' + UI.input('cIfsc', (c.bankIfsc || '').toUpperCase(), { placeholder: 'e.g. UTIB0001234', attrs: ' maxlength="11" style="text-transform:uppercase"' }) + '<div class="hint" id="cIfscMsg">Bank and branch fill in automatically from the IFSC</div></div>' +
