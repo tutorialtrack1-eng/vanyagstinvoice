@@ -150,7 +150,7 @@
     const units = new Set(inv.items.filter(i => num(i.qty) > 0).map(i => i.uqc));
     const qsum = inv.items.reduce((s, i) => s + num(i.qty), 0);
     const totRows = tot.map(x => '<tr class="tot"><td colspan="' + (span - 3) + '"></td><td colspan="2" class="r"><b>' + x[0] + '</b></td><td class="r">' + x[1] + '</td></tr>').join('') +
-      '<tr class="tot total"><td colspan="' + (span - 5) + '" class="r"><b>Total</b></td><td class="r"><b>' + fmtQty(qsum) + (units.size === 1 ? ' ' + esc([...units][0]) : '') + '</b></td><td colspan="2"></td><td class="r"><b>' + (inv.kind === 'challan' ? '' : money(t.rounded)) + '</b></td></tr>';
+      '<tr class="tot total"><td colspan="' + (span - 4) + '" class="r"><b>Total</b></td><td class="r"><b>' + fmtQty(qsum) + (units.size === 1 ? ' ' + esc([...units][0]) : '') + '</b></td><td colspan="2"></td><td class="r"><b>' + (inv.kind === 'challan' ? '' : money(t.rounded)) + '</b></td></tr>';
 
     let hsn = '';
     if (!noGst && inv.kind !== 'challan') {
