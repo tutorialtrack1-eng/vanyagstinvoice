@@ -481,19 +481,22 @@ public class MainActivity extends Activity implements Sync.Listener {
         msg.setTextSize(13.5f);
         String url = Sync.serverUrl(this), status = sync.statusText();
         String last = sync.lastSync() > 0 ? "\nLast exchange: " + new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.US).format(new Date(sync.lastSync())) : "";
-        if (url.isEmpty()) msg.setText("This phone is not connected to a sync server, so the books stay on this phone only.\n\nRun the BlitzBook sync server, enter its address below and open the web portal from the same address: both will then show the same data.");
+        if (url.isEmpty() || !Sync.enabled(this)) msg.setText("This phone is not connected to a sync server, so the books stay on this phone only.\n\nEnter your Supabase project URL and anon key below (the same as in the web portal under Sync), or the address of a BlitzBook sync server: both will then show the same data.");
         else if (status.equals("Synced") || status.equals("Syncing...")) msg.setText("Whatever is entered here appears in the web portal, and whatever is entered there appears here, within a few seconds while both are online.\n\nAccount: " + accountsDb.userIdentity(userId) + "\nServer: " + url + last);
         else msg.setText((sync.lastError().isEmpty() ? status : sync.lastError()) + ".\n\nYou can keep working: everything entered here is sent as soon as the server is reachable again.\nServer: " + url + last);
         box.addView(msg);
-        EditText eUrl = edit("https://books.example.com", false);
+        EditText eUrl = edit("https://xxxx.supabase.co", false);
         eUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         eUrl.setSingleLine(true);
-        eUrl.setText(Sync.customUrl(this));
-        box.addView(field("Sync server address" + (Sync.SERVER_URL.isEmpty() ? "" : " (blank = " + Sync.SERVER_URL + ")"), eUrl));
+        EditText eKey = edit("Supabase anon key", false);
+        Sync.settingsFields(this, eUrl, eKey);
+        box.addView(field("Sync server address or Supabase project URL" + (Sync.SERVER_URL.isEmpty() ? "" : " (blank = " + Sync.SERVER_URL + ")"), eUrl));
+        box.addView(field("Supabase anon key (Supabase projects only)", eKey));
         new AlertDialog.Builder(this).setTitle("Sync with Web Portal").setView(box)
                 .setPositiveButton("Sync Now", (d, w) -> {
-                    String entered = eUrl.getText().toString().trim();
+                    String entered = eUrl.getText().toString().trim(), enteredKey = eKey.getText().toString().trim();
                     if (!entered.equals(Sync.customUrl(this))) Sync.setServerUrl(this, entered);
+                    if (!enteredKey.equals(Supabase.customKey(this))) Supabase.setKey(this, enteredKey);
                     if (!Sync.enabled(this)) { Toast.makeText(this, "Enter the sync server address first", Toast.LENGTH_SHORT).show(); return; }
                     Toast.makeText(this, "Syncing...", Toast.LENGTH_SHORT).show();
                     sync.now();

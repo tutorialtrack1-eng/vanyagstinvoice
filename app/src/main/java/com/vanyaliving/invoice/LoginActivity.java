@@ -177,20 +177,24 @@ public class LoginActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(12), dp(20), dp(4));
         TextView info = new TextView(this);
-        info.setText("Address of the BlitzBook sync server. With it, an account made in the web portal can log in here and both show the same books. Leave blank to keep everything on this phone only.");
+        info.setText("Your Supabase project URL and anon key, or the address of a BlitzBook sync server. With it, an account made in the web portal can log in here and both show the same books. Leave blank to keep everything on this phone only.");
         info.setTextSize(13);
         info.setPadding(0, 0, 0, dp(12));
         box.addView(info);
         EditText url = new EditText(this);
-        url.setHint(Sync.SERVER_URL.isEmpty() ? "https://books.example.com" : Sync.SERVER_URL);
         url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setSingleLine(true);
-        url.setText(Sync.customUrl(this));
         applyBoxBackground(url);
         box.addView(url);
+        EditText key = new EditText(this);
+        applyBoxBackground(key);
+        LinearLayout.LayoutParams klp = new LinearLayout.LayoutParams(-1, -2); klp.setMargins(0, dp(10), 0, 0);
+        box.addView(key, klp);
+        Sync.settingsFields(this, url, key);
         new AlertDialog.Builder(this).setTitle("Sync Settings").setView(box)
                 .setPositiveButton("Save", (d, w) -> {
                     Sync.setServerUrl(this, url.getText().toString());
+                    Supabase.setKey(this, key.getText().toString());
                     Toast.makeText(this, Sync.enabled(this) ? "Sync server: " + Sync.serverUrl(this) : "Sync is off", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Cancel", null).show();

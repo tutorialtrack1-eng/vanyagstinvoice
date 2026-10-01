@@ -11,9 +11,9 @@ it the data lives in the browser's local storage.
 - double-click `index.html`, or serve the folder with any static server / web host. The portal then works
   on its own; enter the sync server's address under **Sync** in the top bar to connect it.
 
-Register with a mobile number and password. The sync server sends the OTP by SMS and email (see
-`server/README.md`, *OTP delivery*); without a server, or on a server with no SMS / email settings, the OTP
-is shown on screen (test mode). Forgot / Reset Password works the same way: the OTP goes to the mobile
+Register with a mobile number and password. The OTP comes by email from Supabase Auth (see
+`server/supabase/README.md`) or by SMS and email from the sync server (`server/README.md`, *OTP delivery*);
+with neither, the OTP is shown on screen (test mode). Forgot / Reset Password works the same way: the OTP goes to the mobile
 number and email of the account, so a password can be reset from any device. A 1-day trial starts on
 first login, after which an activation code is needed. With sync on, the account made in the app logs in
 here and vice versa, and the trial and activation are shared.
@@ -27,7 +27,8 @@ here and vice versa, and the trial and activation are shared.
 | `js/util.js` | Indian number format, amount in words, GSTIN / phone / email validation, invoice numbering, state list, UQC codes, HSN and bank lookups, Excel (.xlsx) reader |
 | `js/store.js` | Local storage per user (parties, items, invoices, purchases, expenses, journal, notes, accounts) |
 | `js/appformat.js` | The app's table layout: converts every record to and from the app's rows, for sync and for backup files |
-| `js/sync.js` | Keeps this browser and the app on the same books through the sync server |
+| `js/supabase.js` | Supabase as the backend: Supabase Auth for accounts and OTPs, the `books` table for the records; answers the same requests as the sync server |
+| `js/sync.js` | Keeps this browser and the app on the same books through Supabase or the sync server |
 | `js/subscription.js` | Trial, plans, UPI link, activation server and codes (same SHA-256 scheme as the app, so `tools/LicenceKeyGen.java` codes work) |
 | `js/print.js` | Printable documents: Standard (BlitzBook) and Classic boxed (Tally style) invoices, delivery challan, envelopes, purchase record / quotation, credit and debit notes, receipt / payment vouchers. Pages carry their own margins so the browser adds no header or footer to the PDF; long item lists repeat the table heading on every page |
 | `js/app.js` | Shell, login / register / reset (with the sync server when there is one), dashboard, top navigation, company profile, backup, subscription, sync dialogs |
@@ -78,7 +79,9 @@ Everything the app has:
 
 ## Sync with the app
 
-Log in with the account you use in the app (or register here and log in there). Every entry, edit and
+Enter the Supabase project URL and anon key under **Sync** (or build them into `js/sync.js`), the same ones
+as in the app; a BlitzBook sync server address works there too. Log in with the account you use in the app
+(or register here and log in there). Every entry, edit and
 deletion on one side appears on the other within a few seconds while both are online; offline work is
 sent when the connection returns. The status chip in the top bar shows Synced / Syncing / Offline /
 This device only; clicking it opens the Sync dialog with the server address. See `server/README.md`.
@@ -102,6 +105,7 @@ Days can be 1, 30, 90, 180, 365 or 730. The identity must be what the user regis
 ## Tests
 
 - `node server/test.js` — sync protocol and data layout, no browser needed.
+- `node server/supabase/test.js` — the Supabase backend against a stand-in for the Supabase API.
 - `PLAYWRIGHT_CORE=/path/to/playwright-core node tools/smoke.js` — drives the portal in Chromium through
   every screen, then a second browser signs in to the same account and both must stay in step.
 
@@ -111,5 +115,5 @@ Days can be 1, 30, 90, 180, 365 or 730. The identity must be what the user regis
 - Font: `index.html` loads Plus Jakarta Sans from Google Fonts. Offline, or if you remove that link, the
   portal uses the system font.
 - Plans, prices, UPI ID, vendor phone and activation server: top of `js/subscription.js`.
-- Sync server address when the portal is hosted apart from the server: top of `js/sync.js`.
+- Supabase project URL and anon key, or the sync server address: top of `js/sync.js`.
 - Invoice number format: Company Profile, for example `INV/{FY}/####`.

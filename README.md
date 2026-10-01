@@ -23,13 +23,14 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 ## Web portal and sync
 
 - `webportal/` is the browser version with every screen of the app (see `webportal/README.md`).
-- Data moves between the app and the portal by backup file: Export / Import on either side reads and writes
-  the same file. Optionally, `server/` is a small Node server that keeps both on the same books live (see
-  `server/README.md`); its address goes in `Sync.java` (`SERVER_URL`) or under *Sync* in the app.
+- With a Supabase project (free) the app and the portal share accounts and books live, and the OTPs for
+  registration and password reset go out by email (and SMS, with an SMS provider): `server/supabase/README.md`.
+  Alternatively `server/` is a small Node server doing the same (`server/README.md`). Without either, data
+  moves between the app and the portal by backup file (Export / Import on either side).
 - The trial after registering lasts 1 day; trial, validity and activation codes are shared between app and
   portal when sync is on.
-- Registration and password reset OTPs are sent by SMS and email by the server (`server/README.md`, *OTP
-  delivery*); with no server, or a server without those settings, the OTP is shown on screen (test mode).
+- Registration and password reset OTPs are sent by Supabase Auth (`server/supabase/README.md`) or by the
+  sync server (`server/README.md`, *OTP delivery*); with neither, the OTP is shown on screen (test mode).
 
 ## Build
 Open this folder in Android Studio and let Gradle sync. Then select:

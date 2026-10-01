@@ -1,6 +1,7 @@
 # BlitzBook sync server
 
-One small server keeps the Android app and the web portal on the same books. Whatever is entered in the
+One small server keeps the Android app and the web portal on the same books. (A Supabase project does the
+same without running anything yourself: see `supabase/README.md`. This server remains for self-hosting.) Whatever is entered in the
 app appears in the portal, and whatever is entered in the portal appears in the app, within a few seconds
 while both are online; work done offline is sent as soon as the connection is back.
 

@@ -617,18 +617,21 @@
       const when = (t) => { const d = new Date(t); return U.pad(d.getDate()) + '/' + U.pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + U.pad(d.getHours()) + ':' + U.pad(d.getMinutes()); };
       const text = () => {
         const url = Sync.serverUrl();
-        if (!signedIn) return Sync.online ? 'A BlitzBook sync server answers at ' + url + '. Log in with the account you use in the app and your books appear here.' : url ? 'No BlitzBook sync server answers at ' + url + '. Without one the portal keeps its data in this browser only.' : 'No sync server is set. The portal keeps its data in this browser only.';
+        const what = Sync.isSupabase() ? 'Supabase project' : 'BlitzBook sync server';
+        if (!signedIn) return Sync.online ? 'A ' + what + ' answers at ' + url + '. Log in with the account you use in the app and your books appear here.' : url ? 'No ' + what + ' answers at ' + url + (Supabase.looksLike(url) && !Sync.supabaseKey() ? ' (enter the anon key below)' : '') + '. Without one the portal keeps its data in this browser only.' : 'No sync server is set. The portal keeps its data in this browser only.';
         const st = Sync.state();
         if (Sync.status === 'idle' || Sync.status === 'syncing') return 'Whatever is entered here appears in the BlitzBook app, and whatever is entered in the app appears here, within a few seconds while both are online.\n\nAccount: ' + App.identity() + '\nServer: ' + url + (st.last ? '\nLast exchange: ' + when(st.last) : '');
         if (Sync.status === 'offline') return (Sync.lastError || 'Cannot reach the sync server') + '.\n\nYou can keep working: everything entered here is sent as soon as the server is reachable again.' + (st.last ? '\nLast exchange: ' + when(st.last) : '') + '\nServer: ' + url;
         if (Sync.status === 'auth') return Sync.lastError + '.';
-        return 'This browser is not connected to a sync server, so the books stay on this device only.\n\nRun the BlitzBook sync server (server/server.js), enter its address below and in the app (Sync), and both will show the same data.';
+        return 'This browser is not connected to a sync server, so the books stay on this device only.\n\nEnter your Supabase project URL and anon key below and in the app (Sync), or run the BlitzBook sync server (server/server.js) and enter its address, and both will show the same data.';
       };
       const bg = UI.modal({ title: 'Sync with the BlitzBook app', focus: false,
-        body: '<p id="syText" style="white-space:pre-line"></p>' + UI.field('Sync server address', UI.input('syUrl', Sync.customUrl(), { placeholder: Sync.serverUrl() || 'https://books.example.com' }), { hint: 'Leave blank to use the server this page was opened from. The app must use the same address.' }),
+        body: '<p id="syText" style="white-space:pre-line"></p>' + UI.field('Sync server address or Supabase project URL', UI.input('syUrl', Sync.customUrl(), { placeholder: Sync.serverUrl() || 'https://xxxx.supabase.co' }), { hint: 'Leave blank to use the server this page was opened from. The app must use the same address.' }) +
+          UI.field('Supabase anon key (Supabase projects only)', UI.input('syKey', Sync.customSupabaseKey(), { placeholder: 'eyJ... or sb_publishable_...' }), { hint: 'From the Supabase dashboard, Project Settings > API. The app needs the same key.' }),
         buttons: [{ label: 'Close', cls: 'outline' }, { label: signedIn ? 'Sync now' : 'Check', cls: 'green', onClick: async () => {
-          const url = UI.val('syUrl', bg).trim();
+          const url = UI.val('syUrl', bg).trim(), key = UI.val('syKey', bg).trim();
           if (url !== Sync.customUrl()) Sync.setServerUrl(url);
+          if (key !== Sync.customSupabaseKey()) Sync.setSupabaseKey(key);
           $('#syText', bg).textContent = 'Contacting the server…';
           await Sync.recheck();
           if (signedIn) await Sync.run();

@@ -10,8 +10,11 @@
   // data moves between app and portal by backup file (Export / Import). When the portal is opened through
   // server/server.js on this machine or the local network, that server is used.
   const DEFAULT_SERVER_URL = '';
+  // Supabase project instead of the sync server (see server/supabase/README.md): the project URL goes in
+  // DEFAULT_SERVER_URL (or is entered under Sync), the anon (publishable) key here or under Sync as well.
+  const SUPABASE_ANON_KEY = '';
   const POLL_MS = 10000, PUSH_DELAY_MS = 1200, TIMEOUT_MS = 20000;
-  const URL_KEY = 'blitzbook.sync_url', SEEN_KEY = 'blitzbook.sync_seen';
+  const URL_KEY = 'blitzbook.sync_url', SEEN_KEY = 'blitzbook.sync_seen', SB_KEY = 'blitzbook.supabase_key';
 
   // Order-independent text of a record, and a short fingerprint of it, to tell whether it changed
   function canon(v) {
@@ -49,6 +52,11 @@
       return u.replace(/\/+$/, '');
     },
     customUrl() { try { return localStorage.getItem(URL_KEY) || ''; } catch (e) { return ''; } },
+    supabaseKey() { let k = ''; try { k = localStorage.getItem(SB_KEY) || ''; } catch (e) { /* storage blocked */ } return k || SUPABASE_ANON_KEY; },
+    customSupabaseKey() { try { return localStorage.getItem(SB_KEY) || ''; } catch (e) { return ''; } },
+    setSupabaseKey(k) { try { if (String(k || '').trim()) localStorage.setItem(SB_KEY, String(k).trim()); else localStorage.removeItem(SB_KEY); } catch (e) { /* storage blocked */ } this.pinged = null; this.online = null; },
+    // True when the address is a Supabase project: requests then go to Supabase Auth and the books table
+    isSupabase() { const u = this.serverUrl(); return !!global.Supabase && Supabase.looksLike(u) && !!this.supabaseKey(); },
     seen() { try { return localStorage.getItem(SEEN_KEY) || ''; } catch (e) { return ''; } },
     setServerUrl(u) {
       u = String(u || '').trim().replace(/\/+$/, '');
@@ -60,6 +68,10 @@
     async request(path, body) {
       const base = this.serverUrl();
       if (!base) throw new SyncError(0, 'No sync server is set');
+      if (this.isSupabase()) {
+        Supabase.configure(base, this.supabaseKey());
+        try { return await Supabase.call(path, body || {}); } catch (e) { throw new SyncError(e.status || 0, e.message); }
+      }
       const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
       const t = ctl ? setTimeout(() => ctl.abort(), TIMEOUT_MS) : null;
       let res;

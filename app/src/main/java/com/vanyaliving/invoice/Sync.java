@@ -101,7 +101,7 @@ final class Sync {
         c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("sync_server_url", u).apply();
     }
 
-    static boolean enabled(Context c) { return !serverUrl(c).isEmpty(); }
+    static boolean enabled(Context c) { return !serverUrl(c).isEmpty() && (!Supabase.looksLike(serverUrl(c)) || Supabase.enabled(c)); }
 
     static String token(Context c, long userId) { return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("sync_token_" + userId, ""); }
     static void saveToken(Context c, long userId, String token) { c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("sync_token_" + userId, token == null ? "" : token).apply(); }
@@ -120,6 +120,7 @@ final class Sync {
     static JSONObject post(Context c, String name, JSONObject body) throws SyncException {
         String base = serverUrl(c);
         if (base.isEmpty()) throw new SyncException(0, "No sync server is set");
+        if (Supabase.enabled(c)) return Supabase.call(c, name, body);
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL(base + "/api/" + name).openConnection();
@@ -173,6 +174,15 @@ final class Sync {
     }
 
     /** Text for the "OTP Sent" dialog from the server's reply. */
+    /** Fields for the sync settings dialogs: address and, for a Supabase project, the anon key. */
+    static void settingsFields(Context c, android.widget.EditText url, android.widget.EditText key) {
+        url.setHint(SERVER_URL.isEmpty() ? "https://xxxx.supabase.co" : SERVER_URL);
+        url.setText(customUrl(c));
+        key.setHint("Supabase anon key (Supabase projects only)");
+        key.setText(Supabase.customKey(c));
+        key.setSingleLine(true);
+    }
+
     static String otpSentText(JSONObject r, String target) {
         if (r.optBoolean("test", false)) return "OTP for " + target + "\n\n(Test mode) Your 6-digit OTP is: " + r.optString("otp", "") + "\n\nThe server has no SMS or email sender set up, so the OTP is shown here instead of being sent.";
         JSONObject to = r.optJSONObject("to");
