@@ -1648,8 +1648,11 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     // This month's sales, invoice count and outstanding credit sales, read straight from the invoices table
     private LinearLayout statsRow() {
+        // Midnight on the 1st: invoices are dated without a time, so a "from" carrying the current time of day
+        // would leave out everything dated the 1st (and, on the 1st itself, everything of the month)
         Calendar n = Calendar.getInstance();
         n.set(Calendar.DAY_OF_MONTH, 1);
+        n.set(Calendar.HOUR_OF_DAY, 0); n.set(Calendar.MINUTE, 0); n.set(Calendar.SECOND, 0); n.set(Calendar.MILLISECOND, 0);
         Date from = n.getTime();
         double sales = 0, credit = 0; int count = 0;
         try {
