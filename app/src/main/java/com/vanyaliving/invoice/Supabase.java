@@ -34,8 +34,8 @@ final class Supabase {
 
     /** Project URL and anon (publishable) key, from the Supabase dashboard (Project Settings -> API). Blank: not
      *  used unless entered under Sync in the app. The anon key is public by design; row-level security guards the data. */
-    static final String SUPABASE_URL = "";
-    static final String SUPABASE_KEY = "";
+    static final String SUPABASE_URL = "https://cufdskrmhdenppoxfhnk.supabase.co";
+    static final String SUPABASE_KEY = "sb_publishable_wXaFiPC-b7zNGAKCo_1eow_4hUJxJCD";
     private static final String PREFS = "invoice_prefs";
 
     static boolean looksLike(String url) { return url != null && url.toLowerCase(Locale.ROOT).matches(".*\\.supabase\\.(co|in)\\b.*"); }
@@ -62,7 +62,7 @@ final class Supabase {
             conn.setConnectTimeout(10000); conn.setReadTimeout(30000);
             conn.setRequestMethod(method);
             conn.setRequestProperty("apikey", key);
-            conn.setRequestProperty("Authorization", "Bearer " + (token == null || token.isEmpty() ? key : token));
+            if (token != null && !token.isEmpty()) conn.setRequestProperty("Authorization", "Bearer " + token);
             conn.setRequestProperty("Content-Type", "application/json");
             if (extra != null) for (Map.Entry<String, String> e : extra.entrySet()) conn.setRequestProperty(e.getKey(), e.getValue());
             if (body != null) { conn.setDoOutput(true); try (OutputStream out = conn.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); } }

@@ -9,10 +9,10 @@
   // Address of a sync server, if one is hosted (see server/README.md). Blank: the portal works on its own and
   // data moves between app and portal by backup file (Export / Import). When the portal is opened through
   // server/server.js on this machine or the local network, that server is used.
-  const DEFAULT_SERVER_URL = '';
+  const DEFAULT_SERVER_URL = 'https://cufdskrmhdenppoxfhnk.supabase.co';
   // Supabase project instead of the sync server (see server/supabase/README.md): the project URL goes in
   // DEFAULT_SERVER_URL (or is entered under Sync), the anon (publishable) key here or under Sync as well.
-  const SUPABASE_ANON_KEY = '';
+  const SUPABASE_ANON_KEY = 'sb_publishable_wXaFiPC-b7zNGAKCo_1eow_4hUJxJCD';
   const POLL_MS = 10000, PUSH_DELAY_MS = 1200, TIMEOUT_MS = 20000;
   const URL_KEY = 'blitzbook.sync_url', SEEN_KEY = 'blitzbook.sync_seen', SB_KEY = 'blitzbook.supabase_key';
 
@@ -59,7 +59,7 @@
     isSupabase() { const u = this.serverUrl(); return !!global.Supabase && Supabase.looksLike(u) && !!this.supabaseKey(); },
     seen() { try { return localStorage.getItem(SEEN_KEY) || ''; } catch (e) { return ''; } },
     setServerUrl(u) {
-      u = String(u || '').trim().replace(/\/+$/, '');
+      u = String(u || '').trim().replace(/\/+$/, '').replace(/\/(rest|auth|storage|realtime)\/v1$/i, '');
       if (u && !/^https?:\/\//i.test(u)) u = 'http://' + u;
       try { if (u) localStorage.setItem(URL_KEY, u); else localStorage.removeItem(URL_KEY); } catch (e) { /* storage blocked */ }
       this.pinged = null; this.online = null;

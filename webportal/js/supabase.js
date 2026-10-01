@@ -33,7 +33,7 @@
     looksLike(url) { return /\.supabase\.(co|in)\b/i.test(String(url || '')); },
 
     async http(method, path, body, token, extraHeaders) {
-      const headers = Object.assign({ apikey: this.key, Authorization: 'Bearer ' + (token || this.key), 'Content-Type': 'application/json' }, extraHeaders || {});
+      const headers = Object.assign({ apikey: this.key, 'Content-Type': 'application/json' }, token ? { Authorization: 'Bearer ' + token } : {}, extraHeaders || {});
       let res;
       try { res = await fetch(this.url + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }); }
       catch (e) { throw new SbError(0, 'Cannot reach Supabase'); }

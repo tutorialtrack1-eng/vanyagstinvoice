@@ -64,7 +64,7 @@ import java.util.UUID;
 final class Sync {
     /** Address of the sync server, e.g. "https://books.example.com". Blank: sync stays off until an
      *  address is entered under Sync in the app (kept in the preferences). */
-    static final String SERVER_URL = "";
+    static final String SERVER_URL = Supabase.SUPABASE_URL;
 
     private static final long POLL_MILLIS = 10_000, WATCH_MILLIS = 1_500;
     private static final String PREFS = "invoice_prefs";
@@ -98,6 +98,7 @@ final class Sync {
         String u = url == null ? "" : url.trim();
         while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
         if (!u.isEmpty() && !u.toLowerCase(Locale.ROOT).startsWith("http")) u = "http://" + u;
+        u = u.replaceFirst("(?i)/(rest|auth|storage|realtime)/v1$", ""); // a pasted endpoint: keep the project URL
         c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("sync_server_url", u).apply();
     }
 

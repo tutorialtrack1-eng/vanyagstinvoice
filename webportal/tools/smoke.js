@@ -44,6 +44,8 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   // ------------------------------------------------------------ part 1: opened as a file, no server
   console.log('portal opened as a file');
   let page = await newPage(browser, 'file');
+  // The built-in default points at the real Supabase project; this part must stay off any backend
+  await page.addInitScript(() => { try { localStorage.setItem('blitzbook.sync_url', 'http://127.0.0.1:9'); } catch (e) { /* storage blocked */ } });
   await page.goto(FILE_URL);
   check('register page names the 1-day trial', (await page.click('#lReg'), await page.textContent('.auth .tag')).includes('1-day trial'));
   await page.click('#rBack');
