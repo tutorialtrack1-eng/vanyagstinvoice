@@ -19,6 +19,8 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 - Saves PDFs under `Downloads/Vanya GST Invoices/`
 - Opens the Android share sheet after PDF creation
 - Bank details pre-filled
+- The Back button walks from the invoice screen (or an open side menu) to the dashboard; the app reopens where
+  it was left (dashboard, an invoice, or the list that was open)
 - Party ledger (Reports, a contact's ledger button, Purchases, Journal): every bill, note, receipt and payment
   with a supplier or customer with a running balance, for a period or all dates, exported to Excel
 

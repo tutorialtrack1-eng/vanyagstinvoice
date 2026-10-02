@@ -237,6 +237,35 @@ public class MainActivity extends Activity implements Sync.Listener {
     // Keeps these books and the web portal the same (Sync.java); runs while the app is on screen
     private Sync sync;
     private boolean onDashboard, companyPromptPending;
+    private DrawerLayout dashboardDrawer;
+
+    // ------------------------------------------------------------------ where the user is: back button and relaunch
+    // The screen open now is remembered per account ("dashboard", "invoice:<no>", "sales", "contacts:Supplier" ...),
+    // so the app reopens where it was left, and the Back button walks from a screen back to the dashboard instead
+    // of leaving the app. Dialogs close on Back by themselves.
+    private void remember(String screen) { if (prefs != null && userId >= 0) prefs.edit().putString("last_screen_" + userId, screen).apply(); }
+
+    private void restoreScreen() {
+        String last = prefs.getString("last_screen_" + userId, "dashboard");
+        try {
+            if (last.startsWith("invoice:")) { String no = last.substring(8); if (!no.isEmpty() && invoiceExists(no)) openInvoice(no, false); else showInvoiceView(); }
+            else if (last.equals("invoice")) showInvoiceView();
+            else if (last.equals("sales")) showSalesDialog();
+            else if (last.equals("purchases") && !Subscription.isLite(this, userId)) showPurchasesDialog();
+            else if (last.equals("expenses") && !Subscription.isLite(this, userId)) showExpensesDialog();
+            else if (last.equals("journal") && !Subscription.isLite(this, userId)) showJournalDialog();
+            else if (last.equals("items") && !Subscription.isLite(this, userId)) showItemMasterDialog();
+            else if (last.equals("stock") && !Subscription.isLite(this, userId)) showStockDialog();
+            else if (last.startsWith("contacts:")) showContactListFiltered(last.substring(9));
+            else if (last.startsWith("notes:")) showNotesDialog(last.substring(6));
+        } catch (Exception e) { remember("dashboard"); }
+    }
+
+    @Override public void onBackPressed() {
+        if (dashboardDrawer != null && dashboardDrawer.isDrawerOpen(GravityCompat.START)) { dashboardDrawer.closeDrawers(); return; }
+        if (!onDashboard) { showDashboardView(); return; }
+        super.onBackPressed();
+    }
 
     private String sellerNameStr = "";
     private String sellerGstinStr = "";
@@ -405,6 +434,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         } else {
             c.close();
             showDashboardView();
+            restoreScreen();
         }
     }
 
@@ -1585,6 +1615,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void showDashboardView() {
         if (root == null) return;
         onDashboard = true;
+        remember("dashboard");
         root.removeAllViews();
 
         // Hero banner: theme-coloured gradient, company name, GSTIN and subscription chips
@@ -2007,6 +2038,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void showInvoiceView() {
         if (root == null) return;
         onDashboard = false;
+        remember("invoice");
         root.removeAllViews();
 
         LinearLayout topNav = new LinearLayout(this);
@@ -2354,6 +2386,7 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     private void buildUi() {
         DrawerLayout drawer = new DrawerLayout(this);
+        dashboardDrawer = drawer;
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
 
@@ -3452,6 +3485,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             ic.close();
             if (rows.isEmpty()) addItemRow();
             recalc();
+            remember("invoice:" + no);
             Toast.makeText(this, "Existing invoice " + no + " loaded", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             try { c.close(); } catch (Exception ignored) {}
@@ -4537,6 +4571,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     private void showContactListFiltered(String filterType) {
+        remember("contacts:" + filterType);
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         Cursor c = "Supplier".equalsIgnoreCase(filterType) ?
                 db.query("contacts", null, "type=?", new String[]{"Supplier"}, null, null, "name ASC") :
@@ -4975,6 +5010,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private AlertDialog itemMasterDialog;
 
     private void showItemMasterDialog() {
+        remember("items");
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         List<String> categories = new ArrayList<>();
         Cursor cc = db.rawQuery("SELECT DISTINCT category FROM items_master WHERE IFNULL(category,'')<>'' AND IFNULL(hidden,0)=0 ORDER BY category", null);
@@ -5823,6 +5859,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private AlertDialog expensesDialog;
 
     private void showExpensesDialog() {
+        remember("expenses");
         List<Ledger.Expense> list = Ledger.expenses(dbHelper.getReadableDatabase());
         LinearLayout rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
@@ -6027,6 +6064,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private AlertDialog purchasesDialog;
 
     private void showPurchasesDialog() {
+        remember("purchases");
         List<Ledger.Purchase> list = Ledger.purchases(dbHelper.getReadableDatabase());
         LinearLayout rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
@@ -6440,6 +6478,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private AlertDialog stockDialog;
 
     private void showStockDialog() {
+        remember("stock");
         List<Ledger.StockLine> lines = Ledger.stock(dbHelper.getReadableDatabase(), null);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -6655,7 +6694,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         sc.addView(listContainer);
         rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(340)));
         if (salesDialog != null && salesDialog.isShowing()) salesDialog.dismiss();
+        remember("sales");
         salesDialog = new AlertDialog.Builder(this).setTitle("Sales").setView(rootBox).setPositiveButton("Close", null).show();
+        salesDialog.setOnDismissListener(d -> { if (onDashboard) remember("dashboard"); });
     }
 
     // Loads a saved invoice on the invoice screen; with print, the paper picker opens straight away
@@ -6715,7 +6756,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         sc.addView(listContainer);
         rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(300)));
         if (notesDialog != null && notesDialog.isShowing()) notesDialog.dismiss();
+        remember("notes:" + kind);
         notesDialog = new AlertDialog.Builder(this).setTitle(kind + "s").setView(rootBox).setPositiveButton("Close", null).show();
+        notesDialog.setOnDismissListener(d -> { if (onDashboard) remember("dashboard"); });
     }
 
     private List<String> contactNames(String type) {
@@ -6926,6 +6969,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private AlertDialog journalDialog;
 
     private void showJournalDialog() {
+        remember("journal");
         List<Ledger.JournalVoucher> list = Ledger.journal(dbHelper.getReadableDatabase());
         LinearLayout rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
