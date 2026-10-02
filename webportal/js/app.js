@@ -172,7 +172,6 @@
   const App = {
     routes: {}, user: null, subTimer: null, current: null, stale: false,
     start() {
-      Sync.onStatus = () => this.refreshSync();
       Sync.onApplied = (keys) => this.synced(keys);
       Sync.onAuthLost = (msg) => { this.logout(); UI.alert('Sign in again', msg + '. Log in with the new password.'); };
       Sync.ready(); // find out early whether a sync server is there
@@ -208,11 +207,9 @@
       $('#barCo').onclick = () => this.go('company');
       $('#logoutBtn').onclick = () => UI.confirm('Logout', 'Do you want to logout?', () => this.logout(), 'Logout');
       $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
-      this.refreshBar(); this.refreshSync();
+      this.refreshBar();
     },
     refreshBar() { if (!this.user || !$('#barSub')) return; const c = Store.company(); $('#barSub').textContent = c.name || 'Set up company'; $('#barAv').textContent = ((c.name || this.user.name || 'B').trim()[0] || 'B').toUpperCase(); },
-    // The sync state is no longer in the top bar; Export / Import shows it
-    refreshSync() { const s = $('#syncState'); if (s) s.textContent = Sync.statusText(); },
     // Highlights the current screen in the top navigation and scrolls it into view on narrow screens
     markNav(route) {
       const nav = $('#nav'); let on = null;
@@ -576,8 +573,8 @@
     const root = App.view(App.header('Export / Import Data') +
       '<div class="card white"><div class="hd">Backup</div><div class="bd"><p>Export saves your company profile, items, contacts, invoices, purchases, expenses, journal and notes as one backup file. Import restores a backup file and replaces the data currently here.</p>' +
       '<p>The file is the same one the BlitzBook app writes and reads: a backup taken here restores in the app (Export / Import &rsaquo; Import Backup), and a backup taken in the app restores here.</p>' +
-      '<div class="btnrow"><button class="btn green" id="bExp">Export Backup</button><button class="btn red" id="bImp">Import Backup</button><span class="hint">Sync: <b id="syncState">' + esc(Sync.statusText()) + '</b></span></div>' +
-      '<div class="hint">' + (Sync.status === 'idle' || Sync.status === 'syncing' ? 'These books are also kept on the sync server and in the app. A backup file is still worth keeping.' : 'Data is stored in this browser only. Export regularly and keep the file safe, or import it on another device to move your books.') + '</div></div></div>');
+      '<div class="btnrow"><button class="btn green" id="bExp">Export Backup</button><button class="btn red" id="bImp">Import Backup</button></div>' +
+      '<div class="hint">' + (Sync.status === 'idle' || Sync.status === 'syncing' ? 'These books are also kept in your account and in the app. A backup file is still worth keeping.' : 'Data is stored in this browser only. Export regularly and keep the file safe, or import it on another device to move your books.') + '</div></div></div>');
     App.wireBack(root);
     $('#bExp').onclick = () => { UI.download('BlitzBook_Backup_' + U.stamp() + '.json', JSON.stringify(Store.exportAll()), 'application/json'); UI.toast('Backup downloaded. Keep this file safe.'); };
     $('#bImp').onclick = () => UI.confirm('Import Backup', 'Importing replaces all invoices, items, contacts and the company profile here with the data from the backup file' + (Sync.status === 'idle' ? ', and in the app once it syncs' : '') + '. This cannot be undone.\n\nTip: take an Export first if you want to keep the current data.', () => {

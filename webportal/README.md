@@ -80,8 +80,8 @@ Everything the app has:
 ## Sync with the app
 
 The Supabase project URL and anon key are built into `js/sync.js` (`DEFAULT_SERVER_URL`, `SUPABASE_ANON_KEY`),
-the same ones as in the app; a BlitzBook sync server address works there too. There is no sync screen for
-users: the state shows under Export / Import. Log in with the account you use in the app
+the same ones as in the app; a BlitzBook sync server address works there too. There is no sync screen or status
+for users: it runs on its own. Log in with the account you use in the app
 (or register here and log in there). Every entry, edit and
 deletion on one side appears on the other within a few seconds while both are online; offline work is
 sent when the connection returns. The status chip in the top bar shows Synced / Syncing / Offline /
