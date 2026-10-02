@@ -16,7 +16,8 @@ self.addEventListener('activate', (e) => {
 });
 self.addEventListener('fetch', (e) => {
   const req = e.request, url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== self.location.origin || /\.(apk|ipa)$/i.test(url.pathname)) return;
+  // The APK and the app's version file are never served from the cache
+  if (req.method !== 'GET' || url.origin !== self.location.origin || /\.(apk|ipa)$/i.test(url.pathname) || /app-version\.json$/.test(url.pathname)) return;
   e.respondWith(fetch(req).then(res => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
     return res;

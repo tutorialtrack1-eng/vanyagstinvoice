@@ -452,6 +452,57 @@ public class MainActivity extends Activity implements Sync.Listener {
         super.onResume();
         if (dbHelper != null) checkSubscription();
         if (sync != null) sync.start();
+        checkForUpdate();
+    }
+
+    // ------------------------------------------------------------------ app updates
+    // The portal publishes the current APK next to app-version.json ({versionCode, versionName, apk, notes}). While
+    // the app is in use it looks there now and then; a newer versionCode brings up "Update available" with a button
+    // that downloads the APK (Android then offers to install it). "Later" keeps quiet for a day.
+    private static final String UPDATE_URL = "https://blitzbook.co.in/app-version.json";
+    private static final long UPDATE_CHECK_EVERY = 6 * 60 * 60 * 1000L, UPDATE_LATER_FOR = 24 * 60 * 60 * 1000L;
+    private boolean updateDialogShown;
+
+    private void checkForUpdate() {
+        if (prefs == null || updateDialogShown) return;
+        long now = System.currentTimeMillis();
+        if (now - prefs.getLong("update_checked_at", 0) < UPDATE_CHECK_EVERY) return;
+        prefs.edit().putLong("update_checked_at", now).apply();
+        new Thread(() -> {
+            java.net.HttpURLConnection conn = null;
+            try {
+                conn = (java.net.HttpURLConnection) new java.net.URL(UPDATE_URL + "?t=" + now).openConnection();
+                conn.setConnectTimeout(8000); conn.setReadTimeout(8000); conn.setUseCaches(false);
+                if (conn.getResponseCode() != 200) return;
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) { String line; while ((line = br.readLine()) != null) sb.append(line); }
+                JSONObject v = new JSONObject(sb.toString());
+                long latest = v.optLong("versionCode", 0), mine = installedVersionCode();
+                if (latest <= mine) return;
+                if (now - prefs.getLong("update_later_" + latest, 0) < UPDATE_LATER_FOR) return;
+                String name = v.optString("versionName", String.valueOf(latest)), notes = v.optString("notes", ""), apk = v.optString("apk", "https://blitzbook.co.in/BlitzBook.apk");
+                runOnUiThread(() -> {
+                    if (isFinishing() || updateDialogShown) return;
+                    updateDialogShown = true;
+                    new AlertDialog.Builder(this).setTitle("Update available")
+                            .setMessage("BlitzBook " + name + " is ready (you have " + installedVersionName() + ")." + (notes.isEmpty() ? "" : "\n\nWhat's new: " + notes) + "\n\nTap Update now to download it; Android then offers to install it over this version. Your books stay as they are.")
+                            .setPositiveButton("Update now", (d, w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(apk))); } catch (Exception e) { Toast.makeText(this, "Could not open the download: " + e.getMessage(), Toast.LENGTH_LONG).show(); } })
+                            .setNegativeButton("Later", (d, w) -> prefs.edit().putLong("update_later_" + latest, System.currentTimeMillis()).apply())
+                            .setOnDismissListener(d -> updateDialogShown = false)
+                            .show();
+                });
+            } catch (Exception ignored) {
+                // No connection or the file is not there: the app simply carries on; it asks again later
+            } finally { if (conn != null) conn.disconnect(); }
+        }).start();
+    }
+
+    private long installedVersionCode() {
+        try { android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0); return android.os.Build.VERSION.SDK_INT >= 28 ? pi.getLongVersionCode() : pi.versionCode; }
+        catch (Exception e) { return 0; }
+    }
+    private String installedVersionName() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; }
     }
 
     @Override protected void onPause() {

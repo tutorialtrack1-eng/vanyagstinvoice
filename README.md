@@ -38,6 +38,14 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 - Registration and password reset OTPs are sent by Supabase Auth (`server/supabase/README.md`) or by the
   sync server (`server/README.md`, *OTP delivery*); with neither, the OTP is shown on screen (test mode).
 
+## Publishing a new APK
+
+The app checks `https://blitzbook.co.in/app-version.json` while it is in use and offers to update when that file
+names a higher `versionCode`. So for every new APK: raise `versionCode` (and `versionName`) in `app/build.gradle`,
+put the same numbers and a line of notes in `webportal/app-version.json`, build, copy the APK to
+`webportal/BlitzBook.apk` and push. "Update now" downloads the APK from the portal and Android installs it over the
+old version; the books on the phone are kept.
+
 ## Build
 Open this folder in Android Studio and let Gradle sync. Then select:
 `Build > Build Bundle(s) / APK(s) > Build APK(s)`.
