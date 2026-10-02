@@ -222,6 +222,7 @@ final class Sync {
             new T("items_master", "item:", "item_name", true, null, null, null),
             new T("ledger_accounts", "acct:", "name", true, null, null, null),
             new T("invoices", "inv:", "invoice_no", false, "invoice_items", "invoice_id", "items"),
+            new T("challans", "dc:", "challan_no", false, "challan_items", "challan_id", "items"),
             new T("contacts", "contact:", null, false, null, null, null),
             new T("expenses", "exp:", null, false, null, null, null),
             new T("purchases", "pur:", null, false, "purchase_items", "purchase_id", "items"),
@@ -526,7 +527,7 @@ final class Sync {
         for (T t : TABLES) {
             Map<Long, JSONArray> kids = new HashMap<>();
             if (t.child != null) {
-                Cursor k = db.query(t.child, null, null, null, null, null, t.child.equals("invoice_items") ? "sl_no, id" : "id");
+                Cursor k = db.query(t.child, null, null, null, null, null, t.child.equals("invoice_items") || t.child.equals("challan_items") ? "sl_no, id" : "id");
                 int fk = k.getColumnIndexOrThrow(t.fk);
                 while (k.moveToNext()) {
                     long parent = k.getLong(fk);

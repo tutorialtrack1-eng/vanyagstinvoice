@@ -95,7 +95,7 @@ import java.util.zip.ZipInputStream;
 public class MainActivity extends Activity implements Sync.Listener {
     private static final String PREFS = "invoice_prefs";
     // Login accounts are never part of a backup; each backup holds only the signed-in user's business data
-    private static final String[] BACKUP_TABLES = {"company_master", "items_master", "contacts", "history", "invoices", "invoice_items", "expenses", "purchases", "purchase_items", "journal", "journal_vouchers", "journal_lines", "ledger_accounts", "notes"};
+    private static final String[] BACKUP_TABLES = {"company_master", "items_master", "contacts", "history", "invoices", "invoice_items", "challans", "challan_items", "expenses", "purchases", "purchase_items", "journal", "journal_vouchers", "journal_lines", "ledger_accounts", "notes"};
 
     private boolean tableExists(SQLiteDatabase db, String table) {
         Cursor c = db.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?", new String[]{table});
@@ -250,6 +250,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         try {
             if (last.startsWith("invoice:")) { String no = last.substring(8); if (!no.isEmpty() && invoiceExists(no)) openInvoice(no, false); else showInvoiceView(); }
             else if (last.equals("invoice")) showInvoiceView();
+            else if (last.startsWith("challan:")) { String no = last.substring(8); if (!no.isEmpty() && challanExists(no)) openChallan(no, false); else showChallanView(); }
+            else if (last.equals("challan")) showChallanView();
+            else if (last.equals("challans")) showChallansDialog();
             else if (last.equals("sales")) showSalesDialog();
             else if (last.equals("purchases") && !Subscription.isLite(this, userId)) showPurchasesDialog();
             else if (last.equals("expenses") && !Subscription.isLite(this, userId)) showExpensesDialog();
@@ -2149,10 +2152,14 @@ public class MainActivity extends Activity implements Sync.Listener {
         }).show();
     }
 
-    private void showInvoiceView() {
+    private void showInvoiceView() { showDocView(false); }
+    private void showChallanView() { showDocView(true); }
+
+    private void showDocView(boolean challan) {
         if (root == null) return;
         onDashboard = false;
-        remember("invoice");
+        editingChallan = challan; fromChallanNo = ""; challanInvoiceNo = "";
+        remember(challan ? "challan" : "invoice");
         root.removeAllViews();
 
         LinearLayout topNav = new LinearLayout(this);
@@ -2179,6 +2186,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         root.addView(sBox);
 
         LinearLayout invSec = createSectionContainer("Invoice Details", BLUE);
+        invSecTitle = (TextView) invSec.getChildAt(0);
 
         LinearLayout invNoContainer = new LinearLayout(this);
         invNoContainer.setOrientation(LinearLayout.HORIZONTAL);
@@ -2221,9 +2229,19 @@ public class MainActivity extends Activity implements Sync.Listener {
         paymentSpinner = spinner(PAYMENT);
 
         LinearLayout g1 = row();
-        g1.addView(field("Invoice No *", invNoContainer), weightLp());
+        invNoField = field("Invoice No *", invNoContainer);
+        g1.addView(invNoField, weightLp());
         g1.addView(field("Dated *", invoiceDate), weightLp());
-        g1.addView(field("Payment Mode", paymentSpinner), weightLp());
+        paymentField = field("Payment Mode", paymentSpinner);
+        g1.addView(paymentField, weightLp());
+        // Challan mode shows whether the challan is still open or which invoice it became, in place of the payment mode
+        challanStatus = new TextView(this);
+        challanStatus.setTextSize(13); challanStatus.setMinHeight(dp(48)); challanStatus.setGravity(Gravity.CENTER_VERTICAL);
+        challanStatus.setPadding(dp(12), dp(10), dp(12), dp(10)); challanStatus.setTextColor(0xFF37474F);
+        applyBoxBackground(challanStatus);
+        statusField = field("Status", challanStatus);
+        statusField.setVisibility(View.GONE);
+        g1.addView(statusField, weightLp());
         invSec.addView(g1);
 
         // Reverse charge on a sale only arises for notified services (transport, security, legal ...), so the
@@ -2239,7 +2257,8 @@ public class MainActivity extends Activity implements Sync.Listener {
 
         invoiceNo.addTextChangedListener(new SimpleTextWatcher() {
             @Override public void changed() {
-                if (!loadingInvoice) loadInvoiceByNumber(invoiceNo.getText().toString().trim());
+                if (loadingInvoice) return;
+                if (editingChallan) loadChallanByNumber(invoiceNo.getText().toString().trim()); else loadInvoiceByNumber(invoiceNo.getText().toString().trim());
             }
         });
         // The running number is never left blank: leaving the field empty restores the next number in sequence
@@ -2471,18 +2490,34 @@ public class MainActivity extends Activity implements Sync.Listener {
         layoutBtn.setAllCaps(false);
         layoutBtn.setTextSize(12.5f);
         pRow.addView(layoutBtn, challanLp);
+        // Challan mode: a saved, still open challan can become a sales invoice
+        makeInvoiceBtn = new Button(this);
+        makeInvoiceBtn.setText("MAKE INVOICE");
+        styleButton(makeInvoiceBtn, GREEN);
+        makeInvoiceBtn.setAllCaps(false);
+        makeInvoiceBtn.setTextSize(12.5f);
+        makeInvoiceBtn.setVisibility(View.GONE);
+        pRow.addView(makeInvoiceBtn, challanLp);
         root.addView(pRow);
+        printBtnRef = save;
 
         saveBtn.setOnClickListener(v -> {
             if (!validateFieldsBool()) return;
+            if (editingChallan) {
+                if (!saveChallan()) return;
+                refreshChallanStatus();
+                Toast.makeText(this, "Delivery challan " + invoiceNo.getText().toString().trim() + " saved", Toast.LENGTH_SHORT).show();
+                return;
+            }
             if (!saveFullInvoice()) return;
             Toast.makeText(this, "Invoice " + invoiceNo.getText().toString().trim() + " saved", Toast.LENGTH_SHORT).show();
         });
-        save.setOnClickListener(v -> choosePrintFormat(false));
+        save.setOnClickListener(v -> choosePrintFormat(editingChallan));
         layoutBtn.setOnClickListener(v -> showPrintSettings());
         challanBtn.setOnClickListener(v -> choosePrintFormat(true));
+        makeInvoiceBtn.setOnClickListener(v -> makeInvoiceFromChallan(invoiceNo.getText().toString().trim()));
         newInvoiceBtn.setOnClickListener(v -> resetForNewInvoice());
-        deleteInvoiceBtn.setOnClickListener(v -> deleteCurrentInvoice());
+        deleteInvoiceBtn.setOnClickListener(v -> { if (editingChallan) deleteCurrentChallan(); else deleteCurrentInvoice(); });
 
         sameAsBilling.setOnCheckedChangeListener((v, c) -> {
             consigneeContainer.setVisibility(c ? View.GONE : View.VISIBLE);
@@ -2496,6 +2531,43 @@ public class MainActivity extends Activity implements Sync.Listener {
         addItemsHeader();
         addItemRow();
         recalc();
+        applyChallanMode();
+    }
+
+    // Labels and buttons of the invoice screen for the mode it is in
+    private void applyChallanMode() {
+        boolean dc = editingChallan;
+        if (invSecTitle != null) invSecTitle.setText(dc ? "CHALLAN DETAILS" : "INVOICE DETAILS");
+        if (invNoField != null) ((TextView) invNoField.getChildAt(0)).setText(dc ? "Challan No *" : "Invoice No *");
+        if (paymentField != null) paymentField.setVisibility(dc ? View.GONE : View.VISIBLE);
+        if (statusField != null) statusField.setVisibility(dc ? View.VISIBLE : View.GONE);
+        if (printBtnRef != null) printBtnRef.setText(dc ? "PRINT CHALLAN" : "PRINT / PDF");
+        if (challanBtn != null) challanBtn.setVisibility(dc ? View.GONE : View.VISIBLE);
+        refreshChallanStatus();
+    }
+    private void refreshChallanStatus() {
+        if (challanStatus == null) return;
+        String no = invoiceNo == null ? "" : invoiceNo.getText().toString().trim();
+        boolean saved = editingChallan && challanExists(no);
+        challanStatus.setText(!editingChallan ? "" : !saved ? "Not saved yet" : challanInvoiceNo.isEmpty() ? "Open - not invoiced yet" : "Invoiced: " + challanInvoiceNo);
+        if (makeInvoiceBtn != null) makeInvoiceBtn.setVisibility(editingChallan && saved && challanInvoiceNo.isEmpty() ? View.VISIBLE : View.GONE);
+    }
+    private boolean challanExists(String no) {
+        if (no.isEmpty()) return false;
+        Cursor c = dbHelper.getReadableDatabase().query("challans", new String[]{"id"}, "challan_no=?", new String[]{no}, null, null, null);
+        boolean exists = c.getCount() > 0; c.close();
+        return exists;
+    }
+    // Next challan number: the highest trailing number among the saved challans + 1, as DC-0001
+    private String nextChallanPreview() {
+        long max = 0;
+        Cursor c = dbHelper.getReadableDatabase().query("challans", new String[]{"challan_no"}, null, null, null, null, null);
+        while (c.moveToNext()) {
+            Matcher m = Pattern.compile("(\\d+)\\s*$").matcher(c.isNull(0) ? "" : c.getString(0));
+            if (m.find()) try { max = Math.max(max, Long.parseLong(m.group(1))); } catch (NumberFormatException ignored) { /* not a number */ }
+        }
+        c.close();
+        return String.format(Locale.US, "DC-%04d", max + 1);
     }
 
     private void buildUi() {
@@ -2746,7 +2818,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             taxableLabel.setText(gst ? "Taxable Value" : "Total Value");
             for (TextView v : new TextView[]{cgstAmount, sgstAmount, igstAmount}) ((View) v.getParent()).setVisibility(gst ? View.VISIBLE : View.GONE);
         }
-        if (challanBtn != null) challanBtn.setVisibility(isComposition() ? View.VISIBLE : View.GONE);
+        if (challanBtn != null) challanBtn.setVisibility(editingChallan ? View.GONE : View.VISIBLE);
         if (rcmCb != null) { boolean allowed = salesRcmAllowed(); if (!allowed) rcmCb.setChecked(false); rcmCb.setVisibility(allowed ? View.VISIBLE : View.GONE); }
     }
 
@@ -3088,6 +3160,10 @@ public class MainActivity extends Activity implements Sync.Listener {
             importStockFromUri(data.getData());
             return;
         }
+        if (req == REQ_PO && res == RESULT_OK && data != null && data.getData() != null) {
+            importPurchaseOrdersFromUri(data.getData());
+            return;
+        }
         if (req == 100 && res == RESULT_OK && data != null && data.getData() != null) {
             try {
                 StringBuilder sb = new StringBuilder();
@@ -3199,6 +3275,16 @@ public class MainActivity extends Activity implements Sync.Listener {
         addColumnIfMissing(db, "items_master", "item_code", "TEXT");
         addColumnIfMissing(db, "company_master", "account_holder", "TEXT");
         addColumnIfMissing(db, "invoices", "order_no", "TEXT");
+        // Delivery challans: the invoice form's columns under a challan number, plus the invoice it became
+        db.execSQL("CREATE TABLE IF NOT EXISTS challans (id INTEGER PRIMARY KEY AUTOINCREMENT, challan_no TEXT UNIQUE, invoice_no TEXT, date TEXT, payment_mode TEXT, " +
+                "buyer_name_addr TEXT, buyer_phone TEXT, buyer_email TEXT, buyer_gstin TEXT, buyer_state TEXT, " +
+                "same_as_billing INTEGER, consignee_name_addr TEXT, consignee_phone TEXT, consignee_email TEXT, consignee_gstin TEXT, consignee_state TEXT, " +
+                "destination TEXT, vehicle TEXT, others_checked INTEGER, transporter TEXT, vehicle_number TEXT, delivery_challan TEXT, " +
+                "order_no TEXT, order_date TEXT, ref_no TEXT, additional_info TEXT, rcm INTEGER, " +
+                "taxable_value REAL, cgst REAL, sgst REAL, igst REAL, grand_total REAL, rounded_total REAL, amount_words TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS challan_items (id INTEGER PRIMARY KEY AUTOINCREMENT, challan_id INTEGER, sl_no INTEGER, " +
+                "particulars TEXT, hsn TEXT, gst_rate TEXT, qty REAL, uqc TEXT, rate REAL, amount REAL, " +
+                "sub_serial_no TEXT, sub_description TEXT, sub_other_info TEXT)");
         Ledger.createTables(db);
         Sync.prepare(db);
     }
@@ -3535,14 +3621,21 @@ public class MainActivity extends Activity implements Sync.Listener {
         recalc();
     }
 
-    private void loadInvoiceByNumber(String no) {
-        if (no.isEmpty()) return;
+    private void loadInvoiceByNumber(String no) { loadDocByNumber(false, no, true); }
+    private void loadChallanByNumber(String no) { loadDocByNumber(true, no, true); }
+
+    // Fills the form from a saved invoice (or, with challan, a saved delivery challan). announce: remember the
+    // screen and say so; off when a challan is being copied into a new invoice. Returns whether it was found.
+    private boolean loadDocByNumber(boolean challan, String no, boolean announce) {
+        if (no.isEmpty()) return false;
+        fromChallanNo = "";
         SQLiteDatabase db = dbHelper.getReadableDatabase();
-        Cursor c = db.query("invoices", null, "invoice_no=?", new String[]{no}, null, null, null);
+        Cursor c = db.query(challan ? "challans" : "invoices", null, (challan ? "challan_no" : "invoice_no") + "=?", new String[]{no}, null, null, null);
         if (!c.moveToFirst()) {
             c.close();
             clearInvoiceForm();
-            return;
+            if (challan) { challanInvoiceNo = ""; refreshChallanStatus(); }
+            return false;
         }
         loadingInvoice = true;
         try {
@@ -3570,6 +3663,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             otherInfo.setText(getString(c, "additional_info"));
             othersCb.setChecked(getInt(c, "others_checked") == 1);
             rcmCb.setChecked(getInt(c, "rcm") == 1);
+            if (challan) challanInvoiceNo = getString(c, "invoice_no");
 
             int idCol = c.getColumnIndex("_id");
             if (idCol < 0) idCol = c.getColumnIndex("id");
@@ -3579,7 +3673,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             rows.clear();
             itemsContainer.removeAllViews();
             addItemsHeader();
-            Cursor ic = db.query("invoice_items", null, "invoice_id=?",
+            Cursor ic = db.query(challan ? "challan_items" : "invoice_items", null, (challan ? "challan_id" : "invoice_id") + "=?",
                     new String[]{String.valueOf(invoiceId)}, null, null, "sl_no ASC");
             while (ic.moveToNext()) {
                 ItemRow r = new ItemRow(this, rows.size() + 1);
@@ -3599,15 +3693,78 @@ public class MainActivity extends Activity implements Sync.Listener {
             ic.close();
             if (rows.isEmpty()) addItemRow();
             recalc();
-            remember("invoice:" + no);
-            Toast.makeText(this, "Existing invoice " + no + " loaded", Toast.LENGTH_SHORT).show();
+            if (announce) {
+                remember((challan ? "challan:" : "invoice:") + no);
+                Toast.makeText(this, "Existing " + (challan ? "challan " : "invoice ") + no + " loaded", Toast.LENGTH_SHORT).show();
+            }
+            if (editingChallan) refreshChallanStatus();
+            return true;
         } catch (Exception e) {
             try { c.close(); } catch (Exception ignored) {}
-            Toast.makeText(this, "Could not load invoice: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Could not load " + (challan ? "challan: " : "invoice: ") + e.getMessage(), Toast.LENGTH_SHORT).show();
+            return false;
         } finally {
             loadingInvoice = false;
         }
     }
+
+    // A new invoice with the challan's parties and goods; the challan number goes under Delivery Note and the
+    // challan is marked invoiced when the invoice is saved. A challan already invoiced opens that invoice.
+    private void makeInvoiceFromChallan(String no) {
+        if (no.isEmpty()) return;
+        Cursor c = dbHelper.getReadableDatabase().query("challans", new String[]{"invoice_no"}, "challan_no=?", new String[]{no}, null, null, null);
+        String linked = c.moveToFirst() && !c.isNull(0) ? c.getString(0).trim() : ""; boolean found = c.getCount() > 0; c.close();
+        if (!found) { Toast.makeText(this, "Save the challan first", Toast.LENGTH_SHORT).show(); return; }
+        if (!linked.isEmpty()) {
+            if (invoiceExists(linked)) openInvoice(linked, false); else Toast.makeText(this, "Invoice " + linked + " is not on this phone", Toast.LENGTH_LONG).show();
+            return;
+        }
+        showInvoiceView();
+        if (!loadDocByNumber(true, no, false)) return;
+        loadingInvoice = true;
+        invoiceNo.setText(nextSalesInvoiceNo());
+        invoiceDate.setText(today());
+        selectSpinner(paymentSpinner, "Credit");
+        deliveryNote.setText(no);
+        othersCb.setChecked(true);
+        loadingInvoice = false;
+        fromChallanNo = no;
+        recalc();
+        Toast.makeText(this, "Invoice prepared from delivery challan " + no + ". Check it and Save.", Toast.LENGTH_LONG).show();
+    }
+
+    private void deleteCurrentChallan() {
+        String no = invoiceNo.getText().toString().trim();
+        if (no.isEmpty()) { Toast.makeText(this, "Enter/select a challan number first", Toast.LENGTH_SHORT).show(); return; }
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        Cursor c = db.query("challans", new String[]{"id", "invoice_no"}, "challan_no=?", new String[]{no}, null, null, null);
+        if (!c.moveToFirst()) { c.close(); Toast.makeText(this, "Delivery challan " + no + " was not found", Toast.LENGTH_SHORT).show(); return; }
+        long id = c.getLong(0); String linked = c.isNull(1) ? "" : c.getString(1).trim(); c.close();
+        if (!linked.isEmpty()) { new AlertDialog.Builder(this).setTitle("Cannot Delete Challan").setMessage("Delivery challan " + no + " was turned into invoice " + linked + ". Delete that invoice first if the challan has to go.").setPositiveButton("OK", null).show(); return; }
+        new AlertDialog.Builder(this).setTitle("Delete Delivery Challan").setMessage("Delete delivery challan " + no + "? This cannot be undone.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (d, w) -> {
+                    SQLiteDatabase wdb = dbHelper.getWritableDatabase();
+                    wdb.delete("challan_items", "challan_id=?", new String[]{String.valueOf(id)});
+                    wdb.delete("challans", "challan_no=?", new String[]{no});
+                    Toast.makeText(this, "Delivery challan " + no + " deleted", Toast.LENGTH_SHORT).show();
+                    resetForNewInvoice();
+                }).show();
+    }
+    // A deleted invoice leaves the challan it was made from open again
+    private void unlinkChallans(SQLiteDatabase db, String invoiceNo) { db.execSQL("UPDATE challans SET invoice_no='' WHERE invoice_no=?", new String[]{invoiceNo}); }
+
+    // Loads a saved delivery challan on the challan screen; with print, the PDF is made straight away
+    private void openChallan(String no, boolean print) {
+        showChallanView();
+        loadingInvoice = true;
+        invoiceNo.setText(no);
+        loadingInvoice = false;
+        loadChallanByNumber(no);
+        if (print) choosePrintFormat(true);
+    }
+    // A delivery challan printed for a saved invoice, from the Sales list
+    private void printChallanFor(String no) { openInvoice(no, false); choosePrintFormat(true); }
 
     private String getString(Cursor c, String column) {
         int i = c.getColumnIndex(column);
@@ -3680,6 +3837,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                     SQLiteDatabase writable = dbHelper.getWritableDatabase();
                     writable.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(id)});
                     writable.delete("invoices", "invoice_no=?", new String[]{no});
+                    unlinkChallans(writable, no);
                     Toast.makeText(this, "Invoice " + no + " deleted", Toast.LENGTH_SHORT).show();
                     resetForNewInvoice();
                 }).show();
@@ -3719,7 +3877,19 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
         old.close();
         db.delete("invoices", "invoice_no=?", new String[]{no});
-        ContentValues cv = new ContentValues(); cv.put("invoice_no", no); cv.put("date", invoiceDate.getText().toString());
+        ContentValues cv = docFormValues(); cv.put("invoice_no", no);
+        long id = db.insert("invoices", null, cv);
+        Subscription.useInvoice(this, userId);
+        if (Subscription.isLite(this, userId) || Subscription.invoiceQuota(this, userId) > 0) prefs.edit().putBoolean("pack_inv_" + userId + "_" + no, true).apply();
+        insertDocItems(db, "invoice_items", "invoice_id", id);
+        // An invoice made from a delivery challan closes that challan
+        if (!fromChallanNo.isEmpty()) { db.execSQL("UPDATE challans SET invoice_no=? WHERE challan_no=?", new String[]{no, fromChallanNo}); fromChallanNo = ""; }
+        return true;
+    }
+
+    // The invoice form as a row of invoices / challans, everything but the document number
+    private ContentValues docFormValues() {
+        ContentValues cv = new ContentValues(); cv.put("date", invoiceDate.getText().toString());
         cv.put("payment_mode", paymentSpinner.getSelectedItem().toString()); cv.put("buyer_name_addr", buyerBillTo.getText().toString());
         cv.put("buyer_phone", buyerPhone.getText().toString()); cv.put("buyer_email", buyerEmail.getText().toString().trim()); cv.put("buyer_gstin", buyerGstin.getText().toString()); cv.put("buyer_state", buyerState.getSelectedItem().toString());
         cv.put("same_as_billing", sameAsBilling.isChecked() ? 1 : 0); cv.put("consignee_name_addr", consignee.getText().toString());
@@ -3733,9 +3903,11 @@ public class MainActivity extends Activity implements Sync.Listener {
         cv.put("rcm", rcm ? 1 : 0);
         cv.put("taxable_value", parseValue(taxableValue)); cv.put("cgst", rcm ? 0 : parseValue(cgstAmount)); cv.put("sgst", rcm ? 0 : parseValue(sgstAmount)); cv.put("igst", rcm ? 0 : parseValue(igstAmount));
         cv.put("grand_total", parseValue(grandTotal)); cv.put("rounded_total", parseValue(roundedTotal)); cv.put("amount_words", amountWords.getText().toString());
-        long id = db.insert("invoices", null, cv);
-        Subscription.useInvoice(this, userId);
-        if (Subscription.isLite(this, userId) || Subscription.invoiceQuota(this, userId) > 0) prefs.edit().putBoolean("pack_inv_" + userId + "_" + no, true).apply();
+        return cv;
+    }
+
+    // The item rows of the form under a saved document; every named item joins the item master
+    private void insertDocItems(SQLiteDatabase db, String table, String fk, long id) {
         for (ItemRow r : rows) {
             String itemText = r.desc.getText().toString().trim();
             if (!itemText.isEmpty()) {
@@ -3751,14 +3923,34 @@ public class MainActivity extends Activity implements Sync.Listener {
                     itemSuggestionCache = null;
                 }
             }
-            ContentValues iv = new ContentValues(); iv.put("invoice_id", id); iv.put("sl_no", Integer.parseInt(r.slNo.getText().toString()));
+            ContentValues iv = new ContentValues(); iv.put(fk, id); iv.put("sl_no", Integer.parseInt(r.slNo.getText().toString()));
             iv.put("particulars", r.desc.getText().toString()); iv.put("hsn", r.hsnSac.getText().toString()); iv.put("gst_rate", r.gst.value());
             iv.put("qty", r.qtyVal()); iv.put("uqc", r.uqc.value()); iv.put("rate", r.rateVal()); iv.put("amount", r.amountVal());
             iv.put("sub_serial_no", r.subSerialNo);
             iv.put("sub_description", r.subDescription);
             iv.put("sub_other_info", r.subOtherInfo);
-            db.insert("invoice_items", null, iv);
+            db.insert(table, null, iv);
         }
+    }
+
+    /** Stores the delivery challan on screen. It uses no invoice of a pack, but needs a running subscription or pack. */
+    private boolean saveChallan() {
+        String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return false;
+        if (!Subscription.isActive(this, userId)) { Toast.makeText(this, "Your subscription has ended. Renew to continue.", Toast.LENGTH_LONG).show(); showSubscriptionDialog(false); return false; }
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        String linked = challanInvoiceNo;
+        Cursor old = db.query("challans", new String[]{"id", "invoice_no"}, "challan_no=?", new String[]{no}, null, null, null);
+        while (old.moveToNext()) {
+            db.delete("challan_items", "challan_id=?", new String[]{String.valueOf(old.getLong(0))});
+            if (linked.isEmpty() && !old.isNull(1)) linked = old.getString(1);
+        }
+        old.close();
+        db.delete("challans", "challan_no=?", new String[]{no});
+        ContentValues cv = docFormValues(); cv.put("challan_no", no); cv.put("invoice_no", linked);
+        long id = db.insert("challans", null, cv);
+        insertDocItems(db, "challan_items", "challan_id", id);
+        challanInvoiceNo = linked;
+        remember("challan:" + no);
         return true;
     }
 
@@ -3853,18 +4045,21 @@ public class MainActivity extends Activity implements Sync.Listener {
         return uri;
     }
 
-    // Delivery challan uses the same form data but is not a sale, so it is not saved to the sales register
+    // Delivery challan for an invoice uses the same form data but is not a sale, so it is not saved to the sales
+    // register; on the challan screen the challan itself is saved first
     private void createChallanPdf() {
         try {
             String no = invoiceNo.getText().toString().trim();
+            if (editingChallan) { if (!saveChallan()) return; refreshChallanStatus(); }
             Uri uri = writePdfToDownloads(renderPages(true), pdfName("DC", no));
             if (uri != null) {
-                new AlertDialog.Builder(this)
+                AlertDialog.Builder b = new AlertDialog.Builder(this)
                         .setTitle("Delivery Challan " + no + " Saved")
                         .setMessage("Delivery challan PDF saved to Downloads/BlitzBook.")
                         .setPositiveButton("Print / Share PDF", (dialog, which) -> sharePdf(uri))
-                        .setNegativeButton("Close", null)
-                        .show();
+                        .setNegativeButton("Close", null);
+                if (editingChallan && challanInvoiceNo.isEmpty()) b.setNeutralButton("Make Invoice", (dialog, which) -> makeInvoiceFromChallan(no));
+                b.show();
             }
         } catch (Exception e) { Toast.makeText(this, "PDF error: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
@@ -5474,6 +5669,12 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void stepInvoiceNumber(int delta) {
         String s = invoiceNo.getText().toString().trim();
         if (s.isEmpty()) { ensureInvoiceNumber(); return; }
+        if (editingChallan) {
+            Matcher m = Pattern.compile("^(.*?)(\\d+)\\s*$").matcher(s);
+            if (m.matches()) { long n = Math.max(1, Long.parseLong(m.group(2)) + delta); invoiceNo.setText(m.group(1) + String.format(Locale.US, "%0" + m.group(2).length() + "d", n)); }
+            else invoiceNo.setText(nextChallanPreview());
+            return;
+        }
         long current = parseInvoiceCounter(invoiceFormatStr, s);
         if (current >= 0) {
             invoiceNo.setText(formatInvoiceNo(invoiceFormatStr, Math.max(1, current + delta)));
@@ -5573,8 +5774,10 @@ public class MainActivity extends Activity implements Sync.Listener {
         return exists;
     }
 
+    // Next number for the open screen: a challan number in challan mode, else the next invoice number
+    private String nextInvoicePreview() { return editingChallan ? nextChallanPreview() : nextSalesInvoiceNo(); }
     // Next number = highest saved invoice in the current format + 1 (restarts each FY when the format uses {FY})
-    private String nextInvoicePreview() {
+    private String nextSalesInvoiceNo() {
         long max = 0;
         Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"invoice_no"}, null, null, null, null, null);
         while (c.moveToNext()) max = Math.max(max, parseInvoiceCounter(invoiceFormatStr, c.isNull(0) ? "" : c.getString(0)));
@@ -5609,7 +5812,13 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
         String paymentMode = paymentSpinner != null && paymentSpinner.getSelectedItem() != null ? paymentSpinner.getSelectedItem().toString() : "Cash";
         boolean isCredit = "Credit".equalsIgnoreCase(paymentMode) || "Cheque".equalsIgnoreCase(paymentMode);
-        if (isCredit && buyerBillTo.getText().toString().trim().isEmpty()) {
+        if (editingChallan && buyerBillTo.getText().toString().trim().isEmpty()) {
+            Toast.makeText(this, "The party the goods go to is required on a delivery challan", Toast.LENGTH_SHORT).show();
+            buyerBillTo.setError("Enter the party's name & address");
+            buyerBillTo.requestFocus();
+            return false;
+        }
+        if (isCredit && !editingChallan && buyerBillTo.getText().toString().trim().isEmpty()) {
             Toast.makeText(this, "Buyer details are mandatory for Credit sales", Toast.LENGTH_SHORT).show();
             buyerBillTo.setError("Enter buyer name & address for credit sale");
             buyerBillTo.requestFocus();
@@ -5644,7 +5853,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 r.qty.requestFocus();
                 return false;
             }
-            if (r.rateVal() <= 0) {
+            if (r.rateVal() <= 0 && !editingChallan) {
                 Toast.makeText(this, "Rate is required for item #" + (i + 1), Toast.LENGTH_SHORT).show();
                 EditText target = r.incToggle.isChecked() ? r.totalIncl : r.rate;
                 target.setError("Enter rate");
@@ -6721,6 +6930,15 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     private AlertDialog salesDialog;
 
+    // Delivery challan mode of the invoice screen: the same form reads and writes challans / challan_items under a
+    // DC number (DC-0001 onwards). A challan can be turned into an invoice, which it then names in invoice_no.
+    private boolean editingChallan = false;
+    private String challanInvoiceNo = "", fromChallanNo = "";
+    private LinearLayout invNoField, paymentField, statusField;
+    private TextView invSecTitle, challanStatus;
+    private Button printBtnRef, makeInvoiceBtn;
+    private AlertDialog challansDialog;
+
     // Every saved invoice, newest first: open it on the invoice screen, print it again, or delete it
     private void showSalesDialog() {
         LinearLayout rootBox = new LinearLayout(this);
@@ -6729,12 +6947,19 @@ public class MainActivity extends Activity implements Sync.Listener {
         LinearLayout topBtns = row();
         Button newBtn = new Button(this); newBtn.setText("+ New Invoice"); styleButton(newBtn, GREEN); newBtn.setTextSize(12);
         newBtn.setOnClickListener(v -> { salesDialog.dismiss(); showInvoiceView(); });
+        Button poBtn = new Button(this); poBtn.setText("Upload PO"); styleButton(poBtn, BLUE); poBtn.setTextSize(12);
+        poBtn.setOnClickListener(v -> showPoUploadDialog());
+        Button dcBtn = new Button(this); dcBtn.setText("Challans"); styleButton(dcBtn, NAVY); dcBtn.setTextSize(12);
+        dcBtn.setOnClickListener(v -> { salesDialog.dismiss(); showChallansDialog(); });
+        topBtns.addView(newBtn, weightLp()); topBtns.addView(poBtn, weightLp()); topBtns.addView(dcBtn, weightLp());
+        rootBox.addView(topBtns);
+        LinearLayout topBtns2 = row();
         Button cnBtn = new Button(this); cnBtn.setText("Credit Notes"); styleButton(cnBtn, SLATE); cnBtn.setTextSize(12);
         cnBtn.setOnClickListener(v -> showNotesDialog(Ledger.NOTE_CREDIT));
-        Button reportBtn = new Button(this); reportBtn.setText("Report"); styleButton(reportBtn, NAVY); reportBtn.setTextSize(12);
+        Button reportBtn = new Button(this); reportBtn.setText("Report"); styleButton(reportBtn, SLATE); reportBtn.setTextSize(12);
         reportBtn.setOnClickListener(v -> showSalesReport());
-        topBtns.addView(newBtn, weightLp()); topBtns.addView(cnBtn, weightLp()); topBtns.addView(reportBtn, weightLp());
-        rootBox.addView(topBtns);
+        topBtns2.addView(cnBtn, weightLp()); topBtns2.addView(reportBtn, weightLp());
+        rootBox.addView(topBtns2);
 
         // Every saved invoice, with the text a search may hit: number, date, buyer (name and address), phone,
         // GSTIN, state, payment mode and amount
@@ -6783,6 +7008,11 @@ public class MainActivity extends Activity implements Sync.Listener {
                 ImageButton printBtn = iconButton(R.drawable.ic_print, NAVY, "Print " + no);
                 printBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, true); });
                 row.addView(printBtn, iconLp(36, 4));
+                // A delivery challan for the invoice, straight to PDF
+                Button dcRowBtn = new Button(this); dcRowBtn.setText("DC"); styleButton(dcRowBtn, SLATE); dcRowBtn.setTextSize(11); dcRowBtn.setPadding(0, 0, 0, 0);
+                dcRowBtn.setContentDescription("Delivery challan for " + no);
+                dcRowBtn.setOnClickListener(v -> { salesDialog.dismiss(); printChallanFor(no); });
+                row.addView(dcRowBtn, iconLp(36, 4));
                 ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + no);
                 if (Subscription.isLite(this, userId)) delBtn.setVisibility(View.GONE);
                 delBtn.setOnClickListener(v -> { if (blockedByCreditNotes(no)) return; new AlertDialog.Builder(this).setTitle("Delete Invoice")
@@ -6794,6 +7024,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                             while (idc.moveToNext()) wdb.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(idc.getLong(0))});
                             idc.close();
                             wdb.delete("invoices", "invoice_no=?", new String[]{no});
+                            unlinkChallans(wdb, no);
                             Toast.makeText(this, "Invoice " + no + " deleted", Toast.LENGTH_SHORT).show();
                             showSalesDialog();
                         }).show(); });
@@ -6818,6 +7049,357 @@ public class MainActivity extends Activity implements Sync.Listener {
         remember("sales");
         salesDialog = new AlertDialog.Builder(this).setTitle("Sales").setView(rootBox).setPositiveButton("Close", null).show();
         salesDialog.setOnDismissListener(d -> { if (onDashboard) remember("dashboard"); });
+    }
+
+    // Every saved delivery challan, newest first: open, print, turn into an invoice (or see that invoice), delete
+    private void showChallansDialog() {
+        LinearLayout rootBox = new LinearLayout(this);
+        rootBox.setOrientation(LinearLayout.VERTICAL);
+        rootBox.setPadding(dp(12), dp(12), dp(12), dp(12));
+        LinearLayout topBtns = row();
+        Button newBtn = new Button(this); newBtn.setText("+ New Challan"); styleButton(newBtn, GREEN); newBtn.setTextSize(12);
+        newBtn.setOnClickListener(v -> { challansDialog.dismiss(); showChallanView(); });
+        Button salesBtn = new Button(this); salesBtn.setText("Sales"); styleButton(salesBtn, SLATE); salesBtn.setTextSize(12);
+        salesBtn.setOnClickListener(v -> { challansDialog.dismiss(); showSalesDialog(); });
+        topBtns.addView(newBtn, weightLp()); topBtns.addView(salesBtn, weightLp());
+        rootBox.addView(topBtns);
+
+        List<String[]> list = new ArrayList<>();
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        Cursor c = db.query("challans", new String[]{"id", "challan_no", "date", "buyer_name_addr", "invoice_no", "buyer_phone", "buyer_gstin"}, null, null, null, null, "id DESC");
+        while (c.moveToNext()) {
+            long id = c.getLong(0);
+            String no = c.isNull(1) ? "" : c.getString(1), date = c.isNull(2) ? "" : c.getString(2), nameAddr = c.isNull(3) ? "" : c.getString(3), inv = c.isNull(4) ? "" : c.getString(4).trim();
+            double qty = 0; int n = 0; StringBuilder names = new StringBuilder();
+            Cursor ic = db.query("challan_items", new String[]{"qty", "particulars"}, "challan_id=?", new String[]{String.valueOf(id)}, null, null, null);
+            while (ic.moveToNext()) { qty += ic.getDouble(0); n++; names.append(' ').append(ic.isNull(1) ? "" : ic.getString(1)); }
+            ic.close();
+            String hay = (no + " " + date + " " + nameAddr + " " + inv + " " + (c.isNull(5) ? "" : c.getString(5)) + " " + (c.isNull(6) ? "" : c.getString(6)) + names).toLowerCase(Locale.ROOT);
+            list.add(new String[]{no, date, nameAddr.split("\n")[0], formatInputNumber(qty) + " (" + n + " item" + (n == 1 ? "" : "s") + ")", inv, hay});
+        }
+        c.close();
+
+        EditText search = edit("Search by challan no, party, item, invoice no...", false);
+        search.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        search.setTextSize(13);
+        if (!list.isEmpty()) rootBox.addView(search);
+        TextView countTv = new TextView(this);
+        countTv.setTextSize(11.5f); countTv.setTextColor(0xFF607D8B); countTv.setPadding(dp(4), dp(4), dp(4), 0);
+        if (!list.isEmpty()) rootBox.addView(countTv);
+
+        LinearLayout listContainer = new LinearLayout(this);
+        listContainer.setOrientation(LinearLayout.VERTICAL);
+        listContainer.setPadding(0, dp(8), 0, 0);
+        Runnable fill = () -> {
+            listContainer.removeAllViews();
+            String[] words = search.getText().toString().trim().toLowerCase(Locale.ROOT).split("\\s+");
+            int shown = 0;
+            for (String[] d : list) {
+                boolean hit = true;
+                for (String w : words) if (!w.isEmpty() && !d[5].contains(w)) { hit = false; break; }
+                if (!hit) continue;
+                shown++;
+                final String no = d[0], inv = d[4];
+                LinearLayout row = row();
+                row.setPadding(0, dp(6), 0, dp(6));
+                TextView tv = new TextView(this);
+                tv.setText(String.format(Locale.US, "%s  ·  %s\n%s\nQty %s  ·  %s", no, d[1], d[2].isEmpty() ? "-" : titleCase(d[2]), d[3], inv.isEmpty() ? "Open" : "Invoice " + inv));
+                tv.setTextSize(12.5f);
+                row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+                ImageButton openBtn = iconButton(R.drawable.ic_edit, BLUE, "Open " + no);
+                openBtn.setOnClickListener(v -> { challansDialog.dismiss(); openChallan(no, false); });
+                row.addView(openBtn, iconLp(36, 4));
+                ImageButton printBtn = iconButton(R.drawable.ic_print, NAVY, "Print " + no);
+                printBtn.setOnClickListener(v -> { challansDialog.dismiss(); openChallan(no, true); });
+                row.addView(printBtn, iconLp(36, 4));
+                ImageButton invBtn = iconButton(R.drawable.ic_invoice, GREEN, inv.isEmpty() ? "Make invoice from " + no : "Open invoice " + inv);
+                invBtn.setOnClickListener(v -> { challansDialog.dismiss(); if (inv.isEmpty()) makeInvoiceFromChallan(no); else if (invoiceExists(inv)) openInvoice(inv, false); else Toast.makeText(this, "Invoice " + inv + " is not on this phone", Toast.LENGTH_LONG).show(); });
+                row.addView(invBtn, iconLp(36, 4));
+                ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + no);
+                delBtn.setOnClickListener(v -> {
+                    if (!inv.isEmpty()) { new AlertDialog.Builder(this).setTitle("Cannot Delete Challan").setMessage("Delivery challan " + no + " was turned into invoice " + inv + ". Delete that invoice first if the challan has to go.").setPositiveButton("OK", null).show(); return; }
+                    new AlertDialog.Builder(this).setTitle("Delete Delivery Challan").setMessage("Delete delivery challan " + no + "? This cannot be undone.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete", (dd, w) -> {
+                            SQLiteDatabase wdb = dbHelper.getWritableDatabase();
+                            Cursor idc = wdb.query("challans", new String[]{"id"}, "challan_no=?", new String[]{no}, null, null, null);
+                            while (idc.moveToNext()) wdb.delete("challan_items", "challan_id=?", new String[]{String.valueOf(idc.getLong(0))});
+                            idc.close();
+                            wdb.delete("challans", "challan_no=?", new String[]{no});
+                            Toast.makeText(this, "Delivery challan " + no + " deleted", Toast.LENGTH_SHORT).show();
+                            showChallansDialog();
+                        }).show(); });
+                row.addView(delBtn, iconLp(36, 4));
+                listContainer.addView(row);
+                listContainer.addView(divider());
+            }
+            if (list.isEmpty() || shown == 0) {
+                TextView emptyTv = new TextView(this);
+                emptyTv.setText(list.isEmpty() ? "No delivery challans yet. Tap \"+ New Challan\" to send goods out before the invoice, or use DC beside any invoice under Sales to print a challan for it." : "No challan matches the search.");
+                emptyTv.setTextSize(13); emptyTv.setPadding(dp(8), dp(16), dp(8), dp(16));
+                listContainer.addView(emptyTv);
+            }
+            countTv.setText(search.getText().toString().trim().isEmpty() ? list.size() + " challans" : shown + " of " + list.size() + " challans");
+        };
+        search.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { fill.run(); } });
+        fill.run();
+        ScrollView sc = new ScrollView(this);
+        sc.addView(listContainer);
+        rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(340)));
+        if (challansDialog != null && challansDialog.isShowing()) challansDialog.dismiss();
+        remember("challans");
+        challansDialog = new AlertDialog.Builder(this).setTitle("Delivery Challans").setView(rootBox).setPositiveButton("Close", null).show();
+        challansDialog.setOnDismissListener(d -> { if (onDashboard) remember("dashboard"); });
+    }
+
+    // ------------------------------------------------------------------ purchase orders -> sales invoices
+    // A CSV / Excel file in the BlitzBook template, one row per line of a purchase order with the PO number on every
+    // row (a blank PO number continues the row above). Each PO becomes one invoice: a PO number already on an invoice
+    // updates that invoice, the rest are inserted. Customers and items are upserted into the masters.
+    private static final int REQ_PO = 202;
+    private static class PoLine { String desc = "", hsn = "", uqc = "NOS", gst = ""; double qty, rate; }
+    private static class Po {
+        String no = "", date = "", customer = "", gstin = "", phone = "", email = "", address = "", state = "";
+        List<PoLine> items = new ArrayList<>();
+        String action = "new", reason = "", invoiceNo = ""; long invoiceId = -1;
+        // worked out for the preview
+        String buyerName = "", buyerState = "", contactName = ""; double total; List<PoLine> lines = new ArrayList<>();
+    }
+
+    private void showPoUploadDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Upload Purchase Orders")
+                .setMessage("Upload a CSV or Excel file of customer purchase orders in the BlitzBook template and every purchase order becomes a sales invoice.\n\n" +
+                        "- One row per item, with the PO Number on each row (a blank PO Number continues the row above).\n" +
+                        "- Rate is the unit price before GST; left blank, the item master price is used.\n" +
+                        "- A PO number already on an invoice updates that invoice; the others are inserted as new Credit invoices.\n" +
+                        "- New customers and items join the masters; known ones are updated.")
+                .setPositiveButton("Choose File", (d, w) -> {
+                    Intent intent = new Intent(Intent.ACTION_GET_CONTENT); intent.setType("*/*");
+                    startActivityForResult(Intent.createChooser(intent, "Select Purchase Orders File (CSV/Excel)"), REQ_PO);
+                })
+                .setNeutralButton("Template", (d, w) -> downloadPoTemplate())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void downloadPoTemplate() {
+        try {
+            String csv = "PO Number,PO Date,Customer,GSTIN,Phone,Email,Address,State,Item,HSN,Qty,UQC,Rate,GST%\n" +
+                    "PO-1001,02/10/2026,Ramesh Traders,37ABCDE1234F1ZZ,9876543210,ramesh@gmail.com,100 Feet Road Vijayawada,Andhra Pradesh,Steel Pipe 2 inch,7306,10,NOS,450,18\n" +
+                    "PO-1001,,,,,,,,Welding Rods,8311,5,BOX,320,18\n" +
+                    "PO-1002,02/10/2026,Suresh Enterprises,36XYZAB5678G2ZY,9123456789,suresh@gmail.com,MG Road Hyderabad,Telangana,Office Chair,9401,4,NOS,3200,18\n";
+            String fn = "BlitzBook_PurchaseOrders_Template.csv";
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.Downloads.DISPLAY_NAME, fn);
+            v.put(MediaStore.Downloads.MIME_TYPE, "text/csv");
+            v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            if (uri != null) {
+                try (OutputStream out = getContentResolver().openOutputStream(uri)) { out.write(csv.getBytes(StandardCharsets.UTF_8)); }
+                Toast.makeText(this, "Template saved to Downloads: " + fn, Toast.LENGTH_LONG).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Template Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // dd/MM/yyyy from what a sheet may hold: an Excel serial, an ISO date, or d/m/y with any separator
+    private static String poDate(String v) {
+        v = v == null ? "" : v.trim(); if (v.isEmpty()) return "";
+        if (v.matches("\\d{5}")) { Calendar cal = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")); cal.clear(); cal.set(1899, Calendar.DECEMBER, 30); cal.add(Calendar.DATE, Integer.parseInt(v)); return String.format(Locale.US, "%02d/%02d/%04d", cal.get(Calendar.DATE), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.YEAR)); }
+        Matcher m = Pattern.compile("^(\\d{4})-(\\d{1,2})-(\\d{1,2})").matcher(v);
+        if (m.find()) return String.format(Locale.US, "%02d/%02d/%s", Integer.parseInt(m.group(3)), Integer.parseInt(m.group(2)), m.group(1));
+        m = Pattern.compile("^(\\d{1,2})[/.-](\\d{1,2})[/.-](\\d{2,4})$").matcher(v);
+        if (m.find()) return String.format(Locale.US, "%02d/%02d/%s", Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), m.group(3).length() == 2 ? "20" + m.group(3) : m.group(3));
+        return v;
+    }
+    private static double numOf(String s) { try { return Double.parseDouble(s.trim().replace(",", "")); } catch (Exception e) { return 0; } }
+
+    private List<Po> parsePurchaseOrders(List<String[]> rows) throws Exception {
+        if (rows.isEmpty()) throw new Exception("The file is empty");
+        String[] head = rows.get(0); Map<String, Integer> at = new HashMap<>();
+        for (int i = 0; i < head.length; i++) {
+            String h = head[i].toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
+            if (!at.containsKey("ponumber") && (h.startsWith("ponum") || h.startsWith("pono") || h.equals("po"))) at.put("ponumber", i);
+            else if (!at.containsKey("podate") && h.startsWith("podat")) at.put("podate", i);
+            else if (!at.containsKey("gstin") && h.startsWith("gstin")) at.put("gstin", i);
+            else if (!at.containsKey("gst") && h.startsWith("gst")) at.put("gst", i);
+            else for (String c : new String[]{"customer", "phone", "email", "address", "state", "item", "hsn", "qty", "uqc", "rate"}) if (!at.containsKey(c) && h.startsWith(c)) { at.put(c, i); break; }
+        }
+        if (!at.containsKey("ponumber") || !at.containsKey("item") || !at.containsKey("qty")) throw new Exception("The first row must carry the template headings: PO Number, PO Date, Customer, GSTIN, Phone, Email, Address, State, Item, HSN, Qty, UQC, Rate, GST%. Use Template under Upload PO.");
+        List<Po> pos = new ArrayList<>(); Map<String, Po> byNo = new HashMap<>(); Po cur = null;
+        for (int r = 1; r < rows.size(); r++) {
+            String[] row = rows.get(r);
+            java.util.function.Function<String, String> g = (k) -> { Integer i = at.get(k); return i != null && i < row.length && row[i] != null ? row[i].trim() : ""; };
+            String no = g.apply("ponumber");
+            if (!no.isEmpty()) { cur = byNo.get(no.toLowerCase(Locale.ROOT)); if (cur == null) { cur = new Po(); cur.no = no; byNo.put(no.toLowerCase(Locale.ROOT), cur); pos.add(cur); } }
+            if (cur == null) continue;
+            if (cur.date.isEmpty()) cur.date = g.apply("podate");
+            if (cur.customer.isEmpty()) cur.customer = g.apply("customer");
+            if (cur.gstin.isEmpty()) cur.gstin = g.apply("gstin");
+            if (cur.phone.isEmpty()) cur.phone = g.apply("phone");
+            if (cur.email.isEmpty()) cur.email = g.apply("email");
+            if (cur.address.isEmpty()) cur.address = g.apply("address");
+            if (cur.state.isEmpty()) cur.state = g.apply("state");
+            String item = g.apply("item"); if (item.isEmpty()) continue;
+            PoLine l = new PoLine(); l.desc = item; l.hsn = g.apply("hsn"); l.qty = numOf(g.apply("qty"));
+            String uqc = g.apply("uqc").toUpperCase(Locale.ROOT); if (!uqc.isEmpty()) l.uqc = uqc;
+            l.rate = numOf(g.apply("rate")); l.gst = g.apply("gst").replace("%", "").trim();
+            cur.items.add(l);
+        }
+        return pos;
+    }
+
+    // What each purchase order will do (new invoice, update of the invoice carrying its PO number, or skip with the
+    // reason), with its lines completed from the item master and its total worked out for the preview
+    private void planPurchaseOrders(List<Po> pos) {
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        for (Po po : pos) {
+            String gstin = po.gstin.toUpperCase(Locale.ROOT);
+            if (!gstin.isEmpty() && !isValidGstin(gstin)) { po.action = "skip"; po.reason = "Invalid GSTIN " + gstin; continue; }
+            List<PoLine> items = new ArrayList<>(); for (PoLine l : po.items) if (!l.desc.isEmpty() && l.qty > 0) items.add(l);
+            if (items.isEmpty()) { po.action = "skip"; po.reason = "No item with a quantity"; continue; }
+            // The customer: by GSTIN, then by name
+            String cName = "", cAddr = "", cPhone = "", cEmail = "", cGstin = "", cState = "";
+            Cursor c = null;
+            if (!gstin.isEmpty()) c = db.query("contacts", null, "UPPER(gstin)=?", new String[]{gstin}, null, null, null);
+            if ((c == null || !c.moveToFirst()) && !po.customer.isEmpty()) { if (c != null) c.close(); c = db.query("contacts", null, "LOWER(name)=LOWER(?)", new String[]{po.customer}, null, null, null); }
+            if (c != null && c.moveToFirst()) { cName = getString(c, "name"); cAddr = getString(c, "address"); cPhone = getString(c, "phone"); cEmail = getString(c, "email"); cGstin = getString(c, "gstin"); cState = getString(c, "state"); }
+            if (c != null) c.close();
+            String name = !po.customer.isEmpty() ? po.customer : cName;
+            if (name.isEmpty()) { po.action = "skip"; po.reason = "No customer name"; continue; }
+            String address = !po.address.isEmpty() ? po.address : cAddr, phone = !po.phone.isEmpty() ? po.phone : cPhone, email = (!po.email.isEmpty() ? po.email : cEmail).toLowerCase(Locale.ROOT);
+            if (!phone.matches("[6-9]\\d{9}")) phone = "";
+            if (!email.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}")) email = "";
+            int si = matchStateIndex(po.state, gstin); if (si < 0) si = matchStateIndex(cState, cGstin); if (si < 0) si = matchStateIndex("", sellerStateCode());
+            po.contactName = name; po.buyerName = name + (address.isEmpty() ? "" : "\n" + address); po.buyerState = si >= 0 ? STATES[si] : STATES[0];
+            po.gstin = !gstin.isEmpty() ? gstin : cGstin; po.phone = phone; po.email = email; po.address = address;
+            // Lines completed from the item master: HSN, GST and the price before GST when the PO gives none
+            po.lines.clear(); double taxable = 0, gstAmt = 0; boolean intra = po.buyerState.contains("(" + sellerStateCode() + ")");
+            for (PoLine l : items) {
+                Cursor m = db.query("items_master", null, "LOWER(item_name)=LOWER(?)", new String[]{l.desc}, null, null, null);
+                String mHsn = "", mGst = "", mName = ""; double mRate = 0;
+                if (m.moveToFirst()) { mName = getString(m, "item_name"); mHsn = getString(m, "hsn"); mGst = getString(m, "gst_rate"); mRate = getDouble(m, "rate"); }
+                m.close();
+                PoLine x = new PoLine();
+                x.desc = mName.isEmpty() ? l.desc : mName;
+                x.gst = !l.gst.isEmpty() ? formatInputNumber(numOf(l.gst)) : !mGst.isEmpty() ? mGst : "18";
+                x.hsn = !l.hsn.isEmpty() ? l.hsn : !mHsn.isEmpty() ? mHsn : hsnFor(l.desc);
+                x.qty = l.qty; x.uqc = l.uqc;
+                x.rate = l.rate > 0 ? l.rate : mRate > 0 ? exclRate(mRate, x.gst) : 0;
+                if (x.rate <= 0) { po.action = "skip"; po.reason = "No rate for \"" + x.desc + "\" and no price in the item master"; break; }
+                double amount = x.qty * x.rate, g = chargesGst() ? numOf(x.gst) : 0;
+                taxable += amount; gstAmt += amount * g / 100.0;
+                po.lines.add(x);
+            }
+            if (po.action.equals("skip")) continue;
+            po.total = Math.round(taxable + gstAmt);
+            // A PO number already on an invoice: that invoice is updated (unless an invoice pack has made it final)
+            Cursor ex = db.query("invoices", new String[]{"id", "invoice_no"}, "LOWER(order_no)=LOWER(?)", new String[]{po.no}, null, null, "id");
+            if (ex.moveToFirst()) {
+                po.invoiceId = ex.getLong(0); po.invoiceNo = ex.isNull(1) ? "" : ex.getString(1); po.action = "update";
+                if (!Subscription.isTimeActive(this, userId) && Subscription.invoiceQuota(this, userId) > 0) { po.action = "skip"; po.reason = "Invoice " + po.invoiceNo + " is final on an invoice pack"; }
+            }
+            ex.close();
+        }
+    }
+
+    // Well-known item names carry their HSN; blank when the name is not known
+    private String hsnFor(String name) {
+        String n = name.toLowerCase(Locale.ROOT);
+        for (Map.Entry<String, String> e : HSN_MAP.entrySet()) if (n.contains(e.getKey().toLowerCase(Locale.ROOT))) return e.getValue();
+        return "";
+    }
+
+    private int[] applyPurchaseOrders(List<Po> pos) {
+        int created = 0, updated = 0, skipped = 0;
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        for (Po po : pos) {
+            if (po.action.equals("new") && !Subscription.isTimeActive(this, userId) && !Subscription.canAddInvoice(this, userId)) { po.action = "skip"; po.reason = "Invoice pack used up"; }
+            if (po.action.equals("skip")) { skipped++; continue; }
+            boolean intra = po.buyerState.contains("(" + sellerStateCode() + ")");
+            double taxable = 0, cg = 0, sg = 0, ig = 0;
+            for (PoLine l : po.lines) { double amount = l.qty * l.rate, g = chargesGst() ? numOf(l.gst) : 0; taxable += amount; if (intra) { cg += amount * (g / 2.0) / 100.0; sg += amount * (g / 2.0) / 100.0; } else ig += amount * g / 100.0; }
+            double total = taxable + cg + sg + ig, rounded = Math.round(total);
+            ContentValues cv = new ContentValues();
+            cv.put("buyer_name_addr", po.buyerName); cv.put("buyer_phone", po.phone); cv.put("buyer_email", po.email); cv.put("buyer_gstin", po.gstin); cv.put("buyer_state", po.buyerState);
+            cv.put("same_as_billing", 1); cv.put("consignee_name_addr", po.buyerName); cv.put("consignee_phone", po.phone); cv.put("consignee_email", po.email); cv.put("consignee_gstin", po.gstin); cv.put("consignee_state", po.buyerState);
+            cv.put("order_no", po.no); if (!poDate(po.date).isEmpty()) cv.put("order_date", poDate(po.date)); cv.put("others_checked", 1);
+            cv.put("rcm", 0); cv.put("taxable_value", taxable); cv.put("cgst", cg); cv.put("sgst", sg); cv.put("igst", ig);
+            cv.put("grand_total", total); cv.put("rounded_total", rounded); cv.put("amount_words", toIndianWords((long) rounded));
+            long id;
+            if (po.action.equals("update")) {
+                id = po.invoiceId;
+                db.update("invoices", cv, "id=?", new String[]{String.valueOf(id)});
+                db.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(id)});
+                updated++;
+            } else {
+                String no = nextSalesInvoiceNo();
+                cv.put("invoice_no", no); cv.put("date", today()); cv.put("payment_mode", "Credit");
+                cv.put("destination", ""); cv.put("vehicle", ""); cv.put("transporter", ""); cv.put("vehicle_number", ""); cv.put("delivery_challan", ""); cv.put("ref_no", ""); cv.put("additional_info", "");
+                id = db.insert("invoices", null, cv);
+                Subscription.useInvoice(this, userId);
+                if (Subscription.isLite(this, userId) || Subscription.invoiceQuota(this, userId) > 0) prefs.edit().putBoolean("pack_inv_" + userId + "_" + no, true).apply();
+                po.invoiceNo = no; created++;
+            }
+            int sl = 1;
+            for (PoLine l : po.lines) {
+                ContentValues iv = new ContentValues(); iv.put("invoice_id", id); iv.put("sl_no", sl++);
+                iv.put("particulars", l.desc); iv.put("hsn", l.hsn); iv.put("gst_rate", l.gst); iv.put("qty", l.qty); iv.put("uqc", l.uqc); iv.put("rate", l.rate); iv.put("amount", l.qty * l.rate);
+                iv.put("sub_serial_no", ""); iv.put("sub_description", ""); iv.put("sub_other_info", "");
+                db.insert("invoice_items", null, iv);
+                ContentValues mv = new ContentValues(); mv.put("item_name", l.desc); mv.put("hsn", l.hsn); mv.put("gst_rate", l.gst); mv.put("hidden", 0);
+                if (db.update("items_master", mv, "LOWER(item_name)=LOWER(?)", new String[]{l.desc}) == 0) { mv.put("rate", inclPrice(l.rate, l.gst)); db.insert("items_master", null, mv); itemSuggestionCache = null; }
+            }
+            // The customer: a known one takes the PO's details, a new one is added
+            ContentValues cc = new ContentValues(); cc.put("name", po.contactName); cc.put("state", po.buyerState); cc.put("type", "Customer");
+            if (!po.address.isEmpty()) cc.put("address", po.address.toUpperCase(Locale.ROOT)); if (!po.phone.isEmpty()) cc.put("phone", po.phone); if (!po.email.isEmpty()) cc.put("email", po.email); if (!po.gstin.isEmpty()) cc.put("gstin", po.gstin);
+            int n = !po.gstin.isEmpty() ? db.update("contacts", cc, "UPPER(gstin)=?", new String[]{po.gstin}) : 0;
+            if (n == 0 && db.update("contacts", cc, "LOWER(name)=LOWER(?)", new String[]{po.contactName}) == 0) { cc.put("address", po.address.toUpperCase(Locale.ROOT)); cc.put("phone", po.phone); cc.put("email", po.email); cc.put("gstin", po.gstin); db.insert("contacts", null, cc); }
+        }
+        if (buyerBillTo != null) setupAutoComplete(buyerBillTo);
+        if (consignee != null) setupAutoComplete(consignee);
+        return new int[]{created, updated, skipped};
+    }
+
+    private void importPurchaseOrdersFromUri(Uri uri) {
+        try {
+            byte[] bytes;
+            try (InputStream is = getContentResolver().openInputStream(uri)) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192]; int n;
+                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                bytes = bos.toByteArray();
+            }
+            if (bytes.length > 1 && (bytes[0] & 0xFF) == 0xD0 && (bytes[1] & 0xFF) == 0xCF) { Toast.makeText(this, "Old Excel (.xls) format is not supported. Save the file as .xlsx or .csv and try again.", Toast.LENGTH_LONG).show(); return; }
+            List<String[]> rowsIn = bytes.length > 1 && bytes[0] == 'P' && bytes[1] == 'K' ? readXlsxRows(bytes) : readCsvRows(new String(bytes, StandardCharsets.UTF_8));
+            List<Po> pos = parsePurchaseOrders(rowsIn);
+            if (pos.isEmpty()) { Toast.makeText(this, "No purchase orders found: every row needs a PO Number, an Item and a Qty.", Toast.LENGTH_LONG).show(); return; }
+            planPurchaseOrders(pos);
+            int todo = 0; for (Po po : pos) if (!po.action.equals("skip")) todo++;
+            LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(16), dp(8), dp(16), 0);
+            TextView head = new TextView(this); head.setText(pos.size() + " purchase order" + (pos.size() == 1 ? "" : "s") + " in the file"); head.setTextSize(13); head.setPadding(0, 0, 0, dp(8));
+            box.addView(head);
+            for (Po po : pos) {
+                TextView tv = new TextView(this); tv.setTextSize(12.5f); tv.setPadding(0, dp(6), 0, dp(6));
+                String what = po.action.equals("new") ? "New invoice" : po.action.equals("update") ? "Update invoice " + po.invoiceNo : "Skip: " + po.reason;
+                tv.setText(po.no + (po.date.isEmpty() ? "" : "  ·  " + poDate(po.date)) + "\n" + (po.contactName.isEmpty() ? po.customer.isEmpty() ? "-" : po.customer : po.contactName) + "  ·  " + po.items.size() + " item" + (po.items.size() == 1 ? "" : "s") + (po.action.equals("skip") ? "" : "  ·  " + money(po.total)) + "\n" + what);
+                tv.setTextColor(po.action.equals("skip") ? 0xFFC62828 : 0xFF263238);
+                box.addView(tv); box.addView(divider());
+            }
+            ScrollView sc = new ScrollView(this); sc.addView(box);
+            AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("Upload Purchase Orders").setView(sc).setNegativeButton("Cancel", null);
+            if (todo > 0) b.setPositiveButton(todo == 1 ? "Create / update 1 invoice" : "Create / update " + todo + " invoices", (d, w) -> {
+                int[] r = applyPurchaseOrders(pos);
+                Toast.makeText(this, r[0] + " invoice" + (r[0] == 1 ? "" : "s") + " created, " + r[1] + " updated" + (r[2] > 0 ? ", " + r[2] + " skipped" : ""), Toast.LENGTH_LONG).show();
+                if (sync != null) sync.now();
+                showSalesDialog();
+            });
+            b.show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Purchase order upload error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     // Loads a saved invoice on the invoice screen; with print, the paper picker opens straight away
