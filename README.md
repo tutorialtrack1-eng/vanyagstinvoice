@@ -22,7 +22,9 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 
 ## Web portal and sync
 
-- `webportal/` is the browser version with every screen of the app (see `webportal/README.md`).
+- `webportal/` is the browser version with every screen of the app (see `webportal/README.md`). It installs as
+  an app on iPhone / iPad (Safari → Add to Home Screen) and in Chrome; `ios/` holds the native iPhone / iPad
+  shell for the App Store (see `ios/README.md`).
 - With a Supabase project (free) the app and the portal share accounts and books live, and the OTPs for
   registration and password reset go out by email (and SMS, with an SMS provider): `server/supabase/README.md`.
   Alternatively `server/` is a small Node server doing the same (`server/README.md`). Without either, data

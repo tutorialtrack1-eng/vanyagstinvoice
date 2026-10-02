@@ -92,6 +92,15 @@ This device only; clicking it opens the Sync dialog with the server address. See
 taken here restores in the app and vice versa. Without sync the data is stored only in the browser you use,
 so export regularly.
 
+## Installing the portal as an app
+
+`manifest.webmanifest`, `icons/` and the service worker `sw.js` make the portal installable: Chrome (Android and
+desktop) offers *Install app*, and on iPhone / iPad Safari's *Share → Add to Home Screen* adds it to the home
+screen, where it opens full screen with the same login and books. Once opened it works offline too (the books
+are in the browser's storage; sync catches up when online). The **Download App** button in the top bar offers
+the Android APK and these iPhone / iPad steps. The native iPhone / iPad app (a shell around this portal) is in
+`../ios/`; `js/native.js` is the bridge it uses for printing and downloads.
+
 ## Activation codes
 
 The plans are a monthly plan (30 days), a yearly plan (365), a 2 years plan (730) and a 5 years plan (1825).

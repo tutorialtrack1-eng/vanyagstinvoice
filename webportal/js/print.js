@@ -420,8 +420,9 @@
       '<table class="sheet"><thead><tr><td><div class="mt"></div></td></tr></thead><tbody><tr><td>' + body + '</td></tr></tbody><tfoot><tr><td><div class="mb"></div></td></tr></tfoot></table></body></html>';
   }
 
-  // Sends a finished document to the browser's print dialog
+  // Sends a finished document to the browser's print dialog (inside the iOS app: to the app, which shares it as a PDF)
   function show(src) {
+    if (global.Native && Native.ios) { const m = /<title>([^<]*)<\/title>/.exec(src); if (Native.post('print', { title: m ? m[1] : 'Document', html: src })) return; }
     let f = document.getElementById('printFrame');
     if (!f) { f = document.createElement('iframe'); f.id = 'printFrame'; f.title = 'Print'; f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'; document.body.appendChild(f); }
     f.onload = () => {

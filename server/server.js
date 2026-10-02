@@ -233,7 +233,7 @@ const api = {
 };
 
 // ------------------------------------------------------------ http
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.csv': 'text/csv', '.woff2': 'font/woff2', '.apk': 'application/vnd.android.package-archive' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.csv': 'text/csv', '.woff2': 'font/woff2', '.apk': 'application/vnd.android.package-archive', '.webmanifest': 'application/manifest+json', '.ipa': 'application/octet-stream' };
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
 
 function send(res, status, obj) {

@@ -55,6 +55,8 @@
     dateVal(id, root) { return U.fromIso(UI.val(id, root)); },
     mark(id, bad, root) { const el = $('#' + id, root); if (el) el.classList.toggle('err', !!bad); if (bad && el) el.focus(); return !bad; },
     download(name, content, type) {
+      // Inside the iOS app the file goes to the share sheet (Save to Files, Mail, WhatsApp ...)
+      if (global.Native && Native.ios && typeof content === 'string' && Native.post('download', { name, content, type: type || 'application/octet-stream' })) return;
       const blob = new Blob([content], { type: type || 'application/octet-stream' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -158,8 +160,11 @@
   ];
   // Routes that open a dialog over the current screen: they never become the active link or the screen to redraw
   const DIALOGS = ['company', 'subscription', 'sync'];
-  // The Android app, served next to the portal
+  // The Android app, served next to the portal. The iPhone / iPad app: the App Store link once it is published
+  // (ios/README.md); until then the portal itself is installed from Safari as a web app.
   const APK_URL = 'BlitzBook.apk';
+  const IOS_APP_URL = '';
+  const PORTAL_URL = 'https://blitzbook.co.in';
   const BRAND = '<span class="logo">' + icon('bolt') + '</span><span>Blitz<b>Book</b></span>';
 
   const App = {
@@ -191,11 +196,12 @@
       $('#root').innerHTML =
         '<header class="appbar"><button class="brandmark" id="homeBtn" title="Dashboard">' + BRAND + '</button>' +
         '<nav class="nav" id="nav" aria-label="Main">' + NAV.map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('') + '</nav>' +
-        '<div class="bar-right"><a class="navlink dl" id="dlApp" href="' + APK_URL + '" download="BlitzBook.apk" title="Download the BlitzBook Android app">' + icon('download') + '<span>Download App</span></a>' +
+        '<div class="bar-right">' + (Native.ios ? '' : '<button class="navlink dl" id="dlApp" title="Get the BlitzBook app for Android or iPhone / iPad">' + icon('download') + '<span>Download App</span></button>') +
         '<button class="cochip" id="barCo" title="Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
         '<button class="navlink logout" id="logoutBtn" title="Logout">' + icon('logout') + '<span>Logout</span></button></div></header>' +
         '<main class="main" id="view"></main>';
       $('#homeBtn').onclick = () => this.go('dashboard');
+      if ($('#dlApp')) $('#dlApp').onclick = () => GetApp.menu();
       $('#barCo').onclick = () => this.go('company');
       $('#logoutBtn').onclick = () => UI.confirm('Logout', 'Do you want to logout?', () => this.logout(), 'Logout');
       $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
@@ -243,6 +249,27 @@
       clearTimeout(this.subTimer);
       if (Sub.isActive()) { const left = Sub.expiresAt() - Date.now(); this.subTimer = setTimeout(() => this.checkSubscription(), Math.max(1000, Math.min(left + 500, 6 * 3600 * 1000))); if ($('#subDlg.locked')) { $('#subDlg').remove(); this.go('dashboard'); } return; }
       Subscription.dialog(true);
+    }
+  };
+
+  // ------------------------------------------------------------ get the app
+  // Android: the APK served next to the portal. iPhone / iPad: the App Store app when published, otherwise the
+  // portal installed from Safari (Add to Home Screen), which runs full screen with the same login and books.
+  const GetApp = {
+    menu() {
+      UI.menu('Download App', ['Android app (APK)', 'iPhone / iPad'], (i) => i === 0 ? GetApp.android() : GetApp.ios());
+    },
+    android() {
+      const a = document.createElement('a'); a.href = APK_URL; a.download = 'BlitzBook.apk'; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 1000);
+      UI.alert('Android app', 'BlitzBook.apk is downloading. Open it on the phone to install (allow installing from this source if Android asks). Log in with the same mobile number or email and the books come down by sync.');
+    },
+    ios() {
+      const here = Native.installed && Native.isApple;
+      const body = (IOS_APP_URL ? '<p>BlitzBook for iPhone and iPad is on the App Store.</p><p><a class="btn blue" href="' + esc(IOS_APP_URL) + '" target="_blank" rel="noopener">Open in App Store</a></p><p>Or install the web app:</p>' : '<p>On iPhone and iPad BlitzBook installs from Safari as an app: it opens full screen from the home screen, keeps your login and books, and stays in step with the Android app and this portal by sync.</p>') +
+        (here ? '<p class="bold green">BlitzBook is already installed on this device.</p>' :
+          '<ol style="margin:6px 0 0 18px;padding:0;line-height:1.7"><li>Open <b>' + esc(PORTAL_URL.replace(/^https?:\/\//, '')) + '</b> in <b>Safari</b> (not Chrome).</li><li>Tap the <b>Share</b> button (the square with an arrow).</li><li>Choose <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>' +
+          '<p class="hint">On Android or a computer, Chrome offers "Install app" from its menu for the same result.</p>');
+      UI.modal({ title: 'iPhone / iPad', body, buttons: [{ label: 'Close', cls: 'outline' }, { label: 'Copy link', onClick: () => { try { navigator.clipboard.writeText(PORTAL_URL); UI.toast('Link copied'); } catch (e) { UI.toast(PORTAL_URL); } return false; } }] });
     }
   };
 
@@ -649,5 +676,5 @@
   };
   App.routes.sync = () => SyncUI.dialog();
 
-  global.App = App; global.UI = UI; global.$ = $; global.$$ = $$; global.Company = Company; global.Subscription = Subscription; global.icon = icon;
+  global.App = App; global.UI = UI; global.$ = $; global.$$ = $$; global.Company = Company; global.Subscription = Subscription; global.GetApp = GetApp; global.icon = icon;
 })(window);

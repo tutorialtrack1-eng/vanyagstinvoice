@@ -1,0 +1,52 @@
+# BlitzBook for iPhone / iPad. Generates BlitzBook.xcodeproj with XcodeGen (brew install xcodegen; xcodegen generate).
+# The app is a native shell (SwiftUI + WKWebView) around the web portal at https://blitzbook.co.in, which already has
+# every screen of the Android app and shares its accounts and books through Supabase. What a web view cannot do by
+# itself - print / share a PDF, save an exported file, open WhatsApp or a UPI app - the shell does (PortalWebView.swift).
+name: BlitzBook
+options:
+  bundleIdPrefix: in.co.blitzbook
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Your Apple Developer team id (Xcode > Signing & Capabilities fills it in as well)
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+targets:
+  BlitzBook:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: in.co.blitzbook.app
+        PRODUCT_NAME: BlitzBook
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: BlitzBook
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIRequiresFullScreen: false
+        UIViewControllerBasedStatusBarAppearance: true
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        ITSAppUsesNonExemptEncryption: false
+        # The portal is an app-bound domain: this is what lets its service worker (offline shell) run inside WKWebView
+        WKAppBoundDomains: [blitzbook.co.in, cufdskrmhdenppoxfhnk.supabase.co]
+        NSCameraUsageDescription: BlitzBook uses the camera when you photograph a signature or a bill for the company profile.
+        NSPhotoLibraryUsageDescription: BlitzBook reads the photo you pick as the authorised signature.
+        LSApplicationQueriesSchemes: [whatsapp, upi, tel, sms, mailto]
