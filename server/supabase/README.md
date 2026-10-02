@@ -62,8 +62,7 @@ the portal and the app ask for an email address.
 key. The key is meant to be public: row-level security, not the key, protects the data.
 
 - Portal: put the URL in `DEFAULT_SERVER_URL` and the key in `SUPABASE_ANON_KEY` at the top of
-  `webportal/js/sync.js` before publishing, or enter both under **Export / Import → Sync settings** after
-  logging in.
+  `webportal/js/sync.js` before publishing (users have no sync screen; Export / Import shows the state).
 - App: put them in `SUPABASE_URL` / `SUPABASE_KEY` at the top of `Supabase.java` and the URL in
   `Sync.SERVER_URL` before building, or enter both under **Sync** in the app (also from the login screen).
 

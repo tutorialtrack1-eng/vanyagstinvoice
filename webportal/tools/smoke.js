@@ -335,7 +335,6 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   // top navigation: the strip scrolls sideways on phones, the tapped link becomes the active one
   await page.click('#nav [data-go=stock]'); await page.waitForTimeout(300); await page.screenshot({ path: OUT + '/23-m-nav.png' });
   check('navigation marks the open screen', (await page.textContent('#nav .navlink.active')) === 'Stock in Hand');
-  await page.evaluate(() => App.go('sync')); await page.screenshot({ path: OUT + '/24-m-sync.png' }); await page.click('.modal .mf .btn.outline');
   check('no sideways scroll on a phone', !(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)));
 
   await browser.close();

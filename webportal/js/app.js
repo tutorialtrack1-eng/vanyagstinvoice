@@ -576,10 +576,9 @@
     const root = App.view(App.header('Export / Import Data') +
       '<div class="card white"><div class="hd">Backup</div><div class="bd"><p>Export saves your company profile, items, contacts, invoices, purchases, expenses, journal and notes as one backup file. Import restores a backup file and replaces the data currently here.</p>' +
       '<p>The file is the same one the BlitzBook app writes and reads: a backup taken here restores in the app (Export / Import &rsaquo; Import Backup), and a backup taken in the app restores here.</p>' +
-      '<div class="btnrow"><button class="btn green" id="bExp">Export Backup</button><button class="btn red" id="bImp">Import Backup</button><button class="btn outline" id="bSync">Sync settings</button><span class="hint">Sync: <b id="syncState">' + esc(Sync.statusText()) + '</b></span></div>' +
+      '<div class="btnrow"><button class="btn green" id="bExp">Export Backup</button><button class="btn red" id="bImp">Import Backup</button><span class="hint">Sync: <b id="syncState">' + esc(Sync.statusText()) + '</b></span></div>' +
       '<div class="hint">' + (Sync.status === 'idle' || Sync.status === 'syncing' ? 'These books are also kept on the sync server and in the app. A backup file is still worth keeping.' : 'Data is stored in this browser only. Export regularly and keep the file safe, or import it on another device to move your books.') + '</div></div></div>');
     App.wireBack(root);
-    $('#bSync').onclick = () => App.go('sync');
     $('#bExp').onclick = () => { UI.download('BlitzBook_Backup_' + U.stamp() + '.json', JSON.stringify(Store.exportAll()), 'application/json'); UI.toast('Backup downloaded. Keep this file safe.'); };
     $('#bImp').onclick = () => UI.confirm('Import Backup', 'Importing replaces all invoices, items, contacts and the company profile here with the data from the backup file' + (Sync.status === 'idle' ? ', and in the app once it syncs' : '') + '. This cannot be undone.\n\nTip: take an Export first if you want to keep the current data.', () => {
       UI.pickFile('.json,application/json,text/plain', (text) => {

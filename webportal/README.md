@@ -9,7 +9,7 @@ it the data lives in the browser's local storage.
 
 - `node server/server.js` and open <http://localhost:8080/> — the portal and the sync server together, or
 - double-click `index.html`, or serve the folder with any static server / web host. The portal then works
-  on its own; enter the sync server's address under **Sync** in the top bar to connect it.
+  on its own, or syncs with the Supabase project built into `js/sync.js`.
 
 Register with a mobile number and password. The OTP comes by email from Supabase Auth (see
 `server/supabase/README.md`) or by SMS and email from the sync server (`server/README.md`, *OTP delivery*);
@@ -79,8 +79,9 @@ Everything the app has:
 
 ## Sync with the app
 
-Enter the Supabase project URL and anon key under **Sync** (or build them into `js/sync.js`), the same ones
-as in the app; a BlitzBook sync server address works there too. Log in with the account you use in the app
+The Supabase project URL and anon key are built into `js/sync.js` (`DEFAULT_SERVER_URL`, `SUPABASE_ANON_KEY`),
+the same ones as in the app; a BlitzBook sync server address works there too. There is no sync screen for
+users: the state shows under Export / Import. Log in with the account you use in the app
 (or register here and log in there). Every entry, edit and
 deletion on one side appears on the other within a few seconds while both are online; offline work is
 sent when the connection returns. The status chip in the top bar shows Synced / Syncing / Offline /
