@@ -141,13 +141,25 @@
     cdnur.forEach(n => n.itms.forEach(x => addUnreg(n.pos, { txval: -x.itm_det.txval, iamt: -num(x.itm_det.iamt) })));
     b2cs.forEach(e => { if (e.sply_ty === 'INTER') addUnreg(e.pos, e); });
     const nilTotal = r2(nil.INTRB2B + nil.INTRB2C + nil.INTRAB2B + nil.INTRAB2C);
+    // Aggregate turnover, as the GST portal's file carries it: gt = the financial year before the period's,
+    // cur_gt = the period's financial year up to the end of the period (invoice values, net of credit notes)
+    const end = new Date(p.to), fyStart = new Date(end.getMonth() < 3 ? end.getFullYear() - 1 : end.getFullYear(), 3, 1).getTime();
+    const prevStart = new Date(new Date(fyStart).getFullYear() - 1, 3, 1).getTime();
+    const turnover = (a, b) => r2(Biz.invoices().filter(i => Books.inRange(i.date, a, b)).reduce((s, i) => s + (num(i.totals.rounded) || num(i.totals.grand)), 0) - Store.list('notes').filter(n => n.kind === 'CN' && Books.inRange(n.date, a, b)).reduce((s, n) => s + num(n.total), 0));
+    const gt = turnover(prevStart, fyStart - 1), curGt = turnover(fyStart, p.to);
     return { p, invs, cns, dns, purchases, expenses, challans, b2b: Array.from(b2b.values()), b2cl: Array.from(b2cl.values()), b2cs: Array.from(b2cs.values()), cdnr: Array.from(cdnr.values()), cdnur, nil, nilTotal, hsn: Array.from(hsn.values()),
-      out, rcm, cn, net, inRcm, itc, itcRcm, unreg: Array.from(unreg.values()).filter(u => u.txval > 0), count, warn, rows };
+      out, rcm, cn, net, inRcm, itc, itcRcm, unreg: Array.from(unreg.values()).filter(u => u.txval > 0), count, warn, rows, gt, curGt };
   }
 
   // ------------------------------------------------------------ the two files
+  /* The layout of the GST portal's own GSTR-1 file (returns_<date>_R1_<gstin>_offline_others_0.json): gstin, the
+     return period, filing type (M monthly / Q quarterly), aggregate turnover of the previous and the current
+     financial year, the supply tables, a document-issue table that lists all twelve document types (empty
+     ones included) and the date of the file. The portal adds its own checksum to a downloaded file; an
+     uploaded one carries none. */
   function gstr1(d, gstin) {
-    const j = { gstin, fp: d.p.fp, version: 'GST3.1.6', hash: 'hash' };
+    const t = new Date();
+    const j = { gstin, fp: d.p.fp, filing_typ: d.p.q ? 'Q' : 'M', gt: d.gt, cur_gt: d.curGt };
     if (d.b2b.length) j.b2b = d.b2b;
     if (d.b2cl.length) j.b2cl = d.b2cl;
     if (d.b2cs.length) j.b2cs = d.b2cs.map(e => Object.assign({ sply_ty: e.sply_ty, rt: e.rt, typ: 'OE', pos: e.pos, txval: e.txval }, e.sply_ty === 'INTRA' ? { camt: e.camt, samt: e.samt } : { iamt: e.iamt }, { csamt: 0 }));
@@ -155,8 +167,10 @@
     if (d.cdnur.length) j.cdnur = d.cdnur;
     if (d.nilTotal > 0) j.nil = { inv: ['INTRB2B', 'INTRB2C', 'INTRAB2B', 'INTRAB2C'].map(sply_ty => ({ sply_ty, nil_amt: d.nil[sply_ty], expt_amt: 0, ngsup_amt: 0 })) };
     if (d.hsn.length) j.hsn = { data: d.hsn.map((h, n) => ({ num: n + 1, hsn_sc: h.hsn_sc, desc: h.desc, uqc: h.uqc, qty: h.qty, txval: h.txval, rt: h.rt, iamt: h.iamt, camt: h.camt, samt: h.samt, csamt: 0 })) };
-    const docs = [[1, series(d.invs)], [5, series(d.cns)], [12, series(d.challans)]].filter(x => x[1]).map(x => ({ doc_num: x[0], docs: [Object.assign({ num: 1 }, x[1], { cancel: 0, net_issue: x[1].totnum })] }));
-    if (docs.length) j.doc_issue = { doc_det: docs };
+    // Table 13: every document type 1-12, the ones issued carrying their series (1 invoices, 5 credit notes, 12 delivery challans)
+    const issued = { 1: series(d.invs), 5: series(d.cns), 12: series(d.challans) };
+    j.doc_issue = { flag: 'N', doc_det: Array.from({ length: 12 }, (_, i) => { const s = issued[i + 1]; return { docs: s ? [Object.assign({ num: 1 }, s, { cancel: 0, net_issue: s.totnum })] : [], doc_num: i + 1 }; }) };
+    j.fil_dt = U.pad(t.getDate()) + '-' + U.pad(t.getMonth() + 1) + '-' + t.getFullYear();
     return j;
   }
   function gstr3b(d, gstin) {

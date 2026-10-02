@@ -159,7 +159,10 @@ GSTIN, missing HSN codes, B2C credit notes exceeding the sales). **GSTR-1 JSON**
 `GSTR1_<GSTIN>_<MMYYYY>.json` and `GSTR3B_<GSTIN>_<MMYYYY>.json` in the layout of the GST portal's Returns
 Offline Tool (open the file there, check and upload):
 
-- GSTR-1: `b2b` (registered buyers, invoice by invoice, rate-wise lines, reverse charge flagged), `b2cl`
+- GSTR-1, in the layout of the portal's own `returns_<date>_R1_<GSTIN>_offline_others_0.json` file: `gstin`,
+  `fp`, `filing_typ` (M or Q), `gt` and `cur_gt` (turnover of the previous and the current financial year from
+  the books), the supply tables, `doc_issue` with all twelve document types and `fil_dt`; then
+  `b2b` (registered buyers, invoice by invoice, rate-wise lines, reverse charge flagged), `b2cl`
   (inter-state invoices above ₹1,00,000 to unregistered buyers), `b2cs` (every other sale summed by state and
   rate, net of the credit notes against such sales), `cdnr` (credit notes to registered buyers), `cdnur`
   (credit notes against B2CL invoices), `nil` (0% lines by supply type), `hsn` (table 12 by HSN, rate and
