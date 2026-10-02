@@ -93,6 +93,22 @@ This device only; clicking it opens the Sync dialog with the server address. See
 taken here restores in the app and vice versa. Without sync the data is stored only in the browser you use,
 so export regularly.
 
+## Dashboard, ledger and search
+
+- The dashboard tiles (New Invoice, Purchases, Sales, Stock, Expense, Receipts, Payments, Journal, Customer,
+  Supplier, Reports) can be dragged into any order: with a mouse straight away, on a touch screen after
+  *Arrange* beside the heading. The order is kept per account in this browser (`tile_order`); *Reset order*
+  brings the standard order back.
+- **Party Ledger** (Reports menu, *Ledger* on a contact, *Supplier Ledger* under Purchases, *Party Ledger*
+  under Receipts & Payments): every bill, note, receipt and payment with one supplier or customer in date
+  order with a running balance, for a period or all dates, with Excel export, to reconcile with the party's
+  own statement (`Books.partyLedger`).
+- **Sales** has a search box: invoice number, date, party, phone, email, GSTIN, item name or amount; every
+  word typed has to match.
+- Quick item and item master prices are the price the customer pays, GST included ("Unit Price (inclusive of
+  tax)"); on the invoice the rate before GST is worked back out of it, so qty x rate x (1 + GST) lands on
+  the price again. The same in the app.
+
 ## Installing the portal as an app
 
 `manifest.webmanifest`, `icons/` and the service worker `sw.js` make the portal installable: Chrome (Android and

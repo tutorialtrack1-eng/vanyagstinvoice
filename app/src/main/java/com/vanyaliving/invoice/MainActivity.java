@@ -1004,9 +1004,26 @@ public class MainActivity extends Activity implements Sync.Listener {
         return priceTv;
     }
 
+    private String priceLabel() { return chargesGst() ? "Unit Price ₹ (inclusive of tax)" : "Unit Price ₹"; }
+
+    // Quick item and item master prices are what the customer pays, GST included. Invoice rows carry the rate
+    // before GST, so the GST is worked back out of the price (4 decimals, so qty x rate x (1 + GST) lands on the price).
+    private double exclRate(double price, String gstRate) {
+        double g = chargesGst() ? pct(gstRate) : 0;
+        return price > 0 && g > 0 ? Math.round(price / (1 + g / 100) * 10000) / 10000.0 : price;
+    }
+    private double inclPrice(double rate, String gstRate) { double g = chargesGst() ? pct(gstRate) : 0; return Math.round(rate * (1 + g / 100) * 100) / 100.0; }
+    private static double pct(String s) { try { return Double.parseDouble(String.valueOf(s).replace("%", "").trim()); } catch (Exception e) { return 0; } }
+    /** 2 decimals, or up to 4 when the rate needs them (a GST-inclusive price worked back). */
+    private static String fmtRate(double v) {
+        String s = String.format(Locale.US, "%.4f", v);
+        while (s.endsWith("0") && !s.endsWith(".00")) s = s.substring(0, s.length() - 1);
+        return s;
+    }
+
     private String quickPriceText(QuickMenuItem item, boolean gstOn) {
         String s = String.format(Locale.US, "₹ %.2f", item.rate);
-        if (gstOn) s += " · GST " + item.gstRate + "%";
+        if (gstOn) s += " incl. · GST " + item.gstRate + "%";
         return s;
     }
 
@@ -1021,7 +1038,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         Spinner sGst = spinner(GST_RATES);
         selectSpinner(sGst, item.gstRate);
         LinearLayout r = row();
-        r.addView(field("Unit Price ₹", ePrice), weightLp());
+        r.addView(field(priceLabel(), ePrice), weightLp());
         if (gstOn) r.addView(field("GST Rate %", sGst), weightLp());
         box.addView(r);
 
@@ -1088,13 +1105,21 @@ public class MainActivity extends Activity implements Sync.Listener {
 
         EditText eName = edit("Item Name *", false);
         eName.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        // Every category there is, as a drop-down that opens on tap (no typing needed); a new one can still be typed
         AutoCompleteTextView eCat = new AutoCompleteTextView(this);
-        eCat.setHint("e.g. Beverages"); eCat.setTextSize(14); eCat.setMinHeight(dp(48)); eCat.setThreshold(1);
+        eCat.setHint("Choose or type a category"); eCat.setTextSize(14); eCat.setMinHeight(dp(48)); eCat.setThreshold(1);
         eCat.setPadding(dp(12), dp(10), dp(12), dp(10)); eCat.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
         applyBoxBackground(eCat);
+        eCat.setCompoundDrawablesWithIntrinsicBounds(0, 0, android.R.drawable.arrow_down_float, 0);
         List<String> catOptions = new ArrayList<>(categories);
         catOptions.remove("All");
-        eCat.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_dropdown_item_1line, catOptions));
+        if (!catOptions.contains("Catalog")) catOptions.add("Catalog");
+        ArrayAdapter<String> catAdapter = new ArrayAdapter<>(this, android.R.layout.simple_dropdown_item_1line, catOptions);
+        eCat.setAdapter(catAdapter);
+        // Tapping or focusing the box lists every category, whatever is typed so far
+        Runnable showAll = () -> { catAdapter.getFilter().filter(null); eCat.post(eCat::showDropDown); };
+        eCat.setOnClickListener(v -> showAll.run());
+        eCat.setOnFocusChangeListener((v, has) -> { if (has) showAll.run(); });
         EditText eHsn = edit("HSN / SAC", false);
         eHsn.setInputType(InputType.TYPE_CLASS_NUMBER);
         EditText eCode = edit("e.g. SKU-101", false);
@@ -1123,7 +1148,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         r1.addView(field("HSN / SAC", eHsn), new LinearLayout.LayoutParams(0, -2, 1f));
         r1.addView(field("GST Rate %", sGst), new LinearLayout.LayoutParams(0, -2, 1f));
         box.addView(r1);
-        box.addView(field("Unit Price ₹", ePrice));
+        box.addView(field(priceLabel(), ePrice));
 
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
@@ -1525,7 +1550,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                         if (item.qty > 0) {
                             if (existing != null) {
                                 existing.qty.setText(String.valueOf(item.qty));
-                                existing.rate.setText(String.format(Locale.US, "%.2f", item.rate));
+                                existing.rate.setText(fmtRate(exclRate(item.rate, item.gstRate)));
                                 existing.gst.select(item.gstRate);
                             } else {
                                 ItemRow r = new ItemRow(MainActivity.this, rows.size() + 1);
@@ -1533,7 +1558,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                                 if (item.hsn != null && !item.hsn.isEmpty()) r.hsnSac.setText(item.hsn);
                                 r.gst.select(item.gstRate);
                                 r.qty.setText(String.valueOf(item.qty));
-                                r.rate.setText(String.format(Locale.US, "%.2f", item.rate));
+                                r.rate.setText(fmtRate(exclRate(item.rate, item.gstRate)));
                                 rows.add(r);
                                 itemsContainer.addView(r.view);
                             }
@@ -2606,7 +2631,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                     if (hsnCol >= 0) hsnSac.setText(c.getString(hsnCol));
                     if (gstCol >= 0) gst.select(c.getString(gstCol));
                     int rateCol = c.getColumnIndex("rate");
-                    if (rateCol >= 0 && !c.isNull(rateCol) && c.getDouble(rateCol) > 0 && rateVal() == 0) rate.setText(f(c.getDouble(rateCol)));
+                    if (rateCol >= 0 && !c.isNull(rateCol) && c.getDouble(rateCol) > 0 && rateVal() == 0) rate.setText(fmtRate(exclRate(c.getDouble(rateCol), gst.value())));
                     c.close();
                     updateAmounts();
                     recalc();
@@ -3408,7 +3433,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 masterIv.put("hidden", 0);
                 // Update in place so a customised price/category on the master item is kept
                 if (db.update("items_master", masterIv, "item_name=?", new String[]{itemText}) == 0) {
-                    masterIv.put("rate", r.rateVal());
+                    masterIv.put("rate", inclPrice(r.rateVal(), r.gst.value()));
                     db.insert("items_master", null, masterIv);
                     itemSuggestionCache = null;
                 }
@@ -4853,7 +4878,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 TextView tv = new TextView(this);
                 int codeCol = c.getColumnIndex("item_code");
                 String code = codeCol >= 0 && c.getString(codeCol) != null ? c.getString(codeCol).trim() : "";
-                tv.setText(String.format(Locale.US, "%s%s\nHSN: %s | GST: %s%% | ₹ %.2f%s", code.isEmpty() ? "" : "[" + code + "]  ", name, hsn == null ? "" : hsn, gst, price, cat.isEmpty() ? "" : " | " + cat));
+                tv.setText(String.format(Locale.US, "%s%s\nHSN: %s | GST: %s%% | ₹ %.2f%s%s", code.isEmpty() ? "" : "[" + code + "]  ", name, hsn == null ? "" : hsn, gst, price, chargesGst() ? " incl." : "", cat.isEmpty() ? "" : " | " + cat));
                 tv.setTextSize(13);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
                 if (itemSelectMode) {
@@ -6304,50 +6329,80 @@ public class MainActivity extends Activity implements Sync.Listener {
         topBtns.addView(newBtn, weightLp()); topBtns.addView(cnBtn, weightLp()); topBtns.addView(reportBtn, weightLp());
         rootBox.addView(topBtns);
 
+        // Every saved invoice, with the text a search may hit: number, date, buyer (name and address), phone,
+        // GSTIN, state, payment mode and amount
+        List<String[]> invoices = new ArrayList<>();
+        Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"invoice_no", "date", "buyer_name_addr", "rounded_total", "grand_total", "payment_mode", "rcm", "buyer_phone", "buyer_gstin", "buyer_state"}, null, null, null, null, "id DESC");
+        while (c.moveToNext()) {
+            String no = c.isNull(0) ? "" : c.getString(0), date = c.isNull(1) ? "" : c.getString(1), nameAddr = c.isNull(2) ? "" : c.getString(2);
+            double total = c.isNull(3) || c.getDouble(3) == 0 ? c.getDouble(4) : c.getDouble(3);
+            String mode = c.isNull(5) ? "" : c.getString(5), rcm = c.getInt(6) == 1 ? "RCM" : "";
+            String hay = (no + " " + date + " " + nameAddr + " " + (c.isNull(7) ? "" : c.getString(7)) + " " + (c.isNull(8) ? "" : c.getString(8)) + " " + (c.isNull(9) ? "" : c.getString(9)) + " " + mode + " " + rcm + " " + String.format(Locale.US, "%.2f", total) + " " + money(total)).toLowerCase(Locale.ROOT);
+            invoices.add(new String[]{no, date, nameAddr.split("\n")[0], String.valueOf(total), mode, rcm, hay});
+        }
+        c.close();
+
+        EditText search = edit("Search by invoice no, party, phone, GSTIN, amount...", false);
+        search.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        search.setTextSize(13);
+        if (!invoices.isEmpty()) rootBox.addView(search);
+        TextView countTv = new TextView(this);
+        countTv.setTextSize(11.5f); countTv.setTextColor(0xFF607D8B); countTv.setPadding(dp(4), dp(4), dp(4), 0);
+        if (!invoices.isEmpty()) rootBox.addView(countTv);
+
         LinearLayout listContainer = new LinearLayout(this);
         listContainer.setOrientation(LinearLayout.VERTICAL);
         listContainer.setPadding(0, dp(8), 0, 0);
-        Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"invoice_no", "date", "buyer_name_addr", "rounded_total", "grand_total", "payment_mode", "rcm"}, null, null, null, null, "id DESC");
-        if (c.getCount() == 0) {
-            TextView emptyTv = new TextView(this);
-            emptyTv.setText("No invoices saved yet. Tap \"+ New Invoice\" to make the first one.");
-            emptyTv.setTextSize(13); emptyTv.setPadding(dp(8), dp(16), dp(8), dp(16));
-            listContainer.addView(emptyTv);
-        }
-        while (c.moveToNext()) {
-            String no = c.isNull(0) ? "" : c.getString(0);
-            String buyer = c.isNull(2) ? "" : c.getString(2).split("\n")[0];
-            double total = c.isNull(3) || c.getDouble(3) == 0 ? c.getDouble(4) : c.getDouble(3);
-            LinearLayout row = row();
-            row.setPadding(0, dp(6), 0, dp(6));
-            TextView tv = new TextView(this);
-            tv.setText(String.format(Locale.US, "%s  ·  %s\n%s\n%s  ·  %s%s", no, c.getString(1), buyer.isEmpty() ? "(cash sale)" : titleCase(buyer), money(total), c.getString(5), c.getInt(6) == 1 ? "  ·  RCM" : ""));
-            tv.setTextSize(12.5f);
-            row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
-            ImageButton openBtn = iconButton(R.drawable.ic_edit, BLUE, "Open " + no);
-            openBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, false); });
-            row.addView(openBtn, iconLp(36, 4));
-            ImageButton printBtn = iconButton(R.drawable.ic_print, NAVY, "Print " + no);
-            printBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, true); });
-            row.addView(printBtn, iconLp(36, 4));
-            ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + no);
-            delBtn.setOnClickListener(v -> { if (blockedByCreditNotes(no)) return; new AlertDialog.Builder(this).setTitle("Delete Invoice")
-                    .setMessage("Delete invoice " + no + "? This cannot be undone.")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete", (d, w) -> {
-                        SQLiteDatabase wdb = dbHelper.getWritableDatabase();
-                        Cursor idc = wdb.query("invoices", new String[]{"id"}, "invoice_no=?", new String[]{no}, null, null, null);
-                        while (idc.moveToNext()) wdb.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(idc.getLong(0))});
-                        idc.close();
-                        wdb.delete("invoices", "invoice_no=?", new String[]{no});
-                        Toast.makeText(this, "Invoice " + no + " deleted", Toast.LENGTH_SHORT).show();
-                        showSalesDialog();
-                    }).show(); });
-            row.addView(delBtn, iconLp(36, 4));
-            listContainer.addView(row);
-            listContainer.addView(divider());
-        }
-        c.close();
+        Runnable fill = () -> {
+            listContainer.removeAllViews();
+            String[] words = search.getText().toString().trim().toLowerCase(Locale.ROOT).split("\\s+");
+            int shown = 0;
+            for (String[] inv : invoices) {
+                boolean hit = true;
+                for (String w : words) if (!w.isEmpty() && !inv[6].contains(w)) { hit = false; break; }
+                if (!hit) continue;
+                shown++;
+                final String no = inv[0];
+                double total = Double.parseDouble(inv[3]);
+                LinearLayout row = row();
+                row.setPadding(0, dp(6), 0, dp(6));
+                TextView tv = new TextView(this);
+                tv.setText(String.format(Locale.US, "%s  ·  %s\n%s\n%s  ·  %s%s", no, inv[1], inv[2].isEmpty() ? "(cash sale)" : titleCase(inv[2]), money(total), inv[4], inv[5].isEmpty() ? "" : "  ·  RCM"));
+                tv.setTextSize(12.5f);
+                row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+                ImageButton openBtn = iconButton(R.drawable.ic_edit, BLUE, "Open " + no);
+                openBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, false); });
+                row.addView(openBtn, iconLp(36, 4));
+                ImageButton printBtn = iconButton(R.drawable.ic_print, NAVY, "Print " + no);
+                printBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, true); });
+                row.addView(printBtn, iconLp(36, 4));
+                ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + no);
+                delBtn.setOnClickListener(v -> { if (blockedByCreditNotes(no)) return; new AlertDialog.Builder(this).setTitle("Delete Invoice")
+                        .setMessage("Delete invoice " + no + "? This cannot be undone.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete", (d, w) -> {
+                            SQLiteDatabase wdb = dbHelper.getWritableDatabase();
+                            Cursor idc = wdb.query("invoices", new String[]{"id"}, "invoice_no=?", new String[]{no}, null, null, null);
+                            while (idc.moveToNext()) wdb.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(idc.getLong(0))});
+                            idc.close();
+                            wdb.delete("invoices", "invoice_no=?", new String[]{no});
+                            Toast.makeText(this, "Invoice " + no + " deleted", Toast.LENGTH_SHORT).show();
+                            showSalesDialog();
+                        }).show(); });
+                row.addView(delBtn, iconLp(36, 4));
+                listContainer.addView(row);
+                listContainer.addView(divider());
+            }
+            if (invoices.isEmpty() || shown == 0) {
+                TextView emptyTv = new TextView(this);
+                emptyTv.setText(invoices.isEmpty() ? "No invoices saved yet. Tap \"+ New Invoice\" to make the first one." : "No invoice matches the search.");
+                emptyTv.setTextSize(13); emptyTv.setPadding(dp(8), dp(16), dp(8), dp(16));
+                listContainer.addView(emptyTv);
+            }
+            countTv.setText(search.getText().toString().trim().isEmpty() ? invoices.size() + " invoices" : shown + " of " + invoices.size() + " invoices");
+        };
+        search.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { fill.run(); } });
+        fill.run();
         ScrollView sc = new ScrollView(this);
         sc.addView(listContainer);
         rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(340)));

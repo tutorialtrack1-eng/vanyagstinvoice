@@ -54,7 +54,7 @@
       const list = kind ? all.filter(v => v.vtype === kind) : all;
       const sum = (k) => all.filter(v => v.vtype === k).reduce((s, v) => s + amountOf(v), 0);
       const chip = (k, label) => '<button class="btn sm ' + (kind === k ? '' : 'outline') + '" data-kind="' + k + '">' + label + '</button>';
-      const root = App.view(App.header('Receipts & Payments', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="mRct">+ Receipt</button><button class="btn sm red" id="mPmt">+ Payment</button><button class="btn sm blue" id="mBank">Upload Bank Statement</button><button class="btn sm outline" id="mTpl">Template</button><button class="btn sm outline" id="mOut">Outstanding</button></div>') +
+      const root = App.view(App.header('Receipts & Payments', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="mRct">+ Receipt</button><button class="btn sm red" id="mPmt">+ Payment</button><button class="btn sm blue" id="mBank">Upload Bank Statement</button><button class="btn sm outline" id="mTpl">Template</button><button class="btn sm outline" id="mOut">Outstanding</button><button class="btn sm outline" id="mLedger">Party Ledger</button></div>') +
         '<div class="btnrow">' + chip('', 'All') + chip('receipt', 'Receipts') + chip('payment', 'Payments') + '<span class="hint bold" style="margin-left:auto">Received ' + money(sum('receipt')) + '   |   Paid ' + money(sum('payment')) + '</span></div>' +
         '<div class="hint" style="margin-bottom:10px">A receipt against a credit invoice brings the customer\'s outstanding down; a payment against a credit purchase brings what you owe the supplier down. Both move Cash or Bank and appear on the Balance Sheet and in the Journal.</div>' +
         listTable(['Date', 'No', 'Type', 'Party / Account', 'Against', 'Mode / Ref', '#Amount', ''], list.map(v => { const K = KIND[v.vtype]; return '<tr>' + td('Date', esc(v.date)) + td('No', '<b>' + esc(v.no || '-') + '</b>') + td('Type', '<span class="pill ' + K.pill + '">' + K.label + '</span>') +
@@ -66,6 +66,7 @@
       $('#mRct').onclick = () => Money.edit('receipt', null, back); $('#mPmt').onclick = () => Money.edit('payment', null, back);
       $('#mBank').onclick = () => Money.upload(back);
       $('#mOut').onclick = () => App.go('aging');
+      $('#mLedger').onclick = () => App.go('ledger');
       $('#mTpl').onclick = () => { UI.download('BlitzBook_Bank_Statement_Template.csv', 'Date,Description,Debit,Credit,Reference\n01/10/2026,UPI/The Chef Store/payment for invoice 0001,,15000,UTR2026100112345\n02/10/2026,NEFT Solara Appliances PUR-0001,20880,,NEFT987654\n03/10/2026,Bank charges,118,,\n', 'text/csv'); UI.toast('Template downloaded. Most bank statement exports (CSV / Excel) also upload as they are.', 4000); };
       $$('[data-kind]', root).forEach(b => b.onclick = () => Money.open({ kind: b.dataset.kind }));
       $$('[data-p]', root).forEach(b => b.onclick = () => Print.show(Print.voucher(Store.find('journal', b.dataset.p), Store.company())));

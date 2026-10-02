@@ -75,6 +75,39 @@
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
   };
 
+  // ------------------------------------------------------------ party ledger (supplier / customer reconciliation)
+  // Books.partyLedger for one party over a period (all dates unless chosen): opening balance, every entry with
+  // a running balance, closing balance, Excel export. Dr = the party owes us, Cr = we owe the party.
+  App.routes.ledger = function (p) {
+    const names = new Set();
+    Store.list('contacts').forEach(c => { if (!p.type || (c.type || 'Customer') === p.type) names.add(String(c.name || '').trim()); });
+    if (!p.type || p.type === 'Supplier') Store.list('purchases').forEach(x => { if (x.kind === 'PUR' && x.supplier) names.add(String(x.supplier).trim()); });
+    if (!p.type || p.type === 'Customer') Biz.invoices().forEach(i => { const n = Books.partyName(i.buyer.name); if (n) names.add(n); });
+    const parties = Array.from(names).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const party = p.party || (parties.length === 1 ? parties[0] : ''), r = p.range || null;
+    const L = party ? Books.partyLedger(party, r ? r.a : null, r ? r.b : null) : null;
+    const side = (v) => Math.abs(v) < 0.005 ? money(0) : money(Math.abs(v)) + (v > 0 ? ' Dr' : ' Cr');
+    const who = (v) => Math.abs(v) < 0.005 ? 'settled' : v > 0 ? 'owed to you' : 'owed by you';
+    const pill = (t) => t === 'Receipt' ? 'ok' : t === 'Payment' ? 'warn' : t === 'Credit Note' || t === 'Debit Note' ? 'bad' : '';
+    const headers = ['Date', 'Voucher', 'No', 'Particulars', 'Debit', 'Credit', 'Balance'];
+    const root = App.view(App.header('Party Ledger', '<div class="btnrow" style="margin:0">' + UI.select('lgParty', parties, party, { blank: parties.length ? '— choose a ' + (p.type ? p.type.toLowerCase() : 'party') + ' —' : 'No parties yet' }) +
+        '<button class="btn sm outline" id="lgPeriod">' + esc(r ? r.label : 'All dates') + '</button>' + (r ? '<button class="btn sm outline" id="lgAll">All dates</button>' : '') + (party && L.entries.length ? '<button class="btn sm green" id="lgXls">Export Excel</button>' : '') + '</div>') +
+      '<div class="hint" style="margin-bottom:10px">Every bill, note, receipt and payment with the party in date order with a running balance, to reconcile with the party\'s own statement. Dr = the party owes you, Cr = you owe the party. A bill paid at once is shown as billed and settled on the same day.</div>' +
+      (!party ? '<div class="empty">Choose a supplier or customer to see the ledger.</div>' :
+        '<div class="card white"><div class="bd"><div class="kv">' + kv('Party', esc(party)) + kv('Period', esc(r ? r.from + ' to ' + r.to : 'All dates')) + kv('Opening balance', esc(side(L.opening))) + kv('Debits in the period', money(L.totalDr)) + kv('Credits in the period', money(L.totalCr)) + kv('Closing balance (' + who(L.closing) + ')', esc(side(L.closing)), 'tot') + '</div></div></div>' +
+        '<div class="tablewrap">' + (L.entries.length ? '<table class="list cards"><thead><tr>' + headers.map((h, n) => '<th class="' + (n >= 4 ? 'num' : '') + '">' + h + '</th>').join('') + '</tr></thead><tbody>' +
+          '<tr><td data-l="Date">' + esc(r ? r.from : '') + '</td><td></td><td></td><td class="left" data-l="Particulars"><i>Opening balance</i></td><td></td><td></td><td class="num" data-l="Balance"><b>' + esc(side(L.opening)) + '</b></td></tr>' +
+          L.entries.map(e => '<tr><td data-l="Date">' + esc(e.date) + '</td><td data-l="Voucher"><span class="pill ' + pill(e.type) + '">' + esc(e.type) + '</span></td><td data-l="No"><b>' + esc(e.no) + '</b></td><td class="left" data-l="Particulars">' + esc(e.particulars) + '</td><td class="num" data-l="Debit">' + (e.dr ? money(e.dr) : '') + '</td><td class="num" data-l="Credit">' + (e.cr ? money(e.cr) : '') + '</td><td class="num" data-l="Balance"><b>' + esc(side(e.bal)) + '</b></td></tr>').join('') +
+          '<tr class="total"><td colspan="4" class="left" data-l="">Closing balance</td><td class="num" data-l="Debit">' + money(L.totalDr) + '</td><td class="num" data-l="Credit">' + money(L.totalCr) + '</td><td class="num" data-l="Balance">' + esc(side(L.closing)) + '</td></tr></tbody></table>' :
+          '<div class="empty">No dealings with ' + esc(party) + (r ? ' in this period' : '') + '.</div>') + '</div>'));
+    App.wireBack(root);
+    $('#lgParty').onchange = e => App.go('ledger', { party: e.target.value, range: r, type: p.type });
+    $('#lgPeriod').onclick = () => pickPeriod('Party Ledger', r || periodRange(3), (rg) => App.go('ledger', { party, range: rg, type: p.type }));
+    if ($('#lgAll')) $('#lgAll').onclick = () => App.go('ledger', { party, type: p.type });
+    if ($('#lgXls')) $('#lgXls').onclick = () => UI.xls('Ledger_' + party.replace(/[^A-Za-z0-9]+/g, '_'), headers,
+      [[r ? r.from : '', '', '', 'Opening balance', '', '', side(L.opening)]].concat(L.entries.map(e => [e.date, e.type, e.no, e.particulars, e.dr ? U.indianNumber(e.dr) : '', e.cr ? U.indianNumber(e.cr) : '', side(e.bal)]), [['', '', '', 'Closing balance', U.indianNumber(L.totalDr), U.indianNumber(L.totalCr), side(L.closing)]]));
+  };
+
   // ------------------------------------------------------------ statements
   const kv = (k, v, cls) => '<div class="' + (cls || '') + '">' + k + '</div><div class="v ' + (cls || '') + '">' + v + '</div>';
   // One line of a financial statement: [label, value, style] with style 0 = normal, 1 = bold total, 2 = section heading

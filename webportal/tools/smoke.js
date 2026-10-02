@@ -86,7 +86,14 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('sync is on', await page.evaluate(() => Sync.status === 'idle'));
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
   check('top bar: Purchases in, Company Profile out (reached through the company chip)', await page.evaluate(() => { const t = Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent); return t.includes('Purchases') && !t.includes('Company Profile') && !!document.querySelector('#barCo'); }));
-  check('dashboard tiles in the agreed order, without descriptions', await page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join()) === 'Invoice,Sales,Customer,Supplier,Purchase,Stock,Expense,Receipts,Journal,Reports' && (await page.$('.tiles.dash .d')) === null);
+  const tileOrder = () => page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join());
+  check('dashboard tiles in the agreed order, without descriptions', (await tileOrder()) === 'New Invoice,Purchases,Sales,Stock,Expense,Receipts,Payments,Journal,Customer,Supplier,Reports' && (await page.$('.tiles.dash .d')) === null, await tileOrder());
+  // drag the first tile onto the third: the order changes, is saved, and Reset order brings the standard one back
+  { const a = await (await page.$('.tiles.dash .tile:nth-child(1)')).boundingBox(), b = await (await page.$('.tiles.dash .tile:nth-child(3)')).boundingBox();
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await page.mouse.down(); await page.mouse.move(a.x + a.width / 2 + 30, a.y + a.height / 2, { steps: 4 }); await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 }); await page.mouse.up(); await page.waitForTimeout(150);
+    check('tiles can be dragged into a new order, which is saved', (await tileOrder()).startsWith('Purchases,Sales,New Invoice') && (await page.evaluate(() => Store.get('tile_order', []).slice(0, 3).join())) === 'purchases,sales,invoice' && (await page.$('.hero')) !== null, await tileOrder());
+    await page.evaluate(() => App.go('dashboard')); await page.waitForSelector('#tileReset'); await page.click('#tileReset'); await page.waitForSelector('.hero');
+    check('reset order restores the standard order', (await tileOrder()).startsWith('New Invoice,Purchases,Sales'), await tileOrder()); }
 
   // invoice
   await page.click('.tiles [data-go=invoice]');
@@ -122,6 +129,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('an added quick item appears, name tidied', (await page.textContent('#qList')).includes('Packing Charge'));
   await page.click('.modal .mf .btn.green'); // Apply to Invoice
   check('quick items land on the invoice', (await page.inputValue(row(3) + '[data-k=desc]')) === 'Freight Charges' && (await page.inputValue(row(3) + '[data-k=qty]')) === '2');
+  check('a quick item price includes GST: the row carries the rate before GST', (await page.inputValue(row(3) + '[data-k=rate]')) === '1016.9492' && (await page.inputValue(row(3) + '[data-k=totalIncl]')) === '2400.00', [await page.inputValue(row(3) + '[data-k=rate]'), await page.inputValue(row(3) + '[data-k=totalIncl]')]);
   await page.click(row(3) + '[data-del]');
 
   // print settings: both layouts previewed, the second one made the default, A4 stays the paper
@@ -178,7 +186,13 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.fill('#nRef', 'NO-SUCH'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('.toast');
   check('a credit note needs its invoice', (await toast(page)).includes('Choose the invoice'), await toast(page));
   await page.click('.modal .mf .btn.outline');
-  await page.evaluate(() => App.go('sales')); await page.click('[data-del]'); await page.waitForSelector('.modal .mh');
+  await page.evaluate(() => App.go('sales')); await page.waitForSelector('#sSearch');
+  await page.fill('#sSearch', 'chef 9849'); await page.waitForTimeout(50);
+  check('sales search finds the invoice by party and phone', (await page.$$('tbody tr:not(.hidden)')).length === 1 && (await page.textContent('#sCount')).includes('1 of 1'), await page.textContent('#sCount'));
+  await page.fill('#sSearch', 'nobody'); await page.waitForTimeout(50);
+  check('sales search with no match says so', (await page.$$('tbody tr:not(.hidden)')).length === 0 && !(await page.$eval('#sNone', e => e.classList.contains('hidden'))));
+  await page.fill('#sSearch', ''); await page.waitForTimeout(50);
+  await page.click('[data-del]'); await page.waitForSelector('.modal .mh');
   check('an invoice with a credit note cannot be deleted', (await page.textContent('.modal .mh')) === 'Cannot Delete Invoice' && (await page.textContent('.modal .mb')).includes('CN-0001'), await page.textContent('.modal .mb'));
   await page.click('.modal .mf .btn');
   check('print carries the footer', htmlStd.includes('Powered by BlitzBook') && htmlEnv.includes('Powered by BlitzBook') && fs.readFileSync(OUT + '/print-purchase.html', 'utf8').includes('Powered by BlitzBook'));
@@ -278,6 +292,14 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('.modal .mf .btn.outline');
   const settled = await page.evaluate(() => [Books.partyBalance('Solara Appliances'), Books.balanceSheet(null).receivables, Books.balanceSheet(null).parties]);
   check('supplier payable settled by the payment', Math.abs(settled[0]) < 0.01 && settled[1] === 32114 - 1180 - 10000 - 5000, settled);
+  // party ledger: the supplier's bill and the payment against it, running balance back to nil
+  await page.evaluate(() => App.go('ledger', { party: 'Solara Appliances' })); await page.waitForSelector('table.list');
+  const ledgerText = (await page.textContent('#view')).replace(/\s+/g, ' ');
+  check('supplier ledger lists the purchase and the payment and ends settled', ledgerText.includes('PUR-0001') && ledgerText.includes('PMT-0001') && ledgerText.includes('20,880.00 Cr') && ledgerText.includes('Closing balance (settled)'), ledgerText.slice(0, 500));
+  await page.screenshot({ path: OUT + '/16c-ledger.png', fullPage: true });
+  await page.evaluate(() => App.go('ledger', { party: 'The Chef Store - Banjara Hills' })); await page.waitForSelector('table.list');
+  const custLedger = (await page.textContent('#view')).replace(/\s+/g, ' ');
+  check('customer ledger carries the invoice, the credit note and the receipts', custLedger.includes('OFFSI27-00001') && custLedger.includes('CN-0001') && custLedger.includes('RCT-0001') && custLedger.includes('Closing balance (owed to you)') && custLedger.includes('15,934.00 Dr'), custLedger.slice(0, 500));
   await page.screenshot({ path: OUT + '/16b-money.png', fullPage: true });
   await page.evaluate(() => App.go('backup'));
   [dl] = await Promise.all([page.waitForEvent('download'), page.click('#bExp')]);

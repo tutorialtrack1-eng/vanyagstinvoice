@@ -167,7 +167,52 @@
     // The party an invoice is billed to: the first line of the buyer box
     partyName(nameAddr) { return String(nameAddr || '').split('\n')[0].trim(); },
     // Outstanding balance of one party as at today (positive = owed to us, negative = owed by us), 0 when unknown
-    partyBalance(name) { const k = String(name || '').trim().toLowerCase(); const hit = this.balanceSheet(null).parties.find(p => p[0].toLowerCase() === k); return hit ? hit[1] : 0; }
+    partyBalance(name) { const k = String(name || '').trim().toLowerCase(); const hit = this.balanceSheet(null).parties.find(p => p[0].toLowerCase() === k); return hit ? hit[1] : 0; },
+
+    /* One party's ledger account, for reconciling with the party's own statement: every bill (purchase or sales
+       invoice), every credit / debit note and every journal line on the party (receipts, payments, vouchers), in
+       date order with a running balance. dr = the party owes us more, cr = we owe the party more. A bill paid at
+       once (cash, online) is shown as billed and settled the same day, so the statement is complete even though
+       the balance never moved. Entries before `from` roll into the opening balance; entries after `to` are left
+       out. Both bounds may be null. */
+    partyLedger(name, from, to) {
+      const k = String(name || '').trim().toLowerCase(), all = [];
+      if (!k) return { opening: 0, entries: [], closing: 0, totalDr: 0, totalCr: 0 };
+      const add = (date, type, no, particulars, dr, cr, order) => all.push({ date, ms: U.dateMs(date) || 0, type, no: no || '', particulars, dr: U.round2(dr), cr: U.round2(cr), order });
+      Store.list('purchases').forEach(p => {
+        if (p.kind !== 'PUR' || String(p.supplier || '').trim().toLowerCase() !== k) return;
+        const amt = num(p.total) - num(p.tds);
+        add(p.date, 'Purchase', p.no, 'Purchase bill' + (num(p.tds) > 0 ? ' (less TDS ' + money(p.tds) + ')' : '') + (p.rcm ? ', reverse charge' : ''), 0, amt, 1);
+        if (String(p.paidBy || '').toLowerCase() !== 'credit') add(p.date, 'Payment', p.no, 'Paid by ' + p.paidBy, amt, 0, 2);
+      });
+      Store.list('invoices').forEach(i => {
+        if (i.kind !== 'invoice' || this.partyName(i.buyer.name).toLowerCase() !== k) return;
+        const amt = num(i.totals.rounded) || num(i.totals.grand);
+        add(i.date, 'Invoice', i.no, 'Sales invoice' + (i.rcm ? ', reverse charge' : ''), amt, 0, 1);
+        if (String(i.payment || '').toLowerCase() !== 'credit') add(i.date, 'Receipt', i.no, 'Received by ' + i.payment, 0, amt, 2);
+      });
+      Store.list('notes').forEach(n => {
+        if (String(n.party || '').trim().toLowerCase() !== k) return;
+        const t = num(n.total), cn = n.kind === 'CN';
+        add(n.date, cn ? 'Credit Note' : 'Debit Note', n.no, (cn ? 'Credit note' : 'Debit note') + (n.ref ? ' against ' + n.ref : '') + (n.reason ? ': ' + n.reason : ''), cn ? 0 : t, cn ? t : 0, 3);
+        if (String(n.settle || 'Credit') !== 'Credit') add(n.date, cn ? 'Payment' : 'Receipt', n.no, (cn ? 'Refunded by ' : 'Received back by ') + n.settle, cn ? t : 0, cn ? 0 : t, 4);
+      });
+      Store.list('journal').forEach(j => j.lines.forEach(l => {
+        if (String(l.account || '').trim().toLowerCase() !== k) return;
+        const other = j.lines.filter(x => x !== l).map(x => x.account).join(', ');
+        const what = j.vtype === 'receipt' ? 'Received in ' + (j.mode || other) : j.vtype === 'payment' ? 'Paid from ' + (j.mode || other) : (l.side === 'Dr' ? 'To ' : 'By ') + other;
+        add(j.date, j.vtype === 'receipt' ? 'Receipt' : j.vtype === 'payment' ? 'Payment' : 'Journal', j.no, what + (j.ref ? ' against ' + j.ref : '') + (j.bankRef ? ' (' + j.bankRef + ')' : '') + (j.narration ? ' · ' + j.narration : ''), l.side === 'Dr' ? num(l.amount) : 0, l.side === 'Cr' ? num(l.amount) : 0, 5);
+      }));
+      all.sort((a, b) => a.ms - b.ms || a.order - b.order || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }));
+      let bal = 0, opening = 0, totalDr = 0, totalCr = 0; const entries = [];
+      all.forEach(e => {
+        bal = U.round2(bal + e.dr - e.cr);
+        if (from != null && e.ms < from) { opening = bal; return; }
+        if (to != null && e.ms > to) return;
+        totalDr += e.dr; totalCr += e.cr; entries.push(Object.assign(e, { bal }));
+      });
+      return { opening, entries, closing: entries.length ? entries[entries.length - 1].bal : opening, totalDr: U.round2(totalDr), totalCr: U.round2(totalCr) };
+    }
   };
 
   // PUR-0001 / QTN-0001 / STK-0001: one running series per kind
@@ -190,7 +235,7 @@
       const root = App.view(App.header(type + ' Contacts', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="cAdd">+ Add ' + type + '</button><button class="btn sm outline" id="cCsv">Upload CSV / Excel</button><button class="btn sm outline" id="cTpl">Template</button><button class="btn sm outline" id="cSel">' + (Contacts.select ? 'Done' : 'Select') + '</button><button class="btn sm outline" id="cSwap">' + (type === 'Customer' ? 'Suppliers' : 'Customers') + '</button></div>') +
         (Contacts.select ? '<div class="btnrow"><label class="check"><input type="checkbox" id="selAll"> Select all</label><button class="btn sm red" id="bDel">Delete selected</button></div>' : '') +
         listTable(['', 'Name', 'Phone', 'GSTIN', 'State', 'TDS', ''], list.map(c => '<tr>' + td('', Contacts.select ? '<input type="checkbox" class="selbox" data-id="' + esc(c.id) + '">' : '') + td('Name', '<b>' + esc(c.name) + '</b>' + (c.address ? '<div class="small muted">' + esc(c.address) + '</div>' : '')) + td('Phone', esc(c.phone) + (c.email ? '<div class="small muted">' + esc(c.email) + '</div>' : '')) + td('GSTIN', esc(c.gstin)) + td('State', esc(U.stateName(c.state))) + td('TDS', c.tds ? esc(U.fmtQty(c.tdsRate) + '%') : '-') +
-          '<td class="actions">' + (Contacts.select ? '' : '<button class="btn sm outline" data-e="' + esc(c.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(c.id) + '">Delete</button>') + '</td></tr>'), 'No ' + type + ' contacts found. Click "+ Add ' + type + '" to create one.'));
+          '<td class="actions">' + (Contacts.select ? '' : '<button class="btn sm" data-l="' + esc(c.name) + '">Ledger</button><button class="btn sm outline" data-e="' + esc(c.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(c.id) + '">Delete</button>') + '</td></tr>'), 'No ' + type + ' contacts found. Click "+ Add ' + type + '" to create one.'));
       App.wireBack(root);
       $('#cAdd').onclick = () => Contacts.edit({ type }); $('#cSwap').onclick = () => { Contacts.select = false; App.go('contacts', { type: type === 'Customer' ? 'Supplier' : 'Customer' }); };
       $('#cSel').onclick = () => { Contacts.select = !Contacts.select; Contacts.open({ type }); };
@@ -201,6 +246,7 @@
         $('#selAll').onchange = e => $$('.selbox', root).forEach(b => b.checked = e.target.checked);
         $('#bDel').onclick = () => { const ids = picked(); if (!ids.length) return UI.toast('Tick the contacts first'); UI.confirm('Delete Contacts', 'Delete ' + ids.length + ' selected contacts?', () => { Store.saveList('contacts', Store.list('contacts').filter(c => !ids.includes(c.id))); UI.toast('Contacts deleted'); Contacts.open({ type }); }, 'Delete'); };
       }
+      $$('[data-l]', root).forEach(b => b.onclick = () => App.go('ledger', { party: b.dataset.l }));
       $$('[data-e]', root).forEach(b => b.onclick = () => Contacts.edit(Store.find('contacts', b.dataset.e)));
       $$('[data-d]', root).forEach(b => b.onclick = () => { const c = Store.find('contacts', b.dataset.d); UI.confirm('Delete Contact', 'Are you sure you want to delete contact "' + c.name + '"?', () => { Store.delete('contacts', c.id); UI.toast('Contact "' + c.name + '" deleted'); Contacts.open({ type }); }, 'Delete'); });
     },
@@ -257,7 +303,7 @@
       const list = Store.items().sort(byName);
       const root = App.view(App.header(Items.select ? 'Select Items' : 'Stock - Item Master', '<div class="btnrow" style="margin:0"><button class="btn sm" id="itAdd">+ Add Item</button><button class="btn sm outline" id="itStock">Stock in Hand</button><button class="btn sm outline" id="itSel">' + (Items.select ? 'Done' : 'Select') + '</button></div>') +
         (Items.select ? '<div class="btnrow"><label class="check"><input type="checkbox" id="selAll"> Select all</label><button class="btn sm outline" id="bCat">Set category</button><button class="btn sm outline" id="bGst">Set GST %</button><button class="btn sm red" id="bDel">Delete</button></div>' : '') +
-        listTable(['', 'Item', 'Code', 'Category', 'HSN/SAC', 'GST %', '#Unit Price', ''], list.map(i => '<tr>' + td('', Items.select ? '<input type="checkbox" class="selbox" data-id="' + esc(i.id) + '">' : '') + td('Item', '<b>' + esc(i.name) + '</b>') + td('Code', esc(i.code || '')) + td('Category', esc(i.category || '')) + td('HSN/SAC', esc(i.hsn || '')) + td('GST %', esc(i.gst || '0') + '%') + td('Unit Price', money(i.rate), 'num') +
+        listTable(['', 'Item', 'Code', 'Category', 'HSN/SAC', 'GST %', '#Unit Price' + (Biz.chargesGst() ? ' (incl. tax)' : ''), ''], list.map(i => '<tr>' + td('', Items.select ? '<input type="checkbox" class="selbox" data-id="' + esc(i.id) + '">' : '') + td('Item', '<b>' + esc(i.name) + '</b>') + td('Code', esc(i.code || '')) + td('Category', esc(i.category || '')) + td('HSN/SAC', esc(i.hsn || '')) + td('GST %', esc(i.gst || '0') + '%') + td('Unit Price', money(i.rate), 'num') +
           '<td class="actions">' + (Items.select ? '' : '<button class="btn sm outline" data-e="' + esc(i.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(i.id) + '">Delete</button>') + '</td></tr>'), 'No master items found. Invoiced items will appear here automatically.'));
       App.wireBack(root);
       $('#itAdd').onclick = () => Quick.editItem(null, () => Items.open());
@@ -297,7 +343,7 @@
   const Purchases = {
     open() {
       const list = Store.list('purchases').slice().sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || String(b.no).localeCompare(String(a.no), undefined, { numeric: true }));
-      const root = App.view(App.header('Purchases & Quotations', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="pNew">+ Purchase</button><button class="btn sm blue" id="qNew">+ Quotation</button><button class="btn sm outline" id="pStock">Stock</button><button class="btn sm outline" id="pDN">Debit Notes</button><button class="btn sm outline" id="pPay">Payments</button></div>') +
+      const root = App.view(App.header('Purchases & Quotations', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="pNew">+ Purchase</button><button class="btn sm blue" id="qNew">+ Quotation</button><button class="btn sm outline" id="pStock">Stock</button><button class="btn sm outline" id="pDN">Debit Notes</button><button class="btn sm outline" id="pPay">Payments</button><button class="btn sm outline" id="pLedger">Supplier Ledger</button></div>') +
         listTable(['No', 'Date', 'Supplier', '#Total', 'Paid By', ''], list.map(p => {
           const stock = p.items.filter(i => i.stock).map(i => i.name + ' x ' + U.fmtQty(i.qty)).join(', ');
           return '<tr>' + td('No', '<b>' + esc(p.no) + '</b> <span class="pill">' + KIND_LABEL[p.kind] + '</span>') + td('Date', esc(p.date)) +
@@ -307,6 +353,7 @@
         }), 'No purchases or quotations yet. Tick "Stock" on an item while recording a purchase and it appears under Stock.'));
       App.wireBack(root);
       $('#pNew').onclick = () => Purchases.edit({ kind: 'PUR' }); $('#qNew').onclick = () => Purchases.edit({ kind: 'QTN' }); $('#pStock').onclick = () => App.go('stock'); $('#pDN').onclick = () => App.go('notes', { kind: 'DN' }); $('#pPay').onclick = () => App.go('money', { kind: 'payment' });
+      $('#pLedger').onclick = () => App.go('ledger', { type: 'Supplier' });
       $$('[data-e]', root).forEach(b => b.onclick = () => Purchases.edit(Store.find('purchases', b.dataset.e)));
       $$('[data-p]', root).forEach(b => b.onclick = () => { const p = Store.find('purchases', b.dataset.p); UI.menu('Print ' + KIND_LABEL[p.kind], Print.SHEETS.map(k => Print.PAPERS[k].label), (i) => Print.show(Print.purchase(p, Store.company(), Print.SHEETS[i]))); });
       $$('[data-conv]', root).forEach(b => b.onclick = () => { const q = Store.find('purchases', b.dataset.conv); UI.confirm('Convert Quotation', 'Record ' + q.no + ' as a purchase? It will then count in stock, profit & loss and the balance sheet.', () => { q.kind = 'PUR'; q.no = nextNo('PUR'); Store.update('purchases', purchaseTotals(q)); stockItemsToMaster(q); Purchases.open(); }, 'Convert'); });

@@ -14,6 +14,11 @@
   function contactsOf(type) { return Store.list('contacts').filter(c => !type || (c.type || 'Customer') === type).sort((a, b) => a.name.localeCompare(b.name)); }
   function partyFromContact(c) { return { name: c.name + (c.address ? '\n' + c.address : ''), phone: c.phone || '', email: c.email || '', gstin: c.gstin || '', state: U.matchState(c.state, c.gstin) || U.stateByCode(sellerStateCode()) }; }
   function blankParty() { return { name: '', phone: '', email: '', gstin: '', state: U.stateByCode(sellerStateCode()) || U.STATES[0] }; }
+  // Quick item and item master prices are what the customer pays, GST included. Invoice rows carry the rate before
+  // GST, so the GST is worked back out of the price (to 4 decimals, so qty x rate x (1 + GST) lands on the price again).
+  function exclRate(price, gst) { const p = num(price), g = chargesGst() ? num(gst) : 0; return p > 0 && g > 0 ? Math.round(p / (1 + g / 100) * 10000) / 10000 : p; }
+  function inclPrice(rate, gst) { const g = chargesGst() ? num(gst) : 0; return U.round2(num(rate) * (1 + g / 100)); }
+  function priceLabel() { return chargesGst() ? 'Unit Price ₹ (inclusive of tax)' : 'Unit Price ₹'; }
   function blankItem(sl) { return { sl, desc: '', hsn: '', gst: '18', inc: false, qty: '', uqc: 'NOS', rate: '', taxable: 0, totalIncl: 0, subSerial: '', subDesc: '', subInfo: '' }; }
   // Saved invoices, newest first: by date, then by number
   function invoices() {
@@ -151,7 +156,7 @@
       const bg = UI.modal({ title: item ? 'Customise Item' : 'Add Item', body: '<div class="grid2">' + UI.field('Item Name', UI.input('mName', item ? item.name : ''), { req: true, span: true }) +
         UI.field('Item Code', UI.input('mCode', item ? item.code : '', { placeholder: 'e.g. SKU-101', attrs: ' maxlength="20" style="text-transform:uppercase"' })) + UI.field('Category', UI.input('mCat', item ? item.category : '', { placeholder: 'e.g. Beverages', list: 'mCatDl' }) + UI.datalist('mCatDl', categories())) +
         UI.field('HSN / SAC', UI.input('mHsn', item ? item.hsn : '', { attrs: ' inputmode="numeric"' })) + UI.field('GST Rate %', UI.select('mGst', U.GST_RATES, item ? item.gst : '18')) +
-        UI.field('Unit Price ₹', UI.input('mRate', item && item.rate !== '' && item.rate != null ? num(item.rate).toFixed(2) : '', { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' })) + '</div>',
+        UI.field(priceLabel(), UI.input('mRate', item && item.rate !== '' && item.rate != null ? num(item.rate).toFixed(2) : '', { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' }), chargesGst() ? { hint: 'The price the customer pays; the GST is worked back out of it on the invoice' } : {}) + '</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }].concat(item ? [{ label: 'Remove', cls: 'red outline', onClick: () => { hideMaster(item.name); UI.toast(item.name + ' removed from quick items'); onSaved(); } }] : []).concat([{ label: 'Save', cls: 'green', onClick: (bg) => {
           const v = (id) => UI.val(id, bg).trim(), name = U.nameCase(v('mName'));
           if (!name) { UI.mark('mName', true, bg); UI.toast('Item name is required'); return false; }
@@ -167,7 +172,7 @@
     },
     // Price (and GST) of a quick item for this invoice only
     price(item, gstOn, reload, redraw) {
-      UI.modal({ title: item.name, body: '<div class="grid2 keep2">' + UI.field('Unit Price ₹', UI.input('qpRate', num(item.rate).toFixed(2), { type: 'number', attrs: ' step="any" min="0"' })) + (gstOn ? UI.field('GST Rate %', UI.select('qpGst', U.GST_RATES, item.gst)) : '') + '</div>' +
+      UI.modal({ title: item.name, body: '<div class="grid2 keep2">' + UI.field(priceLabel(), UI.input('qpRate', num(item.rate).toFixed(2), { type: 'number', attrs: ' step="any" min="0"' })) + (gstOn ? UI.field('GST Rate %', UI.select('qpGst', U.GST_RATES, item.gst)) : '') + '</div>' +
         '<div class="hint">Applies to this invoice only. Use "Customise Item" to change the saved name, category, HSN or price.</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Customise Item', cls: 'outline', onClick: () => { Quick.editItem(item, reload); } }, { label: 'Apply', cls: 'green', onClick: (bg) => {
           const p = UI.val('qpRate', bg).trim();
@@ -209,7 +214,7 @@
         $('#qView', bg).textContent = Quick.grid ? '☰' : '▦';
         $('#qList', bg).className = 'qlist' + (Quick.grid ? ' grid' : '');
         $('#qList', bg).innerHTML = shown.map(x => '<div class="qitem' + (x.qty > 0 ? ' on' : '') + '" data-n="' + esc(x.name) + '"><div class="qname"><b>' + esc(x.name) + '</b><span>' + esc(sub(x)) + '</span></div>' +
-          '<div class="qside"><button class="qprice" data-price>₹ ' + num(x.rate).toFixed(2) + (gstOn ? ' · GST ' + esc(x.gst) + '%' : '') + '  ✎</button>' +
+          '<div class="qside"><button class="qprice" data-price>₹ ' + num(x.rate).toFixed(2) + (gstOn ? ' incl. · GST ' + esc(x.gst) + '%' : '') + '  ✎</button>' +
           '<div class="qstep"><button data-d="-1" aria-label="Less">−</button><input type="number" min="0" step="1" value="' + x.qty + '" aria-label="Quantity"><button data-d="1" aria-label="More">+</button></div></div></div>').join('') ||
           '<div class="empty">' + esc(q ? "No matching " + label.toLowerCase() + " found for '" + q + "'." : 'No ' + label.toLowerCase() + ' in this category. Tap "+ Add" to create one.') + '</div>';
         $$('.qitem', bg).forEach(el => {
@@ -242,7 +247,7 @@
       let inv = null;
       if (params.id) inv = JSON.parse(JSON.stringify(Store.find('invoices', params.id) || {}));
       if (!inv || !inv.no) inv = newInvoice();
-      if (params.quickItem) { const m = findMaster(params.quickItem); Object.assign(inv.items[0], { desc: params.quickItem, hsn: m && !m.hidden ? m.hsn : U.hsnFor(params.quickItem), gst: m && !m.hidden ? m.gst : '18', qty: 1, rate: m && !m.hidden && num(m.rate) > 0 ? m.rate : '' }); }
+      if (params.quickItem) { const m = findMaster(params.quickItem); Object.assign(inv.items[0], { desc: params.quickItem, hsn: m && !m.hidden ? m.hsn : U.hsnFor(params.quickItem), gst: m && !m.hidden ? m.gst : '18', qty: 1, rate: m && !m.hidden && num(m.rate) > 0 ? exclRate(m.rate, m.gst) : '' }); }
       this.inv = inv;
       this.render();
       if (params.print) this.print('invoice');
@@ -317,6 +322,7 @@
     },
     renderRows() {
       const inv = this.inv, gst = chargesGst();
+      inv.items.forEach(computeItem); // rows added by the quick picker show their amounts straight away
       const tb = $('#rows');
       tb.innerHTML = inv.items.map((it, i) => '<tr data-i="' + i + '"><td class="sl" data-l="Sl"><input class="num" value="' + (i + 1) + '" disabled></td>' +
         '<td class="desc" data-l="Particulars"><div class="descwrap"><input data-k="desc" list="itemsDl" placeholder="Item Name" value="' + esc(it.desc) + '"><button class="subbtn" title="Product sub-details" data-sub>+</button></div>' + (it.subSerial || it.subDesc || it.subInfo ? '<div class="subline">' + esc([it.subSerial && 'S/N: ' + it.subSerial, it.subDesc, it.subInfo && 'Info: ' + it.subInfo].filter(Boolean).join(' · ')) + '</div>' : '') + '</td>' +
@@ -338,7 +344,7 @@
             if (k === 'desc') {
               // A saved item fills HSN, GST and price; otherwise a well-known item name fills the HSN
               const m = itemFromLabel(el.value);
-              if (m) { it.desc = m.name; if (el.value !== m.name) el.value = m.name; it.hsn = m.hsn || ''; if (m.gst) it.gst = m.gst; if (num(m.rate) > 0 && !num(it.rate)) it.rate = m.rate; const g = $('[data-k=gst]', tr); if (g) g.value = it.gst; $('[data-k=rate]', tr).value = it.rate; }
+              if (m) { it.desc = m.name; if (el.value !== m.name) el.value = m.name; it.hsn = m.hsn || ''; if (m.gst) it.gst = m.gst; if (num(m.rate) > 0 && !num(it.rate)) it.rate = exclRate(m.rate, it.gst); const g = $('[data-k=gst]', tr); if (g) g.value = it.gst; $('[data-k=rate]', tr).value = it.rate; }
               else { const hsn = U.hsnFor(el.value); if (hsn) it.hsn = hsn; }
               $('[data-k=hsn]', tr).value = it.hsn;
             }
@@ -373,8 +379,8 @@
       menu.forEach(q => {
         const at = inv.items.findIndex(x => String(x.desc).trim().toLowerCase() === q.name.toLowerCase());
         if (q.qty > 0) {
-          if (at >= 0) Object.assign(inv.items[at], { qty: q.qty, rate: num(q.rate).toFixed(2), gst: q.gst, inc: false });
-          else inv.items.push(Object.assign(blankItem(0), { desc: q.name, hsn: q.hsn || '', gst: q.gst, qty: q.qty, rate: num(q.rate).toFixed(2) }));
+          if (at >= 0) Object.assign(inv.items[at], { qty: q.qty, rate: exclRate(q.rate, q.gst), gst: q.gst, inc: false });
+          else inv.items.push(Object.assign(blankItem(0), { desc: q.name, hsn: q.hsn || '', gst: q.gst, qty: q.qty, rate: exclRate(q.rate, q.gst) }));
         } else if (at >= 0) inv.items.splice(at, 1);
       });
       if (!inv.items.length) inv.items.push(blankItem(1));
@@ -416,7 +422,7 @@
       const saved = inv.id ? Store.update('invoices', inv) : Store.add('invoices', inv);
       inv.id = saved.id;
       // Invoiced items join the item master. An item already there keeps its customised price and category.
-      inv.items.forEach(it => { const name = String(it.desc).trim(); if (findMaster(name)) upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), hidden: false }); else upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), rate: num(it.rate) }); });
+      inv.items.forEach(it => { const name = String(it.desc).trim(); if (findMaster(name)) upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), hidden: false }); else upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), rate: inclPrice(it.rate, it.gst) }); });
       const bn = inv.buyer.name.trim();
       if (bn) { const first = bn.split('\n')[0].trim(); const contacts = Store.list('contacts'); if (!contacts.find(x => x.name.toLowerCase() === first.toLowerCase())) { contacts.push({ id: U.uid(), createdAt: Date.now(), type: 'Customer', name: first, address: bn.split('\n').slice(1).join('\n').trim().toUpperCase(), phone: inv.buyer.phone, email: inv.buyer.email.toLowerCase(), gstin: inv.buyer.gstin, state: inv.buyer.state, tds: false }); Store.saveList('contacts', contacts); } }
       return inv;
@@ -479,11 +485,24 @@
     const invs = invoices(), due = new Map(outstanding().all.map(r => [r.no, r]));
     // Credit invoices show what is still due on them (receipts mapped to the invoice bring it down)
     const dueCell = (i) => { const r = due.get(i.no); if (!r) return '-'; return r.balance > 0.005 ? '<span class="pill bad">' + money(r.balance) + ' due</span><div class="small muted">' + r.days + ' day' + (r.days === 1 ? '' : 's') + '</div>' : '<span class="pill ok">Settled</span>'; };
+    // Everything about an invoice that a search may hit: number, date, buyer (every line), phone, email, GSTIN,
+    // state, payment mode, total and the item names
+    const hay = (i) => [i.no, i.date, i.buyer.name, i.buyer.phone, i.buyer.email, i.buyer.gstin, i.buyer.state, i.payment, String(num(i.totals.rounded) || num(i.totals.grand)), money(num(i.totals.rounded) || num(i.totals.grand))].concat(i.items.map(x => x.desc)).join(' ').toLowerCase();
     const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button><button class="btn sm outline" id="sRct">Receipts</button><button class="btn sm outline" id="sOut">Outstanding</button><button class="btn sm outline" id="sRep">Report</button></div>') +
+      (invs.length ? '<div class="btnrow"><input id="sSearch" class="search" placeholder="Search by invoice no, party, phone, GSTIN, item, amount..." autocomplete="off"><span class="hint" id="sCount"></span></div>' : '') +
       '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th>Due</th><th></th></tr></thead><tbody>' +
-        invs.map(i => '<tr><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td><td data-l="Due">' + dueCell(i) + '</td>' +
-          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">Open</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button></td></tr>').join('') + '</tbody></table>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one.</div>') + '</div>');
+        invs.map(i => '<tr data-s="' + esc(hay(i)) + '"><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + (i.buyer.phone ? '<div class="small muted">' + esc(i.buyer.phone) + '</div>' : '') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td><td data-l="Due">' + dueCell(i) + '</td>' +
+          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">Open</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button></td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one.</div>') + '</div>');
     App.wireBack(root);
+    if ($('#sSearch')) {
+      // Every word typed has to appear somewhere in the invoice
+      const filter = () => {
+        const words = $('#sSearch').value.toLowerCase().split(/\s+/).filter(Boolean); let shown = 0;
+        $$('tbody tr', root).forEach(tr => { const hit = words.every(w => tr.dataset.s.includes(w)); tr.classList.toggle('hidden', !hit); if (hit) shown++; });
+        $('#sNone').classList.toggle('hidden', shown > 0); $('#sCount').textContent = words.length ? shown + ' of ' + invs.length + ' invoices' : invs.length + ' invoices';
+      };
+      $('#sSearch').addEventListener('input', filter); filter();
+    }
     $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRct').onclick = () => App.go('money', { kind: 'receipt' }); $('#sOut').onclick = () => App.go('aging'); $('#sRep').onclick = () => App.go('salesReport');
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
     $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));

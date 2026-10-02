@@ -130,24 +130,68 @@
     shield: '<path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/>',
     sync: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
     bank: '<path d="M3 10h18L12 4z"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 21h18M4 18h16"/>',
+    payout: '<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h8"/><path d="M3 9h17a1 1 0 0 1 1 1v3"/><path d="M14 18h7M18 15l3 3-3 3"/>',
+    ledger: '<path d="M5 3h14a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M8 8h8M8 12h8M8 16h5"/><path d="M12 3v18"/>',
     android: '<path d="M5 15a7 7 0 0 1 14 0v4H5z"/><path d="M8 9.5 6.5 7M16 9.5 17.5 7"/><path d="M9.5 13h.01M14.5 13h.01"/><path d="M8 19v2.5M16 19v2.5M3 12v4M21 12v4"/>',
     apple: '<path d="M15.5 6.5c-1.6 0-2.3.9-3.5.9s-2.1-.9-3.5-.9C6.3 6.5 4 8.6 4 12.4c0 3.4 2.6 8.1 4.6 8.1 1.1 0 1.7-.8 3.4-.8s2.1.8 3.4.8c2 0 4.1-4 4.6-5.8-2.2-.8-3-3-3-3.5 0-1.7 1-2.9 2.5-3.6-1-1.2-2.4-1.1-4-1.1z"/><path d="M12.5 6c0-1.9 1.4-3.6 3.3-3.8.2 2-1.5 3.8-3.3 3.8z"/>'
   };
   function icon(name) { return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
 
-  // Day-to-day work first (sell, who you deal with, buy), then the books. Same order in the app.
+  // The dashboard tiles in their standard order. Each account may drag them into its own order, kept as tile_order.
   const TILES = [
-    { key: 'invoice', t: 'Invoice', d: 'Create a GST bill', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
-    { key: 'sales', t: 'Sales', d: 'Invoices and credit notes', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
-    { key: 'customers', t: 'Customer', d: 'People you sell to', ic: 'user', a: '#7E22CE', b: '#A855F7' },
-    { key: 'suppliers', t: 'Supplier', d: 'People you buy from', ic: 'truck', a: '#C2410C', b: '#F97316' },
-    { key: 'purchases', t: 'Purchase', d: 'Bills and quotations', ic: 'cart', a: '#B45309', b: '#F59E0B' },
-    { key: 'items', t: 'Stock', d: 'Items, prices, stock in hand', ic: 'box', a: '#15803D', b: '#22C55E' },
-    { key: 'expenses', t: 'Expense', d: 'Rent, salaries and more', ic: 'wallet', a: '#BE123C', b: '#F43F5E' },
-    { key: 'money', t: 'Receipts', d: 'Payments, bank statement', ic: 'bank', a: '#0E7490', b: '#06B6D4' },
-    { key: 'journal', t: 'Journal', d: 'Manual ledger entries', ic: 'book', a: '#6D28D9', b: '#8B5CF6' },
-    { key: 'reports', t: 'Reports', d: 'Sales, P&L, balance sheet', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
+    { key: 'invoice', t: 'New Invoice', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
+    { key: 'purchases', t: 'Purchases', ic: 'cart', a: '#B45309', b: '#F59E0B' },
+    { key: 'sales', t: 'Sales', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
+    { key: 'items', t: 'Stock', ic: 'box', a: '#15803D', b: '#22C55E' },
+    { key: 'expenses', t: 'Expense', ic: 'wallet', a: '#BE123C', b: '#F43F5E' },
+    { key: 'receipts', t: 'Receipts', ic: 'bank', a: '#0E7490', b: '#06B6D4' },
+    { key: 'payments', t: 'Payments', ic: 'payout', a: '#9D174D', b: '#EC4899' },
+    { key: 'journal', t: 'Journal', ic: 'book', a: '#6D28D9', b: '#8B5CF6' },
+    { key: 'customers', t: 'Customer', ic: 'user', a: '#7E22CE', b: '#A855F7' },
+    { key: 'suppliers', t: 'Supplier', ic: 'truck', a: '#C2410C', b: '#F97316' },
+    { key: 'reports', t: 'Reports', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
   ];
+  // The tiles in this account's order; tiles added since are appended, tiles that no longer exist are dropped
+  function tileList() {
+    const byKey = new Map(TILES.map(t => [t.key, t])), out = (Store.get('tile_order', []) || []).map(k => byKey.get(k)).filter(Boolean);
+    TILES.forEach(t => { if (!out.includes(t)) out.push(t); });
+    return out;
+  }
+  /* Tiles can be dragged into a new order. With a mouse a tile is dragged straight away; on a touch screen the
+     page has to keep scrolling, so dragging there happens in "Arrange" mode (the link beside the heading), which
+     the user leaves with Done. The dragged tile takes the place of the tile it is held over; the order is saved
+     when it is dropped. A click right after a drag is swallowed so the tile does not open. */
+  function arrangeTiles(grid, onOrder) {
+    let drag = null, start = null, moved = false;
+    const tiles = () => Array.from(grid.children);
+    const begin = (tile, e) => { drag = tile; moved = false; tile.classList.add('dragging'); try { tile.setPointerCapture(e.pointerId); } catch (x) { /* not needed */ } };
+    const place = (x, y) => {
+      const over = document.elementFromPoint(x, y), t = over && over.closest('.tile');
+      if (!t || t === drag || t.parentNode !== grid) return;
+      const kids = tiles();
+      if (kids.indexOf(drag) < kids.indexOf(t)) t.after(drag); else t.before(drag);
+      moved = true;
+    };
+    grid.addEventListener('pointerdown', e => {
+      const tile = e.target.closest('.tile'); if (!tile || e.button) return;
+      start = { x: e.clientX, y: e.clientY, tile };
+      if (grid.classList.contains('arrange')) { begin(tile, e); e.preventDefault(); }
+    });
+    grid.addEventListener('pointermove', e => {
+      if (!start) return;
+      if (!drag) { if (e.pointerType === 'mouse' && Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 8) begin(start.tile, e); return; }
+      place(e.clientX, e.clientY); e.preventDefault();
+    });
+    const end = () => {
+      if (drag) {
+        const was = drag; drag.classList.remove('dragging'); drag = null;
+        if (moved) { onOrder(tiles().map(t => t.dataset.go)); was.dataset.dragged = '1'; setTimeout(() => delete was.dataset.dragged, 50); }
+      }
+      start = null;
+    };
+    grid.addEventListener('pointerup', end); grid.addEventListener('pointercancel', end);
+    grid.addEventListener('click', e => { const t = e.target.closest('.tile'); if (t && (t.dataset.dragged || grid.classList.contains('arrange'))) { e.stopPropagation(); e.preventDefault(); } }, true);
+  }
   // Top navigation. The company profile is reached through the company chip on the right of the bar.
   const NAV = [
     { key: 'dashboard', t: 'Dashboard', ic: 'home' },
@@ -475,7 +519,7 @@
     // What customers still owe on credit invoices, after the receipts mapped to them
     const open = Biz.outstanding().open, credit = open.reduce((s, r) => s + r.balance, 0);
     const recent = []; invs.forEach(i => i.items.forEach(it => { const d = String(it.desc || '').trim(); if (d && recent.length < 8 && !recent.some(r => r.toLowerCase() === d.toLowerCase())) recent.push(d); }));
-    const stat = (id, ic, a, b, k, v, s, go) => '<div class="stat' + (go ? ' link' : '') + '" style="--a:' + a + ';--b:' + b + '"' + (go ? ' data-go="' + go + '" role="button" tabindex="0" title="Outstanding & Ageing"' : '') + '><div class="ic-badge">' + icon(ic) + '</div><div class="meta"><div class="k">' + k + '</div><div class="v" id="' + id + '">' + v + '</div><div class="s">' + esc(s) + '</div></div></div>';
+    const stat = (id, ic, a, b, k, v, s, go) => '<div class="stat' + (go ? ' tap' : '') + '" style="--a:' + a + ';--b:' + b + '"' + (go ? ' data-go="' + go + '" role="button" tabindex="0" title="Outstanding & Ageing"' : '') + '><div class="ic-badge">' + icon(ic) + '</div><div class="meta"><div class="k">' + k + '</div><div class="v" id="' + id + '">' + v + '</div><div class="s">' + esc(s) + '</div></div></div>';
     const root = App.view(
       '<section class="hero"><span class="orb o1"></span><span class="orb o2"></span>' +
       '<div class="art" aria-hidden="true"><div class="sheet s1"><i></i><i></i><i></i><i></i><u></u></div><div class="sheet s2"><i></i><i></i><i></i><i></i><u></u></div><div class="coin">₹</div></div>' +
@@ -483,8 +527,8 @@
       '<div class="chips"><span class="chip">' + (c.gstin ? 'GSTIN ' + esc(c.gstin) : 'No GSTIN') + '</span><span class="chip">' + esc(c.activity || 'General') + '</span></div>' +
       '<div class="cta"><button class="btn light" data-go="invoice">' + icon('plus') + 'New Invoice</button><button class="btn ghost" data-go="sales">View Sales' + icon('arrow') + '</button></div></section>' +
       (recent.length ? '<div class="section-title">Recent products</div><div class="recent">' + recent.map(r => '<button data-item="' + esc(r) + '">' + esc(r) + '</button>').join('') + '</div>' : '') +
-      '<div class="section-title">What would you like to do?</div><div class="tiles dash">' +
-      TILES.map(t => '<button class="tile" data-go="' + t.key + '" style="--a:' + t.a + ';--b:' + t.b + '"><span class="badge">' + icon(t.ic) + '</span><span class="tx"><span class="t">' + esc(t.t) + '</span></span><span class="go">' + icon('arrow') + '</span></button>').join('') + '</div>' +
+      '<div class="section-title">What would you like to do?<span class="tilehint"><button class="link small" id="tileArrange">Arrange</button>' + ((Store.get('tile_order', []) || []).length ? ' · <button class="link small" id="tileReset">Reset order</button>' : '') + '</span></div><div class="tiles dash" id="tiles">' +
+      tileList().map(t => '<button class="tile" data-go="' + t.key + '" style="--a:' + t.a + ';--b:' + t.b + '"><span class="badge">' + icon(t.ic) + '</span><span class="tx"><span class="t">' + esc(t.t) + '</span></span><span class="go">' + icon('arrow') + '</span></button>').join('') + '</div>' +
       // The month's figures close the page
       '<div class="section-title">At a glance</div><div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
       stat('stCount', 'receipt', '#059669', '#34D399', 'Invoices', month.length, 'Raised this month') +
@@ -492,11 +536,17 @@
     countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
     $$('[data-go]', root).forEach(el => el.onclick = () => {
       const k = el.dataset.go;
-      if (k === 'reports') UI.menu('Reports', ['Sales Report', 'Outstanding & Ageing', 'Profit & Loss', 'Balance Sheet', 'Stock in Hand'], (i) => App.go(['salesReport', 'aging', 'pnl', 'balance', 'stock'][i]));
+      if (k === 'reports') UI.menu('Reports', ['Sales Report', 'Outstanding & Ageing', 'Party Ledger', 'Profit & Loss', 'Balance Sheet', 'Stock in Hand'], (i) => App.go(['salesReport', 'aging', 'ledger', 'pnl', 'balance', 'stock'][i]));
       else if (k === 'customers') App.go('contacts', { type: 'Customer' });
       else if (k === 'suppliers') App.go('contacts', { type: 'Supplier' });
+      else if (k === 'receipts') App.go('money', { kind: 'receipt' });
+      else if (k === 'payments') App.go('money', { kind: 'payment' });
       else App.go(k);
     });
+    // Dragging the tiles into another order; the order belongs to this account on this device
+    arrangeTiles($('#tiles', root), (keys) => { Store.set('tile_order', keys, true); if (!$('#tileReset')) UI.toast('Tile order saved'); });
+    $('#tileArrange').onclick = () => { const g = $('#tiles', root), on = g.classList.toggle('arrange'); $('#tileArrange').textContent = on ? 'Done' : 'Arrange'; if (on) UI.toast('Drag the tiles into the order you want, then tap Done', 3500); };
+    if ($('#tileReset')) $('#tileReset').onclick = () => { Store.set('tile_order', [], true); App.go('dashboard'); UI.toast('Standard order restored'); };
     $$('[data-item]', root).forEach(el => el.onclick = () => App.go('invoice', { quickItem: el.dataset.item }));
   };
 
