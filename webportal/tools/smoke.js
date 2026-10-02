@@ -387,6 +387,16 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   // top navigation: the strip scrolls sideways on phones, the tapped link becomes the active one
   await page.click('#nav [data-go=stock]'); await page.waitForTimeout(300); await page.screenshot({ path: OUT + '/23-m-nav.png' });
   check('navigation marks the open screen', (await page.textContent('#nav .navlink.active')) === 'Stock in Hand');
+  // every screen has its own address; the address opens the screen, and the back button walks back
+  check('the address follows the screen', await page.evaluate(() => location.hash === '#stock'));
+  await page.evaluate(() => { location.hash = '#contacts?type=Supplier'; }); await page.waitForFunction(() => document.querySelector('.page-h h2') && document.querySelector('.page-h h2').textContent === 'Supplier Contacts');
+  check('a typed address opens that screen with its parameters', true);
+  await page.goBack(); await page.waitForFunction(() => location.hash === '#stock' && document.querySelector('.page-h h2').textContent.startsWith('Stock'));
+  check('the back button returns to the previous screen', true);
+  await page.evaluate(() => App.go('invoice', { id: Store.list('invoices')[0].id })); await page.waitForSelector('#rows');
+  check('an opened invoice has its id in the address', await page.evaluate(() => location.hash === '#invoice?id=' + encodeURIComponent(Store.list('invoices')[0].id)));
+  await page.reload(); await page.waitForSelector('#rows');
+  check('a reload reopens the same invoice', (await page.inputValue('#iNo')) === 'OFFSI27-00001', await page.inputValue('#iNo'));
   check('no sideways scroll on a phone', !(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)));
 
   await browser.close();

@@ -95,6 +95,10 @@ so export regularly.
 
 ## Dashboard, ledger and search
 
+- Every screen has its own address (`#sales`, `#invoice?id=...`, `#contacts?type=Supplier`,
+  `#salesReport?from=01/10/2026&to=31/10/2026`): the back button walks back, a reload or a bookmark reopens
+  the screen. Dialogs (Company Profile, Subscription) leave the address alone.
+
 - The dashboard tiles (New Invoice, Purchases, Sales, Stock, Expense, Receipts, Payments, Journal, Customer,
   Supplier, Reports) can be dragged into any order: with a mouse straight away, on a touch screen after
   *Arrange* beside the heading. The order is kept per account in this browser (`tile_order`); *Reset order*

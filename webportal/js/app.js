@@ -234,6 +234,7 @@
       Sync.onApplied = (keys) => this.synced(keys);
       Sync.onAuthLost = (msg) => { this.logout(); UI.alert('Sign in again', msg + '. Log in with the new password.'); };
       Sync.ready(); // find out early whether a sync server is there
+      window.addEventListener('hashchange', () => this.onHashChange());
       const s = Store.session();
       if (s && s.uid) { const u = Store.users().find(x => x.id === s.uid); if (u) { this.login(u); return; } }
       Auth.login();
@@ -243,14 +244,16 @@
       if (token) Sync.setToken(token);
       Sub.markRegistered();
       this.shell();
-      this.go('dashboard');
+      // A reload or a bookmark opens the screen in the address; otherwise the dashboard
+      const t = this.fromHash();
+      this.go(t ? t.route : 'dashboard', t ? t.params : undefined);
       const settle = () => { if (this.user !== u) return; if (!Store.company().name) Company.edit(true); this.checkSubscription(); };
       // On a browser that has never met the server the books may be on their way: wait for them before
       // asking for a company profile that already exists
       const fresh = !Sync.state().epoch, first = Sync.start(u);
       if (fresh) first.then(() => { if (this.user === u) { this.refresh(); settle(); } }); else settle();
     },
-    logout() { clearTimeout(this.subTimer); Sync.stop(); Store.setSession(null); this.user = null; Store.uid = null; this.current = null; $('#dialogs').innerHTML = ''; Auth.login(); },
+    logout() { clearTimeout(this.subTimer); Sync.stop(); Store.setSession(null); this.user = null; Store.uid = null; this.current = null; $('#dialogs').innerHTML = ''; this.lastHash = ''; try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* fine */ } Auth.login(); },
     identity() { return this.user.phone || this.user.email || ''; },
     shell() {
       $('#root').innerHTML =
@@ -288,9 +291,48 @@
     go(route, params) {
       const fn = this.routes[route];
       if (!fn) { UI.toast('Screen not available: ' + route); return; }
-      if (!DIALOGS.includes(route)) { window.scrollTo(0, 0); this.markNav(route); this.current = { route, params: params || {} }; this.stale = false; $('#view').classList.remove('still'); }
+      if (!DIALOGS.includes(route)) { window.scrollTo(0, 0); this.markNav(route); this.current = { route, params: params || {} }; this.stale = false; $('#view').classList.remove('still'); this.setHash(route, params || {}); }
       fn(params || {});
       this.refreshBar();
+    },
+    /* Every screen has its own address: #sales, #invoice?id=..., #contacts?type=Supplier, #salesReport?from=..&to=..
+       so the back button, a reload and a bookmark land on the screen itself. Only plain values travel in the
+       address; a report period goes as from / to / label and comes back as a range. Dialogs leave the address alone. */
+    hashOf(route, params) {
+      const q = new URLSearchParams();
+      Object.keys(params || {}).forEach(k => {
+        const v = params[k];
+        if (k === 'print' || v == null || v === '') return;
+        if (k === 'range' && v && v.from) { q.set('from', v.from); q.set('to', v.to); if (v.label) q.set('label', v.label); return; }
+        if (typeof v === 'object') return;
+        q.set(k, String(v));
+      });
+      const s = q.toString();
+      return '#' + route + (s ? '?' + s : '');
+    },
+    setHash(route, params) {
+      const h = this.hashOf(route, params);
+      if (location.hash === h) return;
+      this.lastHash = h;
+      try { location.hash = h; } catch (e) { /* no history available */ }
+    },
+    // {route, params} behind the current address, null when there is none
+    fromHash() {
+      const h = String(location.hash || '').replace(/^#/, '');
+      if (!h) return null;
+      const at = h.indexOf('?'), route = at < 0 ? h : h.slice(0, at), params = {};
+      if (!this.routes[route] || DIALOGS.includes(route)) return null;
+      new URLSearchParams(at < 0 ? '' : h.slice(at + 1)).forEach((v, k) => { params[k] = v; });
+      if (params.from && params.to && global.Reports && Reports.rangeOf) { params.range = Reports.rangeOf(params.from, params.to, params.label); delete params.from; delete params.to; delete params.label; }
+      return { route, params };
+    },
+    // The address changed by itself (back / forward, a typed address): open that screen
+    onHashChange() {
+      if (!this.user) return;
+      if (location.hash === this.lastHash) return;
+      this.lastHash = location.hash;
+      const t = this.fromHash();
+      if (t) this.go(t.route, t.params); else if (!location.hash || location.hash === '#') this.go('dashboard');
     },
     // Draws the current screen again in place, after records arrived from another device
     refresh() {

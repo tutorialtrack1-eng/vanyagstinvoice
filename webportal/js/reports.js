@@ -184,5 +184,7 @@
     $('#bsDate').onchange = e => { if (e.target.value) App.go('balance', { asAt: U.fromIso(e.target.value) }); };
   };
 
-  global.Reports = { periodRange, pickPeriod };
+  // A period from dd/mm/yyyy strings (the form it takes in the address bar)
+  function rangeOf(from, to, label) { const a = U.dateMs(from), b = U.dateMs(to); return a && b ? range(new Date(a), new Date(b), label || PERIODS[5]) : periodRange(0); }
+  global.Reports = { periodRange, pickPeriod, rangeOf };
 })(window);
