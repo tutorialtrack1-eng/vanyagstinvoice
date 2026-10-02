@@ -1866,12 +1866,116 @@ public class MainActivity extends Activity implements Sync.Listener {
         return card;
     }
 
+    // ------------------------------------------------------------------ party ledger (supplier / customer reconciliation)
+
+    private AlertDialog partyLedgerDialog;
+
+    /**
+     * Ledger.partyLedger for one party over a period (every date unless chosen): opening balance, each entry with a
+     * running balance, closing balance, Excel export. Dr = the party owes us, Cr = we owe the party. type limits the
+     * party list to suppliers or customers; from / to are dd/MM/yyyy or null.
+     */
+    private void showPartyLedger(String party, String type, String from, String to) {
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        List<String> parties = Ledger.ledgerParties(db, type);
+        if (party == null && parties.size() == 1) party = parties.get(0);
+        final String chosen = party;
+        Date dFrom = from == null ? null : Ledger.parseDate(from), dTo = to == null ? null : Ledger.parseDate(to);
+        Ledger.PartyLedger L = chosen == null ? null : Ledger.partyLedger(db, chosen, dFrom, dTo);
+
+        LinearLayout rootBox = new LinearLayout(this);
+        rootBox.setOrientation(LinearLayout.VERTICAL);
+        rootBox.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        // Who: a spinner over every supplier / customer with dealings
+        List<String> opts = new ArrayList<>();
+        opts.add(parties.isEmpty() ? "No parties yet" : "\u2014 choose a " + (type == null ? "party" : type.toLowerCase(Locale.ROOT)) + " \u2014");
+        opts.addAll(parties);
+        Spinner sParty = spinner(opts.toArray(new String[0]));
+        if (chosen != null) selectSpinner(sParty, chosen);
+        final boolean[] ready = {false};
+        sParty.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int pos, long id) {
+                if (!ready[0]) { ready[0] = true; return; }
+                String pick = pos == 0 ? null : opts.get(pos);
+                if (pick == null ? chosen == null : pick.equals(chosen)) return;
+                partyLedgerDialog.dismiss(); showPartyLedger(pick, type, from, to);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        rootBox.addView(field("Party", sParty));
+
+        LinearLayout periodRow = row();
+        Button periodBtn = new Button(this); periodBtn.setText(from == null ? "All dates" : from + " - " + to); styleButton(periodBtn, SLATE); periodBtn.setTextSize(12);
+        periodBtn.setOnClickListener(v -> pickPeriod("Party Ledger", (f, t) -> { partyLedgerDialog.dismiss(); showPartyLedger(chosen, type, f, t); }));
+        periodRow.addView(periodBtn, weightLp());
+        if (from != null) { Button allBtn = new Button(this); allBtn.setText("All dates"); styleButton(allBtn, SLATE); allBtn.setTextSize(12); allBtn.setOnClickListener(v -> { partyLedgerDialog.dismiss(); showPartyLedger(chosen, type, null, null); }); periodRow.addView(allBtn, weightLp()); }
+        if (L != null && !L.entries.isEmpty()) {
+            Button xlsBtn = new Button(this); xlsBtn.setText("Export Excel"); styleButton(xlsBtn, GREEN); xlsBtn.setTextSize(12);
+            final Ledger.PartyLedger fin = L;
+            xlsBtn.setOnClickListener(v -> {
+                List<String[]> rowsOut = new ArrayList<>();
+                rowsOut.add(new String[]{from == null ? "" : from, "", "", "Opening balance", "", "", drCr(fin.opening)});
+                for (Ledger.LedgerEntry e : fin.entries) rowsOut.add(new String[]{e.date, e.type, e.no, e.particulars, e.dr > 0 ? String.format(Locale.US, "%.2f", e.dr) : "", e.cr > 0 ? String.format(Locale.US, "%.2f", e.cr) : "", drCr(e.bal)});
+                rowsOut.add(new String[]{"", "", "", "Closing balance", String.format(Locale.US, "%.2f", fin.totalDr), String.format(Locale.US, "%.2f", fin.totalCr), drCr(fin.closing)});
+                exportRowsAsExcel("Ledger_" + chosen.replaceAll("[^A-Za-z0-9]+", "_"), new String[]{"Date", "Voucher", "No", "Particulars", "Debit", "Credit", "Balance"}, rowsOut);
+            });
+            periodRow.addView(xlsBtn, weightLp());
+        }
+        rootBox.addView(periodRow);
+
+        TextView hint = new TextView(this);
+        hint.setText("Every bill, note, receipt and payment with the party in date order with a running balance, to reconcile with the party's own statement. Dr = the party owes you, Cr = you owe the party. A bill paid at once shows as billed and settled the same day.");
+        hint.setTextSize(11); hint.setTextColor(0xFF607D8B); hint.setPadding(dp(4), dp(4), dp(4), dp(6));
+        rootBox.addView(hint);
+
+        LinearLayout listContainer = new LinearLayout(this);
+        listContainer.setOrientation(LinearLayout.VERTICAL);
+        if (L == null) {
+            TextView tv = new TextView(this); tv.setText("Choose a supplier or customer to see the ledger."); tv.setTextSize(13); tv.setPadding(dp(8), dp(16), dp(8), dp(16));
+            listContainer.addView(tv);
+        } else {
+            TextView summary = new TextView(this);
+            summary.setText(String.format(Locale.US, "Opening balance: %s\nDebits: %s   |   Credits: %s\nClosing balance: %s (%s)", drCr(L.opening), money(L.totalDr), money(L.totalCr), drCr(L.closing),
+                    Math.abs(L.closing) < 0.005 ? "settled" : L.closing > 0 ? "owed to you" : "owed by you"));
+            summary.setTextSize(12.5f); summary.setTypeface(null, android.graphics.Typeface.BOLD); summary.setPadding(dp(4), dp(4), dp(4), dp(8));
+            listContainer.addView(summary);
+            listContainer.addView(divider());
+            if (L.entries.isEmpty()) {
+                TextView tv = new TextView(this); tv.setText("No dealings with " + chosen + (from == null ? "" : " in this period") + "."); tv.setTextSize(13); tv.setPadding(dp(8), dp(16), dp(8), dp(16));
+                listContainer.addView(tv);
+            }
+            for (Ledger.LedgerEntry e : L.entries) {
+                LinearLayout r = row(); r.setPadding(0, dp(6), 0, dp(6));
+                TextView left = new TextView(this);
+                left.setText(String.format(Locale.US, "%s  \u00b7  %s %s\n%s", e.date, e.type, e.no, e.particulars));
+                left.setTextSize(12);
+                r.addView(left, new LinearLayout.LayoutParams(0, -2, 1f));
+                TextView right = new TextView(this);
+                right.setText(String.format(Locale.US, "%s\nBal %s", e.dr > 0 ? "Dr " + money(e.dr) : "Cr " + money(e.cr), drCr(e.bal)));
+                right.setTextSize(12); right.setGravity(Gravity.END); right.setTypeface(null, android.graphics.Typeface.BOLD);
+                r.addView(right, new LinearLayout.LayoutParams(-2, -2));
+                listContainer.addView(r);
+                listContainer.addView(divider());
+            }
+        }
+        ScrollView sc = new ScrollView(this);
+        sc.addView(listContainer);
+        rootBox.addView(sc, new LinearLayout.LayoutParams(-1, dp(330)));
+        if (partyLedgerDialog != null && partyLedgerDialog.isShowing()) partyLedgerDialog.dismiss();
+        partyLedgerDialog = new AlertDialog.Builder(this).setTitle("Party Ledger").setView(rootBox).setPositiveButton("Close", null).show();
+    }
+
+    /** "₹ 1,200.00 Dr", "₹ 350.00 Cr" or "₹ 0.00" */
+    private String drCr(double v) { return Math.abs(v) < 0.005 ? money(0) : money(Math.abs(v)) + (v > 0 ? " Dr" : " Cr"); }
+
     private void showReportsMenu() {
-        String[] opts = {"Sales Report", "Profit & Loss", "Balance Sheet", "Stock in Hand"};
+        String[] opts = {"Sales Report", "Party Ledger", "Profit & Loss", "Balance Sheet", "Stock in Hand"};
         new AlertDialog.Builder(this).setTitle("Reports").setItems(opts, (d, w) -> {
             if (w == 0) showSalesReport();
-            else if (w == 1) showProfitAndLoss();
-            else if (w == 2) showBalanceSheet();
+            else if (w == 1) showPartyLedger(null, null, null, null);
+            else if (w == 2) showProfitAndLoss();
+            else if (w == 3) showBalanceSheet();
             else showStockDialog();
         }).show();
     }
@@ -4477,6 +4581,9 @@ public class MainActivity extends Activity implements Sync.Listener {
                 if (contactSelectMode) {
                     tv.setOnClickListener(v -> { CheckBox cb = (CheckBox) row.getChildAt(0); cb.setChecked(!cb.isChecked()); });
                 } else {
+                    ImageButton ledgerBtn = iconButton(R.drawable.ic_journal, NAVY, "Ledger of " + name);
+                    ledgerBtn.setOnClickListener(v -> showPartyLedger(name, filterType, null, null));
+                    row.addView(ledgerBtn, iconLp(38, 6));
                     ImageButton editBtn = iconButton(R.drawable.ic_edit, BLUE, "Edit " + name);
                     editBtn.setOnClickListener(v -> showContactEditor(filterType, targetId));
                     row.addView(editBtn, iconLp(38, 6));
@@ -5796,7 +5903,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         stockBtn.setOnClickListener(v -> showStockDialog());
         Button dnBtn = new Button(this); dnBtn.setText("Debit Notes"); styleButton(dnBtn, SLATE); dnBtn.setTextSize(12);
         dnBtn.setOnClickListener(v -> showNotesDialog(Ledger.NOTE_DEBIT));
-        topBtns.addView(addPurchase, weightLp()); topBtns.addView(addQuote, weightLp()); topBtns.addView(stockBtn, weightLp()); topBtns.addView(dnBtn, weightLp());
+        Button ledgerBtn = new Button(this); ledgerBtn.setText("Ledger"); styleButton(ledgerBtn, NAVY); ledgerBtn.setTextSize(12);
+        ledgerBtn.setOnClickListener(v -> showPartyLedger(null, "Supplier", null, null));
+        topBtns.addView(addPurchase, weightLp()); topBtns.addView(addQuote, weightLp()); topBtns.addView(stockBtn, weightLp()); topBtns.addView(dnBtn, weightLp()); topBtns.addView(ledgerBtn, weightLp());
         rootBox.addView(topBtns);
 
         LinearLayout listContainer = new LinearLayout(this);
@@ -6676,12 +6785,16 @@ public class MainActivity extends Activity implements Sync.Listener {
         rootBox.setOrientation(LinearLayout.VERTICAL);
         rootBox.setPadding(dp(12), dp(12), dp(12), dp(12));
 
+        LinearLayout jBtns = row();
         Button addBtn = new Button(this);
         addBtn.setText("+ Add Journal Entry");
         styleButton(addBtn, GREEN);
         addBtn.setTextSize(12);
         addBtn.setOnClickListener(v -> showJournalEditor(null));
-        rootBox.addView(addBtn);
+        Button jLedger = new Button(this); jLedger.setText("Party Ledger"); styleButton(jLedger, NAVY); jLedger.setTextSize(12);
+        jLedger.setOnClickListener(v -> showPartyLedger(null, null, null, null));
+        jBtns.addView(addBtn, new LinearLayout.LayoutParams(0, -2, 1.4f)); jBtns.addView(jLedger, weightLp());
+        rootBox.addView(jBtns);
 
         TextView hint = new TextView(this);
         hint.setText(list.isEmpty() ? "No journal entries yet. Use them for capital introduced, drawings, loans, asset purchases, depreciation, payments received or made, and corrections. An entry can have any number of debit and credit lines."

@@ -714,6 +714,100 @@ final class Ledger {
         return bs;
     }
 
+    // ---------------------------------------------------------------- party ledger
+
+    /** One line of a party's ledger: dr = the party owes us more, cr = we owe the party more; bal = running balance. */
+    static class LedgerEntry {
+        String date = "", type = "", no = "", particulars = "";
+        double dr, cr, bal;
+        long ms; int order;
+    }
+
+    /** A party's ledger over a period: opening balance, the entries with a running balance, closing balance. */
+    static class PartyLedger {
+        double opening, closing, totalDr, totalCr;
+        final List<LedgerEntry> entries = new ArrayList<>();
+    }
+
+    /**
+     * One party's ledger account, for reconciling with the party's own statement (same figures as the web portal):
+     * every purchase bill or sales invoice, every credit / debit note and every journal line on the party (receipts,
+     * payments, vouchers) in date order with a running balance. A bill paid at once (cash, online) is shown as billed
+     * and settled the same day, so the statement is complete even though the balance never moved. Entries before
+     * `from` roll into the opening balance, entries after `to` are left out; either bound may be null.
+     */
+    static PartyLedger partyLedger(SQLiteDatabase db, String party, Date from, Date to) {
+        PartyLedger out = new PartyLedger();
+        String k = party == null ? "" : party.trim();
+        if (k.isEmpty()) return out;
+        List<LedgerEntry> all = new ArrayList<>();
+        for (Purchase p : purchases(db)) {
+            if (p.isQuotation() || !k.equalsIgnoreCase(p.supplier.trim())) continue;
+            double amt = p.payable();
+            all.add(entry(p.date, "Purchase", p.docNo, "Purchase bill" + (p.tds > 0 ? " (less TDS " + fmt(p.tds) + ")" : "") + (p.rcm ? ", reverse charge" : ""), 0, amt, 1));
+            if (!isCredit(p.paymentMode)) all.add(entry(p.date, "Payment", p.docNo, "Paid by " + p.paymentMode, amt, 0, 2));
+        }
+        Cursor c = db.query("invoices", new String[]{"invoice_no", "date", "rounded_total", "grand_total", "payment_mode", "rcm", "buyer_name_addr"}, null, null, null, null, null);
+        while (c.moveToNext()) {
+            if (!k.equalsIgnoreCase(partyName(c.getString(6)))) continue;
+            double amt = c.isNull(2) || c.getDouble(2) == 0 ? c.getDouble(3) : c.getDouble(2);
+            String mode = c.isNull(4) ? "" : c.getString(4);
+            all.add(entry(c.getString(1), "Invoice", c.getString(0), "Sales invoice" + (c.getInt(5) == 1 ? ", reverse charge" : ""), amt, 0, 1));
+            if (!isCredit(mode)) all.add(entry(c.getString(1), "Receipt", c.getString(0), "Received by " + mode, 0, amt, 2));
+        }
+        c.close();
+        for (String kind : new String[]{NOTE_CREDIT, NOTE_DEBIT}) for (Note n : notes(db, kind)) {
+            if (!k.equalsIgnoreCase(n.party.trim())) continue;
+            boolean cn = n.isCredit();
+            all.add(entry(n.date, cn ? "Credit Note" : "Debit Note", n.noteNo, (cn ? "Credit note" : "Debit note") + (n.refNo.isEmpty() ? "" : " against " + n.refNo) + (n.reason.isEmpty() ? "" : ": " + n.reason), cn ? 0 : n.total, cn ? n.total : 0, 3));
+            if (!isCredit(n.settlement)) all.add(entry(n.date, cn ? "Payment" : "Receipt", n.noteNo, (cn ? "Refunded by " : "Received back by ") + n.settlement, cn ? n.total : 0, cn ? 0 : n.total, 4));
+        }
+        for (JournalVoucher v : journal(db)) for (JournalLine l : v.lines) {
+            if (l.account == null || !k.equalsIgnoreCase(l.account.trim())) continue;
+            StringBuilder other = new StringBuilder();
+            for (JournalLine x : v.lines) if (x != l) { if (other.length() > 0) other.append(", "); other.append(x.account); }
+            String what = v.isReceipt() ? "Received in " + (v.mode.isEmpty() ? other.toString() : v.mode) : v.isPayment() ? "Paid from " + (v.mode.isEmpty() ? other.toString() : v.mode) : (l.debit ? "To " : "By ") + other;
+            all.add(entry(v.date, v.isReceipt() ? "Receipt" : v.isPayment() ? "Payment" : "Journal", v.docNo, what + (v.refNo.isEmpty() ? "" : " against " + v.refNo) + (v.bankRef.isEmpty() ? "" : " (" + v.bankRef + ")") + (v.narration.isEmpty() ? "" : " \u00b7 " + v.narration), l.debit ? l.amount : 0, l.debit ? 0 : l.amount, 5));
+        }
+        java.util.Collections.sort(all, (a, b) -> a.ms != b.ms ? Long.compare(a.ms, b.ms) : a.order != b.order ? Integer.compare(a.order, b.order) : a.no.compareTo(b.no));
+        double bal = 0;
+        for (LedgerEntry e : all) {
+            bal = Math.round((bal + e.dr - e.cr) * 100) / 100.0;
+            if (from != null && e.ms < from.getTime()) { out.opening = bal; continue; }
+            if (to != null && e.ms > to.getTime()) continue;
+            e.bal = bal; out.totalDr += e.dr; out.totalCr += e.cr; out.entries.add(e);
+        }
+        out.closing = out.entries.isEmpty() ? out.opening : out.entries.get(out.entries.size() - 1).bal;
+        out.totalDr = Math.round(out.totalDr * 100) / 100.0; out.totalCr = Math.round(out.totalCr * 100) / 100.0;
+        return out;
+    }
+
+    private static LedgerEntry entry(String date, String type, String no, String particulars, double dr, double cr, int order) {
+        LedgerEntry e = new LedgerEntry();
+        e.date = date == null ? "" : date; e.type = type; e.no = no == null ? "" : no; e.particulars = particulars;
+        e.dr = Math.round(dr * 100) / 100.0; e.cr = Math.round(cr * 100) / 100.0; e.order = order;
+        Date d = parseDate(e.date); e.ms = d == null ? 0 : d.getTime();
+        return e;
+    }
+    private static String fmt(double v) { return String.format(Locale.US, "%.2f", v); }
+
+    /** Every name a ledger can be drawn for: contacts (of one type, or all) plus suppliers on purchases and buyers on invoices. */
+    static List<String> ledgerParties(SQLiteDatabase db, String type) {
+        TreeMap<String, String> names = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        Cursor c = type == null ? db.query("contacts", new String[]{"name"}, null, null, null, null, null)
+                : "Supplier".equals(type) ? db.query("contacts", new String[]{"name"}, "type=?", new String[]{"Supplier"}, null, null, null)
+                : db.query("contacts", new String[]{"name"}, "type=? OR type IS NULL OR type=''", new String[]{"Customer"}, null, null, null);
+        while (c.moveToNext()) { String n = c.isNull(0) ? "" : c.getString(0).trim(); if (!n.isEmpty()) names.put(n, n); }
+        c.close();
+        if (type == null || "Supplier".equals(type)) for (Purchase p : purchases(db)) { String n = p.supplier.trim(); if (!p.isQuotation() && !n.isEmpty() && !names.containsKey(n)) names.put(n, n); }
+        if (type == null || "Customer".equals(type)) {
+            Cursor i = db.query("invoices", new String[]{"buyer_name_addr"}, null, null, null, null, null);
+            while (i.moveToNext()) { String n = partyName(i.getString(0)); if (!n.isEmpty() && !names.containsKey(n)) names.put(n, n); }
+            i.close();
+        }
+        return new ArrayList<>(names.values());
+    }
+
     /** The party an invoice is billed to: the first line of the buyer box. */
     static String partyName(String nameAddr) {
         if (nameAddr == null) return "";
