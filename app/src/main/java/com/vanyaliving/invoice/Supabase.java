@@ -304,6 +304,39 @@ final class Supabase {
         } catch (Exception e) { return new int[]{-3}; }
     }
 
+    // ---------------------------------------------------------------- payments through Cashfree (Edge Function cashfree)
+
+    /** Runs fn with a valid token, signing in again once when the token has expired. */
+    private static JSONObject withToken(Context c, long userId, TokenCall fn) throws Exception {
+        String token = Sync.token(c, userId);
+        if (token.isEmpty()) token = freshToken(c, userId);
+        if (token.isEmpty()) throw new Sync.SyncException(401, "Not signed in");
+        try { return fn.run(token); }
+        catch (Sync.SyncException e) {
+            if (e.status != 401) throw e;
+            token = freshToken(c, userId);
+            if (token.isEmpty()) throw e;
+            return fn.run(token);
+        }
+    }
+    private interface TokenCall { JSONObject run(String token) throws Exception; }
+    private static JSONObject asObject(Object r) throws JSONException { return r instanceof JSONObject ? (JSONObject) r : new JSONObject(String.valueOf(r)); }
+
+    /** {link_id, link_url, amount, plan} for a plan key such as "monthly" or "inv20". */
+    static JSONObject createPaymentLink(Context c, long userId, String planKey) throws Exception {
+        return withToken(c, userId, token -> asObject(http(c, "POST", "/functions/v1/cashfree?action=link", json("plan", planKey), token, null)));
+    }
+    /** {paid, status} of a payment link. */
+    static JSONObject paymentStatus(Context c, long userId, String linkId) throws Exception {
+        return withToken(c, userId, token -> asObject(http(c, "POST", "/functions/v1/cashfree?action=status", json("link_id", linkId), token, null)));
+    }
+    /** Grants from payments not yet applied on any device: [{days, invoices, note}]. */
+    static JSONArray claimGrants(Context c, long userId) throws Exception {
+        Object[] out = new Object[1];
+        withToken(c, userId, token -> { out[0] = http(c, "POST", "/rest/v1/rpc/claim_grants", new JSONObject(), token, null); return new JSONObject(); });
+        return out[0] instanceof JSONArray ? (JSONArray) out[0] : new JSONArray(String.valueOf(out[0]));
+    }
+
     private static int[] redeemWith(Context c, String code, String token) throws Exception {
         Object r;
         try { r = http(c, "POST", "/rest/v1/rpc/redeem_code_v2", json("code_in", code), token, null); }

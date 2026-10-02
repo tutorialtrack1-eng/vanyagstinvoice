@@ -1,0 +1,7 @@
+# Supabase CLI settings for deploying the Edge Functions in functions/ (run from the repo root):
+#   npx supabase functions deploy cashfree --workdir server --project-ref cufdskrmhdenppoxfhnk
+project_id = "cufdskrmhdenppoxfhnk"
+
+# The Cashfree webhook arrives without a user token; the function checks the user token itself where one is needed
+[functions.cashfree]
+verify_jwt = false

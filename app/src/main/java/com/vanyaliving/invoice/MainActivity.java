@@ -453,6 +453,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         if (dbHelper != null) checkSubscription();
         if (sync != null) sync.start();
         checkForUpdate();
+        collectPayments();
     }
 
     // ------------------------------------------------------------------ app updates
@@ -653,7 +654,69 @@ public class MainActivity extends Activity implements Sync.Listener {
                 .setNegativeButton("Cancel", null).show();
     }
 
+    // Pay through Cashfree when the payment function is there: the browser opens Cashfree's page (UPI, card, net
+    // banking); on return the app asks for the outcome and collects what was bought. The UPI deep link with the
+    // vendor's manual code is the fallback.
     private void startUpiPayment(int days, int invoices, int amount) {
+        if (Supabase.enabled(this)) {
+            Toast.makeText(this, "Opening the secure payment page...", Toast.LENGTH_SHORT).show();
+            new Thread(() -> {
+                try {
+                    JSONObject r = Supabase.createPaymentLink(this, userId, Subscription.planKey(days, invoices));
+                    String url = r.optString("link_url", ""), linkId = r.optString("link_id", "");
+                    if (url.isEmpty()) throw new Exception(r.optString("error", "No payment link"));
+                    Subscription.rememberLink(this, userId, linkId);
+                    runOnUiThread(() -> { if (isFinishing()) return; try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); Toast.makeText(this, "Pay on the page that opens, then come back: BlitzBook activates by itself.", Toast.LENGTH_LONG).show(); } catch (Exception e) { Toast.makeText(this, "Could not open the payment page: " + e.getMessage(), Toast.LENGTH_LONG).show(); } });
+                } catch (Sync.SyncException e) {
+                    runOnUiThread(() -> { if (isFinishing()) return; if (e.status == 404) { Toast.makeText(this, "Online payment is not set up yet; paying by UPI instead", Toast.LENGTH_LONG).show(); startUpiDeepLink(days, invoices, amount); } else Toast.makeText(this, "Could not start the payment: " + e.getMessage(), Toast.LENGTH_LONG).show(); });
+                } catch (Exception e) {
+                    runOnUiThread(() -> { if (!isFinishing()) Toast.makeText(this, "Could not start the payment: " + e.getMessage(), Toast.LENGTH_LONG).show(); });
+                }
+            }).start();
+            return;
+        }
+        startUpiDeepLink(days, invoices, amount);
+    }
+
+    // Payments started earlier whose outcome is not known yet, and grants from payments made on any device
+    private void collectPayments() {
+        if (!Supabase.enabled(this) || dbHelper == null) return;
+        Set<String> pending = Subscription.pendingLinks(this, userId);
+        long now = System.currentTimeMillis();
+        if (pending.isEmpty() && now - prefs.getLong("grants_checked_at_" + userId, 0) < 6 * 60 * 60 * 1000L) return;
+        prefs.edit().putLong("grants_checked_at_" + userId, now).apply();
+        new Thread(() -> {
+            for (String id : pending) {
+                try {
+                    JSONObject r = Supabase.paymentStatus(this, userId, id);
+                    String st = r.optString("status", "");
+                    if (r.optBoolean("paid", false) || st.equals("EXPIRED") || st.equals("CANCELLED") || st.equals("FAILED")) Subscription.forgetLink(this, userId, id);
+                } catch (Exception ignored) { /* asked again next time */ }
+            }
+            try {
+                JSONArray grants = Supabase.claimGrants(this, userId);
+                if (grants.length() == 0) return;
+                StringBuilder what = new StringBuilder();
+                for (int i = 0; i < grants.length(); i++) {
+                    JSONObject g = grants.getJSONObject(i);
+                    Subscription.applyGrant(this, userId, g.optInt("days", 0), g.optInt("invoices", 0));
+                    if (what.length() > 0) what.append(", ");
+                    what.append(g.optInt("days", 0) > 0 ? g.optInt("days", 0) + " days" : g.optInt("invoices", 0) + " invoices");
+                }
+                runOnUiThread(() -> {
+                    if (isFinishing()) return;
+                    Subscription.clearPendingRequest(this, userId);
+                    if (subscriptionDialog != null && subscriptionDialog.isShowing()) subscriptionDialog.dismiss();
+                    new AlertDialog.Builder(this).setTitle("Payment received").setMessage("Thank you! Added: " + what + ".\n\n" + Subscription.statusText(this, userId) + ".").setPositiveButton("OK", null).show();
+                    checkSubscription();
+                    if (onDashboard) showDashboardView();
+                    if (sync != null) sync.now();
+                });
+            } catch (Exception ignored) { /* offline: the grants wait on the server */ }
+        }).start();
+    }
+
+    private void startUpiDeepLink(int days, int invoices, int amount) {
         pendingPlanDays = days; pendingPlanInvoices = invoices; pendingPlanAmount = amount;
         String phone = accountsDb.userIdentity(userId);
         Intent pay = new Intent(Intent.ACTION_VIEW, Uri.parse(Subscription.upiUri(phone, days, invoices, amount)));
@@ -3400,7 +3463,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             p.setTextSize(8f); text(c, p, "Ref: Invoice " + invoiceNo.getText().toString().trim() + " dated " + invoiceDate.getText().toString().trim(), m, fmt.h - m + 6, false);
             poweredBy(c, p, fmt.w - m - 40, fmt.h - m + 6);
             pdf.finishPage(page);
-            Uri uri = writePdfToDownloads(pdf, "Envelope_" + invoiceNo.getText().toString().trim().replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
+            Uri uri = writePdfToDownloads(pdf, pdfName("Envelope", invoiceNo.getText().toString().trim()));
             if (uri != null) {
                 new AlertDialog.Builder(this).setTitle("Envelope Saved")
                         .setMessage("Envelope PDF (" + fmt.name + ") saved to Downloads/BlitzBook.")
@@ -3775,6 +3838,13 @@ public class MainActivity extends Activity implements Sync.Listener {
         return pgs;
     }
 
+    /** "Company Name_INV-0001.pdf": the company, then the document number (a kind such as "DC" or "Envelope" in between for the others). */
+    private String pdfName(String kind, String no) {
+        String co = (sellerNameStr == null ? "" : sellerNameStr).trim().replaceAll("[^A-Za-z0-9 ._-]", "").replaceAll("\\s+", " ").trim();
+        String n = no.replaceAll("[^A-Za-z0-9._-]", "_");
+        return (co.isEmpty() ? "BlitzBook" : co) + "_" + (kind.isEmpty() ? "" : kind + "_") + n + ".pdf";
+    }
+
     private Uri writePdfToDownloads(PdfDocument pdf, String fileName) throws Exception {
         ContentValues v = new ContentValues(); v.put(MediaStore.Downloads.DISPLAY_NAME, fileName); v.put(MediaStore.Downloads.MIME_TYPE, "application/pdf"); v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BlitzBook");
         Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
@@ -3787,7 +3857,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void createChallanPdf() {
         try {
             String no = invoiceNo.getText().toString().trim();
-            Uri uri = writePdfToDownloads(renderPages(true), "DC_" + no.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
+            Uri uri = writePdfToDownloads(renderPages(true), pdfName("DC", no));
             if (uri != null) {
                 new AlertDialog.Builder(this)
                         .setTitle("Delivery Challan " + no + " Saved")
@@ -3804,7 +3874,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         try {
             if (!saveFullInvoice()) return;
             String invoice = invoiceNo.getText().toString().trim();
-            Uri uri = writePdfToDownloads(renderPages(false), invoice.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
+            Uri uri = writePdfToDownloads(renderPages(false), pdfName("", invoice));
             if (uri != null) {
                 logHistory(invoice, parseValue(roundedTotal), parseValue(taxableValue), parseValue(cgstAmount)+parseValue(sgstAmount)+parseValue(igstAmount));
 
@@ -6294,7 +6364,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             text(c, pt, "Authorised Signatory", R, signY + 45, false, true, false);
             poweredBy(c, pt, (L + R) / 2, logicalH - 12);
             pdf.finishPage(page);
-            Uri uri = writePdfToDownloads(pdf, p.docNo.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
+            Uri uri = writePdfToDownloads(pdf, pdfName("", p.docNo));
             if (uri != null) {
                 new AlertDialog.Builder(this).setTitle((quotation ? "Quotation " : "Purchase ") + p.docNo + " Saved")
                         .setMessage("PDF saved to Downloads/BlitzBook.")
@@ -7007,7 +7077,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             text(c, pt, "Authorised Signatory", R, signY + 45, false, true, false);
             poweredBy(c, pt, (L + R) / 2, 830);
             pdf.finishPage(page);
-            Uri uri = writePdfToDownloads(pdf, n.noteNo.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
+            Uri uri = writePdfToDownloads(pdf, pdfName("", n.noteNo));
             if (uri != null) {
                 new AlertDialog.Builder(this).setTitle(n.kind + " " + n.noteNo + " Saved").setMessage("PDF saved to Downloads/BlitzBook.")
                         .setPositiveButton("Print / Share PDF", (dialog, which) -> sharePdf(uri)).setNegativeButton("Close", null).show();

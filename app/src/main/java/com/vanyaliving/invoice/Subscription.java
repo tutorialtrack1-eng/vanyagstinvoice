@@ -45,6 +45,12 @@ final class Subscription {
     static final int[] PLAN_DAYS = {30, 365, 730, 1825, 0, 0};
     static final int[] PLAN_INVOICES = {0, 0, 0, 0, 20, 50};
     static final int[] PLAN_PRICES = {299, 2499, 3999, 7999, 99, 199};
+    // The plan names the payment function knows (server/supabase/functions/cashfree), in the same order
+    static final String[] PLAN_KEYS = {"monthly", "yearly", "2years", "5years", "inv20", "inv50"};
+    static String planKey(int days, int invoices) {
+        for (int i = 0; i < PLAN_DAYS.length; i++) if (invoices > 0 ? PLAN_INVOICES[i] == invoices : PLAN_DAYS[i] == days && PLAN_INVOICES[i] == 0) return PLAN_KEYS[i];
+        return "";
+    }
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
 
     // ---- Payment. Fill these in before release. ----
@@ -204,6 +210,19 @@ final class Subscription {
 
     /** The given days follow whatever is still running: a code entered with 10 days left adds its days after those 10. */
     private static void applyDays(Context c, long userId, String entered, int days) { applyPlan(c, userId, entered, days, 0); }
+
+    /** What a payment bought, applied like a code: a plan's days follow the current validity, a pack's invoices join the balance. */
+    static void applyGrant(Context c, long userId, int days, int invoices) {
+        SharedPreferences.Editor e = prefs(c).edit();
+        if (days > 0) e.putLong("valid_until_" + userId, Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS);
+        if (invoices > 0) e.putInt("inv_quota_" + userId, invoiceQuota(c, userId) + invoices);
+        e.apply();
+    }
+
+    // Payment links started on this phone whose outcome is not known yet
+    static Set<String> pendingLinks(Context c, long userId) { return new HashSet<>(prefs(c).getStringSet("pending_links_" + userId, new HashSet<>())); }
+    static void rememberLink(Context c, long userId, String linkId) { Set<String> s = pendingLinks(c, userId); s.add(linkId); prefs(c).edit().putStringSet("pending_links_" + userId, s).apply(); }
+    static void forgetLink(Context c, long userId, String linkId) { Set<String> s = pendingLinks(c, userId); s.remove(linkId); prefs(c).edit().putStringSet("pending_links_" + userId, s).apply(); }
 
     /** A plan's days follow the current validity; a pack's invoices join the pack balance. */
     private static void applyPlan(Context c, long userId, String entered, int days, int invoices) {

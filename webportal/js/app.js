@@ -247,7 +247,14 @@
       // A reload or a bookmark opens the screen in the address; otherwise the dashboard
       const t = this.fromHash();
       this.go(t ? t.route : 'dashboard', t ? t.params : undefined);
-      const settle = () => { if (this.user !== u) return; if (!Store.company().name) Company.edit(true); this.checkSubscription(); };
+      const settle = () => {
+        if (this.user !== u) return;
+        if (!Store.company().name) Company.edit(true);
+        this.checkSubscription();
+        // Back from Cashfree's payment page (#subscription?link=...), or payments made elsewhere: collect what was bought
+        const m = /^#subscription\?link=([^&]+)/.exec(location.hash || '');
+        if (m) Payments.finish(decodeURIComponent(m[1])); else if (Sub.pendingLinks().length) Payments.collect(); else Sub.claimGrants().then(g => { if (g.length) Payments.granted(g); });
+      };
       // On a browser that has never met the server the books may be on their way: wait for them before
       // asking for a company profile that already exists
       const fresh = !Sync.state().epoch, first = Sync.start(u);
@@ -413,7 +420,7 @@
       return rec;
     },
     login() {
-      Auth.frame('<div class="brand">' + BRAND + '</div><div class="tag">GST Invoice &amp; Accounts</div>' +
+      Auth.frame('<div class="brand">' + BRAND + '</div><div class="tag">Billing &amp; Accounts, made simple</div>' +
         UI.field('Mobile Number / Email', UI.input('lId', '', { attrs: ' autocomplete="username"' })) + UI.field('Password', UI.input('lPw', '', { type: 'password', attrs: ' autocomplete="current-password"' })) +
         '<button class="btn block" id="lGo">Login</button><div class="links"><button class="link" id="lReset">Forgot / Reset Password?</button><button class="link" id="lReg">New User? Register Now</button></div>');
       let busy = false;
@@ -741,8 +748,24 @@
     plans() {
       UI.menu('Choose a Plan', Sub.PLANS.map((p, i) => Sub.planLabel(i)), (i) => Subscription.pay(Sub.PLANS[i]));
     },
-    // Pay by UPI, then the activation request goes out: to the activation server when one is set, else to the vendor
-    pay(plan) {
+    // Pay through Cashfree when the payment function is there (card, UPI, net banking on Cashfree's page); the UPI deep
+    // link with the vendor's manual code remains the fallback
+    async pay(plan) {
+      if (Sub.paymentsAvailable()) {
+        const wait = UI.modal({ title: 'Pay Rs ' + plan.price, body: '<p>Opening the secure payment page for <b>' + esc(plan.name) + '</b>…</p><p class="hint">You pay on Cashfree (UPI, card or net banking) and come straight back here; BlitzBook activates by itself.</p>', buttons: [], cancelable: false });
+        try {
+          const r = await Sub.createPaymentLink(Sub.PLANS.indexOf(plan));
+          location.href = r.link_url;
+          return;
+        } catch (e) {
+          wait.remove();
+          if (e.status !== 404) { UI.toast(e.message || 'Could not start the payment', 6000); return; }
+          UI.toast('Online payment is not set up yet; paying by UPI instead', 4000);
+        }
+      }
+      Subscription.payByUpi(plan);
+    },
+    payByUpi(plan) {
       const amount = plan.price, phone = App.identity(), email = App.user.email || '', uri = Sub.upiUri(phone, plan, amount);
       const what = plan.invoices ? plan.invoices + ' invoices, no end date' : plan.days + ' days', tag = plan.invoices ? plan.invoices + 'inv' : plan.days + 'd';
       UI.modal({ title: 'Pay Rs ' + amount + ' by UPI', body: '<p>Plan: <b>' + esc(plan.name) + '</b> (' + what + ') for <b>Rs ' + amount + '</b>.</p>' + (plan.invoices ? '<p class="hint">An invoice pack offers the invoicing features only; every saved invoice, credit note or debit note uses one invoice.</p>' : '') + '<p>Pay to <b>' + esc(Sub.VENDOR_UPI_ID) + '</b> (' + esc(Sub.VENDOR_NAME) + ') with the note <b>' + esc(Sub.VENDOR_NAME + ' ' + tag + ' ' + phone) + '</b>. On a phone the button below opens your UPI app (Google Pay, PhonePe, Paytm or your bank\'s app).</p>' +
@@ -769,6 +792,32 @@
     }
   };
   App.routes.subscription = () => Subscription.dialog(false);
+
+  // ------------------------------------------------------------ payments coming back from Cashfree
+  const Payments = {
+    // The customer is back from the payment page: ask whether the link is paid, collect the grant, say so
+    async finish(linkId) {
+      try { history.replaceState(null, '', location.pathname + location.search + '#dashboard'); } catch (e) { /* fine */ }
+      const bg = UI.modal({ title: 'Checking payment', body: '<p>Confirming your payment with Cashfree…</p>', buttons: [], cancelable: false });
+      let r = null;
+      try { r = await Sub.checkPayment(linkId); } catch (e) { r = { paid: false, status: 'UNKNOWN', error: e.message }; }
+      const grants = await Sub.claimGrants();
+      bg.remove();
+      if (r.paid || grants.length) { Payments.granted(grants); return; }
+      UI.modal({ title: 'Payment not completed', body: '<p>Cashfree has not reported this payment as paid yet' + (r.error ? ' (' + esc(r.error) + ')' : '') + '. If you did pay, it is usually confirmed within a minute: use Check again. If not, nothing was charged.</p>',
+        buttons: [{ label: 'Close', cls: 'outline' }, { label: 'Check again', cls: 'green', onClick: () => { Payments.finish(linkId); } }] });
+    },
+    // Payments started earlier (another tab, the app) whose outcome was still open
+    async collect() { const g = await Sub.settlePending(); if (g.length) Payments.granted(g); },
+    granted(grants) {
+      Sub.clearPendingRequest();
+      App.checkSubscription();
+      const what = grants.map(g => g.days > 0 ? g.days + ' days' : g.invoices + ' invoices').join(', ');
+      UI.alert('Payment received', 'Thank you! ' + (what ? 'Added: ' + what + '. ' : '') + Sub.statusText() + '.');
+      if (App.current) App.go(App.current.route, App.current.params); else App.go('dashboard');
+    }
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && App.user && Sub.pendingLinks().length) Payments.collect(); });
 
   // ------------------------------------------------------------ sync with the app
   const SyncUI = {

@@ -86,6 +86,38 @@ activation_codes** shows which codes are used and by whom.
 Entering a code needs the client to be signed in to Supabase (the portal shows *Synced* under Export /
 Import, the app shows *Synced* on its Sync line). Otherwise the portal says the code could not be checked.
 
+## 6. Payments through Cashfree
+
+`functions/cashfree/index.ts` is a Supabase Edge Function that takes payments through Cashfree: it makes a
+Cashfree **payment link** for the chosen plan or invoice pack, the customer pays on Cashfree's page (UPI,
+card, net banking) and comes back to the portal (or the app), and the function records what was bought as a
+*grant* (`cashfree.sql`: tables `payments`, `grants`, function `claim_grants`). The portal and the app collect
+grants on login, on return from the payment page and on resume, and apply them exactly like an activation
+code. The UPI deep link with the manual activation code remains the fallback when the function is not deployed.
+
+Set it up once:
+
+1. Run `cashfree.sql` in the SQL Editor.
+2. Cashfree dashboard → Developers → API keys: note the **App ID** and **Secret key** (sandbox first, then
+   production).
+3. Deploy the function and give it the keys (needs the Supabase CLI, `npx supabase`, and a personal access token
+   from Dashboard → Account → Access Tokens in `SUPABASE_ACCESS_TOKEN`):
+
+   ```
+   npx supabase functions deploy cashfree --workdir server --project-ref cufdskrmhdenppoxfhnk
+   npx supabase secrets set --project-ref cufdskrmhdenppoxfhnk CASHFREE_APP_ID=... CASHFREE_SECRET=... CASHFREE_ENV=sandbox PORTAL_URL=https://blitzbook.co.in
+   ```
+
+   (`CASHFREE_ENV=production` once live.)
+4. Cashfree dashboard → Developers → Webhooks: add
+   `https://cufdskrmhdenppoxfhnk.supabase.co/functions/v1/cashfree?action=webhook` for the payment link
+   events (version 2023-08-01). Without the webhook payments are still confirmed when the customer comes back,
+   or on the next launch; the webhook just makes it immediate.
+5. Prices live in the function (`PLANS`) as well as in `subscription.js` / `Subscription.java`: keep them equal.
+
+`Table Editor → payments` lists every payment link made and whether it was paid; `grants` what each account
+received and when it was collected.
+
 ## How it is used
 
 - Registration: the portal / app asks Supabase to email an OTP (`/auth/v1/otp`), verifies it

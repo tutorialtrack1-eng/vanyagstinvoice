@@ -21,6 +21,8 @@
     { name: '50 invoices pack', days: 0, invoices: 50, price: 199 }
   ];
   const PLAN_NAMES = PLANS.map(p => p.name), PLAN_DAYS = PLANS.map(p => p.days), PLAN_PRICES = PLANS.map(p => p.price), PLAN_INVOICES = PLANS.map(p => p.invoices);
+  // The plan names the payment function knows (server/supabase/functions/cashfree), in the same order
+  const PLAN_KEYS = ['monthly', 'yearly', '2years', '5years', 'inv20', 'inv50'];
   const SECRET = 'VANYA-INVOICE-BOOK-2026';
   const VENDOR_UPI_ID = 'blitzbook@upi';
   const VENDOR_NAME = 'BlitzBook';
@@ -133,10 +135,62 @@
       if (!plan) return online === -3 && global.Sync && Sync.isSupabase && Sync.isSupabase() ? -3 : -1;
       used.push(entered);
       Store.set('used_codes', used);
-      if (plan.days > 0) Store.set('valid_until', Math.max(Date.now(), this.expiresAt()) + plan.days * DAY); // the plan follows whatever is still running
-      if (plan.invoices > 0) Store.set('inv_quota', this.invoiceQuota() + plan.invoices);
+      this.applyPlan(plan);
       return plan;
     },
+    // What a code or a payment gives: a plan's days follow whatever is still running, a pack's invoices join the balance
+    applyPlan(plan) {
+      if (n0(plan.days) > 0) Store.set('valid_until', Math.max(Date.now(), this.expiresAt()) + n0(plan.days) * DAY);
+      if (n0(plan.invoices) > 0) Store.set('inv_quota', this.invoiceQuota() + n0(plan.invoices));
+    },
+
+    // ---- payments through Cashfree, by way of the Supabase Edge Function server/supabase/functions/cashfree.
+    // The function makes a Cashfree payment link for a plan; the customer pays on Cashfree's page and comes back to
+    // #subscription?link=<id>; the function (webhook or our status question) then records a grant, and claimGrants()
+    // turns grants into validity / pack invoices, exactly as an activation code does.
+    paymentsAvailable() { return !!global.Sync && Sync.isSupabase && Sync.isSupabase() && !!Sync.user; },
+    async withToken(fn) {
+      Supabase.configure(Sync.serverUrl(), Sync.supabaseKey());
+      let st = Sync.state();
+      if (!st.token) { await Sync.link(st); st = Sync.state(); }
+      try { return await fn(Sync.state().token); }
+      catch (e) { if (e.status !== 401) throw e; st.token = ''; Sync.save(st); await Sync.link(st); return fn(Sync.state().token); }
+    },
+    async callPayments(action, body) {
+      return this.withToken(async (token) => {
+        const r = await fetch(Sync.serverUrl().replace(/\/+$/, '') + '/functions/v1/cashfree?action=' + action, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: Sync.supabaseKey(), Authorization: 'Bearer ' + token }, body: JSON.stringify(body || {}) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { const e = new Error(j.error || (r.status === 404 ? 'Online payment is not set up yet' : 'Payment service error ' + r.status)); e.status = r.status; throw e; }
+        return j;
+      });
+    },
+    pendingLinks() { return Store.get('pending_links', []) || []; },
+    // {link_id, link_url, amount, plan}; the link is remembered until it is known to be paid or abandoned
+    async createPaymentLink(planIndex) {
+      const r = await this.callPayments('link', { plan: PLAN_KEYS[planIndex] });
+      Store.set('pending_links', this.pendingLinks().filter(x => x !== r.link_id).concat([r.link_id]).slice(-10), true);
+      return r;
+    },
+    forgetLink(linkId) { Store.set('pending_links', this.pendingLinks().filter(x => x !== linkId), true); },
+    // {paid, status}; a paid link is forgotten here (its grant is collected by claimGrants)
+    async checkPayment(linkId) { const r = await this.callPayments('status', { link_id: linkId }); if (r.paid) this.forgetLink(linkId); return r; },
+    // Grants from payments not yet applied on any device, applied now; returns them
+    async claimGrants() {
+      if (!this.paymentsAvailable()) return [];
+      try {
+        const r = await this.withToken((token) => Supabase.http('POST', '/rest/v1/rpc/claim_grants', {}, token));
+        const list = Array.isArray(r) ? r : [];
+        list.forEach(g => this.applyPlan(g));
+        return list;
+      } catch (e) { return []; }
+    },
+    // Payments started earlier whose outcome is not known yet: ask about each, then collect grants
+    async settlePending() {
+      const links = this.pendingLinks();
+      for (const id of links) { try { const r = await this.checkPayment(id); if (['EXPIRED', 'CANCELLED', 'FAILED'].includes(String(r.status))) this.forgetLink(id); } catch (e) { /* asked again next time */ } }
+      return this.claimGrants();
+    },
+    PLAN_KEYS,
     pendingRequest() { return Store.get('pending_activation', ''); },
     savePendingRequest(t) { Store.set('pending_activation', t); },
     clearPendingRequest() { Store.set('pending_activation', ''); },
