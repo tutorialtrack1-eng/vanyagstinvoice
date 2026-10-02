@@ -1,9 +1,10 @@
 // BlitzBook - payments through Cashfree, as a Supabase Edge Function.
 //
 //   POST /functions/v1/cashfree?action=link      { plan }        signed-in user: makes a Cashfree order for the plan,
-//                                                                records it in payments, answers { link_id, link_url }
-//   GET  /functions/v1/cashfree?action=pay&order=<id>            the page link_url points at: opens Cashfree's checkout
-//                                                                (UPI, card, net banking) for that order
+//                                                                records it in payments, answers { link_id, link_url }:
+//                                                                link_url is the portal's pay.html, which opens Cashfree's
+//                                                                checkout (UPI, card, net banking) for the order
+//   GET  /functions/v1/cashfree?action=pay&order=<id>            sends an older order on to that page
 //   POST /functions/v1/cashfree?action=status    { link_id }     signed-in user: asks Cashfree whether the order is paid;
 //                                                                when it is, writes the grant; answers { paid, status }
 //   POST /functions/v1/cashfree?action=webhook   (from Cashfree) Payment Gateway webhook signed with the Cashfree secret;
@@ -11,7 +12,7 @@
 //
 // Cashfree orders are used rather than payment links: in production Cashfree switches the Payment Link API on only
 // on request, while the Orders API is open to every live account. The names link_id / link_url are kept so the app and
-// the portal need no change: the "link" is the order, and link_url is the checkout page served by action=pay.
+// the portal need no change: the "link" is the order, and link_url is the portal's checkout page for it.
 //
 // Secrets (Dashboard -> Edge Functions -> Secrets, or `supabase secrets set`):
 //   CASHFREE_APP_ID, CASHFREE_SECRET  from the Cashfree dashboard (Developers -> API keys)
@@ -19,8 +20,8 @@
 //   PORTAL_URL                        where the customer returns after paying, e.g. https://blitzbook.co.in
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase itself.
 //
-// Deploy: supabase functions deploy cashfree --no-verify-jwt   (the webhook and the checkout page arrive without a user
-// token; the user actions check the token themselves). Then run cashfree.sql once in the SQL Editor, and add
+// Deploy: supabase functions deploy cashfree --no-verify-jwt   (the webhook arrives without a user token; the user
+// actions check the token themselves). Then run cashfree.sql once in the SQL Editor, and add
 // <SUPABASE_URL>/functions/v1/cashfree?action=webhook under Developers -> Webhooks -> Payment Gateway in the Cashfree
 // dashboard with the "success payment" event (version 2023-08-01).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -44,8 +45,6 @@ const CF_HEADERS = () => ({
 const FUNCTION_URL = () => env("SUPABASE_URL") + "/functions/v1/cashfree";
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
-const html = (body: string, status = 200) => new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
-const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
 const admin = () => createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), { auth: { persistSession: false } });
 
@@ -86,25 +85,25 @@ async function createOrder(req: Request) {
   const r = await fetch(CF_BASE + "/orders", { method: "POST", headers: CF_HEADERS(), body: JSON.stringify(body) });
   const cf = await r.json().catch(() => ({}));
   if (!r.ok || !cf.payment_session_id) return json({ error: cf.message ?? "Cashfree did not accept the request", cashfree: cf }, 502);
-  const linkUrl = FUNCTION_URL() + "?action=pay&order=" + orderId;
+  const linkUrl = payUrl(cf.payment_session_id, P.name, P.price);
   await admin().from("payments").insert({ link_id: orderId, user_id: user.id, plan: P.name, days: P.days, invoices: P.invoices, amount: P.price, status: "created", link_url: linkUrl, raw: cf });
   return json({ link_id: orderId, link_url: linkUrl, amount: P.price, plan: P.name });
 }
 
-// The page the app and the portal open: Cashfree's checkout SDK takes the customer to the payment page for the order
+// The portal page that opens Cashfree's checkout for an order's payment session (webportal/pay.html). It lives on the
+// portal because Supabase serves whatever an Edge Function answers as plain text, never as a page.
+function payUrl(session: string, plan: string, amount: number) {
+  const q = new URLSearchParams({ session, mode: PRODUCTION ? "production" : "sandbox", plan, amount: String(amount) });
+  return env("PORTAL_URL", "https://blitzbook.co.in") + "/pay.html?" + q.toString();
+}
+
+// Orders made while link_url still pointed here: send them on to the portal page
 async function payPage(req: Request) {
   const orderId = new URL(req.url).searchParams.get("order") ?? "";
   const { data: p } = orderId ? await admin().from("payments").select("status, plan, amount, raw").eq("link_id", orderId).maybeSingle() : { data: null };
   const session = String((p?.raw as Record<string, unknown> | null)?.payment_session_id ?? "");
-  const page = (title: string, body: string, script = "") => html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BlitzBook - ${esc(title)}</title>
-<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f4f6fb;color:#1f2a44}.card{background:#fff;border-radius:14px;padding:28px 24px;max-width:380px;margin:16px;text-align:center;box-shadow:0 6px 28px rgba(31,42,68,.1)}h1{font-size:22px;margin:0 0 12px}p{margin:8px 0;line-height:1.5}a{color:#2b5bd7}.hint{color:#6b7590;font-size:14px}</style></head>
-<body><div class="card"><h1>${esc(title)}</h1>${body}</div>${script}</body></html>`);
-  if (!p || !session) return page("Payment not found", `<p>This payment could not be found. Go back to BlitzBook and start the purchase again.</p>`, "");
-  if (p.status === "paid") return page("Already paid", `<p>This payment has been received. Go back to BlitzBook: your ${esc(p.plan)} is added by itself.</p>`, "");
-  return page("Secure payment", `<p>Opening the Cashfree payment page for <b>${esc(p.plan)}</b>, Rs ${esc(Number(p.amount))}&hellip;</p><p class="hint">Pay by UPI, card or net banking. You come back to BlitzBook when it is done.</p><p><a href="#" id="again">Open the payment page again</a></p>`,
-    `<script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
-<script>(function(){function go(){try{Cashfree({mode:${JSON.stringify(PRODUCTION ? "production" : "sandbox")}}).checkout({paymentSessionId:${JSON.stringify(session)},redirectTarget:"_self"});}catch(e){document.querySelector("p").textContent="Could not open the payment page: "+e.message;}}
-document.getElementById("again").addEventListener("click",function(ev){ev.preventDefault();go();});go();})();</script>`);
+  const to = p && session && p.status !== "paid" ? payUrl(session, p.plan, Number(p.amount)) : env("PORTAL_URL", "https://blitzbook.co.in") + "/pay.html";
+  return new Response(null, { status: 302, headers: { Location: to, "Cache-Control": "no-store" } });
 }
 
 // Cashfree's order status, in the words the app and the portal know: PAID, ACTIVE (not paid yet), EXPIRED, CANCELLED

@@ -89,9 +89,9 @@ Import, the app shows *Synced* on its Sync line). Otherwise the portal says the 
 ## 6. Payments through Cashfree
 
 `functions/cashfree/index.ts` is a Supabase Edge Function that takes payments through Cashfree: it makes a
-Cashfree **order** for the chosen plan or invoice pack and answers with the address of a small checkout page it serves
-itself (`?action=pay&order=...`); that page opens Cashfree's payment page (UPI, card, net banking) through the Cashfree
-JS SDK, the customer pays and comes back to the portal (or the app), and the function records what was bought as a
+Cashfree **order** for the chosen plan or invoice pack and answers with the address of the portal's `pay.html` carrying
+the order's payment session; that page opens Cashfree's payment page (UPI, card, net banking) through the Cashfree
+JS SDK (it lives on the portal because Supabase serves an Edge Function's answer as plain text, never as a page), the customer pays and comes back to the portal (or the app), and the function records what was bought as a
 *grant* (`cashfree.sql`: tables `payments`, `grants`, function `claim_grants`). The portal and the app collect
 grants on login, on return from the payment page and on resume, and apply them exactly like an activation
 code. The UPI deep link with the manual activation code remains the fallback when the function is not deployed.
