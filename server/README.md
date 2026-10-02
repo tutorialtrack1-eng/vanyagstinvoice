@@ -37,8 +37,7 @@ software (Jenkins, Tomcat...), hence 8090 here.
 ## Point the app and the portal at it
 
 - **App**: set `SERVER_URL` at the top of `app/src/main/java/com/vanyaliving/invoice/Sync.java` before
-  building, or enter the address under *Sync* in the app's side menu (also reachable from the login screen
-  as *Sync settings*).
+  building (the app has no sync screen for users; the side menu only shows the state).
 - **Portal**: opened through this server it needs nothing. Hosted elsewhere (Netlify, cPanel...), set
   `DEFAULT_SERVER_URL` at the top of `webportal/js/sync.js`, or enter the address under *Sync* in the top bar.
 

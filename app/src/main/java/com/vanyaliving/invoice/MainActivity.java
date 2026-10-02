@@ -2254,7 +2254,8 @@ public class MainActivity extends Activity implements Sync.Listener {
         head.addView(sideCompanyTv);
         side.addView(head);
 
-        // Small colour-coded icon tiles, three per row: profile, reports, backup and subscription
+        // Small colour-coded icon tiles, three per row: profile, reports, backup and subscription. The sync line
+        // under them only reports the state: the Supabase project is built in, there is nothing for the user to set.
         DashboardTile[] menu = {
                 new DashboardTile("Company Profile", R.drawable.ic_business, 0xFF5E35B1, 0xFFEDE7F6, v -> { drawer.closeDrawers(); showCompanyMasterDialog(); }),
                 new DashboardTile("Sales Report", R.drawable.ic_reports, 0xFF1E88E5, 0xFFE3F2FD, v -> { drawer.closeDrawers(); showSalesReport(); }),
@@ -2263,7 +2264,6 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Stock in Hand", R.drawable.ic_stock, 0xFF00ACC1, 0xFFE0F7FA, v -> { drawer.closeDrawers(); showStockDialog(); }),
                 new DashboardTile("Export / Import", R.drawable.ic_backup, 0xFF546E7A, 0xFFECEFF1, v -> { drawer.closeDrawers(); showBackupDialog(); }),
                 new DashboardTile("Subscription", R.drawable.ic_key, 0xFF00897B, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
-                new DashboardTile("Sync", R.drawable.ic_sync, 0xFF3949AB, 0xFFE8EAF6, v -> { drawer.closeDrawers(); showSyncDialog(); }),
         };
         ScrollView menuScroll = new ScrollView(this);
         menuScroll.setVerticalScrollBarEnabled(false);
@@ -2274,7 +2274,6 @@ public class MainActivity extends Activity implements Sync.Listener {
         syncStatusTv = new TextView(this);
         syncStatusTv.setTextSize(11.5f); syncStatusTv.setTextColor(0xFF607D8B); syncStatusTv.setPadding(dp(8), dp(10), dp(8), dp(4));
         syncStatusTv.setText(Sync.enabled(this) ? "Sync: Waiting" : "Sync: This phone only");
-        syncStatusTv.setOnClickListener(v -> { drawer.closeDrawers(); showSyncDialog(); });
         menuBox.addView(syncStatusTv);
         menuScroll.addView(menuBox);
         side.addView(menuScroll, new LinearLayout.LayoutParams(-1, 0, 1f));

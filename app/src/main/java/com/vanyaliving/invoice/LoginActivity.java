@@ -105,14 +105,6 @@ public class LoginActivity extends Activity {
         });
         root.addView(registerLink);
 
-        // Where the books are kept in step with the web portal; can be set before the first login on a new phone
-        TextView syncLink = new TextView(this);
-        syncLink.setText("Sync settings");
-        syncLink.setTextColor(0xFF607D8B);
-        syncLink.setPadding(0, dp(20), 0, 0);
-        syncLink.setOnClickListener(v -> showSyncSettings());
-        root.addView(syncLink);
-
         setContentView(root);
     }
 
