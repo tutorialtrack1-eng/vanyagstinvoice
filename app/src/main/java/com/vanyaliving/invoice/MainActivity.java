@@ -2222,6 +2222,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         invNoContainer.addView(btnCol);
 
         invoiceDate = edit("Date", false);
+        invoiceDate.setText(today()); // a new invoice or challan is dated today; opening a saved one replaces it
         invoiceDate.setFocusable(false);
         invoiceDate.setClickable(true);
         invoiceDate.setOnClickListener(v -> pickDate(invoiceDate));
