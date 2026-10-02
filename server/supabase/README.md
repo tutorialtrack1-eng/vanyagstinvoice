@@ -75,7 +75,7 @@ sync server is not needed.
 Run `activation.sql` in the SQL Editor the same way. It creates `public.activation_codes` and the
 `redeem_code` function, and loads 40 codes (also listed in `activation-codes.txt`): ten each of the
 monthly plan (30 days), the yearly plan (365), the 2 years plan (730) and the 5 years plan (1825). A code
-works once, on any account, and the validity runs from the moment it is entered. **The codes only work once
+works once, on any account, and its days are added to the end of the current validity (trial or plan); a lapsed account starts from the day the code is entered. **The codes only work once
 this SQL has been run in the project**: until then the app and the portal answer "Invalid activation code".
 To issue more, insert rows the same way (16 letters / digits, uppercase, no dashes). **Table Editor →
 activation_codes** shows which codes are used and by whom.

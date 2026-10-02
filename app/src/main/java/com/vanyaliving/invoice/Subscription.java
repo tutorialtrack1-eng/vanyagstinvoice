@@ -19,7 +19,8 @@ import java.util.Set;
  * work once, on any account, for the number of days they carry. A code made offline is tied to the
  * account's login (phone number or email) and to a plan length, so the app works out the validity from the
  * code itself: it tries every plan in {@link #PLAN_DAYS} and accepts the one whose code matches.
- * Either way the validity starts the moment the code is entered.
+ * Either way the plan days are added to the end of the current validity (trial or subscription); an expired
+ * account starts again from the day the code is entered.
  *
  * Codes are produced offline with tools/LicenceKeyGen.java using the same {@link #SECRET}:
  *     java tools/LicenceKeyGen.java 9876543210 365
@@ -171,19 +172,19 @@ final class Subscription {
         }).start();
     }
 
-    /** The validity runs from now for the given days: a code entered today starts today, whatever was left before. */
+    /** The given days follow whatever is still running: a code entered with 10 days left adds its days after those 10. */
     private static void applyDays(Context c, long userId, String entered, int days) {
         SharedPreferences p = prefs(c);
         Set<String> used = new HashSet<>(p.getStringSet("used_codes_" + userId, new HashSet<>()));
-        long from = System.currentTimeMillis();
+        long from = Math.max(System.currentTimeMillis(), expiresAt(c, userId));
         used.add(entered);
         p.edit().putLong("valid_until_" + userId, from + days * DAY_MILLIS).putStringSet("used_codes_" + userId, used).apply();
     }
 
     /**
      * Redeems an activation code for this account. Returns the plan length in days, or -1 when the code
-     * is wrong for this login, or -2 when it was already used. The validity starts the moment the code is
-     * entered.
+     * is wrong for this login, or -2 when it was already used. The plan days follow the current validity;
+     * an expired account starts the moment the code is entered.
      */
     static int activate(Context c, long userId, String identity, String code) {
         String entered = normalize(code);

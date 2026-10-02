@@ -78,7 +78,7 @@
     // Returns plan days, -1 wrong code, -2 already used, -3 when the code could not be checked online (the codes
     // handed out live in Supabase: without a connection, or signed out there, they cannot be verified). Codes
     // issued in Supabase are tried first, then the codes made for this login with tools/LicenceKeyGen.java.
-    // The validity runs from now for the plan days.
+    // The plan days are added to the end of the current validity (trial or subscription); an expired account starts today.
     async activate(identity, code) {
       const entered = normalize(code);
       if (entered.length !== 16) return -1;
@@ -89,7 +89,7 @@
       let days = online;
       if (days <= 0) { days = -1; for (const d of PLAN_DAYS) if (entered === normalize(await makeCode(identity, d))) { days = d; break; } }
       if (days < 0) return online === -3 && global.Sync && Sync.isSupabase && Sync.isSupabase() ? -3 : -1;
-      const from = Date.now(); // the validity starts the moment the code is entered
+      const from = Math.max(Date.now(), this.expiresAt()); // the new plan follows whatever is still running
       used.push(entered);
       Store.set('used_codes', used);
       Store.set('valid_until', from + days * DAY);

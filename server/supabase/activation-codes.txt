@@ -1,4 +1,4 @@
-BlitzBook activation codes (02/10/2026). Each works once, on any account, from the moment it is entered.
+BlitzBook activation codes (02/10/2026). Each works once, on any account; its days are added after the current validity ends.
 They are live once server/supabase/activation.sql has been run in the Supabase SQL Editor.
 
 Monthly plan  (30 days)

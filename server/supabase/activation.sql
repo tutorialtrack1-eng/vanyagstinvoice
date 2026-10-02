@@ -1,6 +1,6 @@
 -- Activation codes redeemed through Supabase (run in the SQL Editor after schema.sql; safe to run again).
 -- A code is a 16-character string worth a number of days and can be used once, by any account. The validity
--- starts the moment the code is entered and runs for that many days. The table is not readable by clients;
+-- is added to the end of the account's current validity (or starts the day the code is entered when it has lapsed). The table is not readable by clients;
 -- redeem_code() checks and marks a code for the signed-in account.
 create table if not exists public.activation_codes (
   code       text primary key,

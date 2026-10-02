@@ -324,7 +324,12 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await B.evaluate(() => Subscription.dialog(false)); await B.fill('#sCode', code); await B.click('#subDlg .mf .btn.green');
   await B.waitForFunction(() => !Sub.isOnTrial());
   await page.waitForFunction(() => !Sub.isOnTrial(), null, { timeout: 25000 });
-  check('one activation covers both', (await page.evaluate(() => Sub.statusText())).includes('30 days'), await page.evaluate(() => Sub.statusText()));
+  // the 30-day plan follows the 30 trial days still left, so 60 days remain; a second code adds its days after those
+  check('one activation covers both, and the plan follows the trial days left', (await page.evaluate(() => Sub.statusText())).includes('(60 days)'), await page.evaluate(() => Sub.statusText()));
+  const code2 = await B.evaluate(() => Sub.makeCode('9876543210', 365));
+  await B.evaluate(() => Subscription.dialog(false)); await B.fill('#sCode', code2); await B.click('#subDlg .mf .btn.green');
+  await B.waitForFunction(() => Sub.daysLeft() > 400);
+  check('a second code is added to the end of the running plan', (await B.evaluate(() => Sub.statusText())).includes('(425 days)'), await B.evaluate(() => Sub.statusText()));
 
   // mobile viewport
   await page.setViewportSize({ width: 390, height: 844 });
