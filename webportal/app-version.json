@@ -1,6 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "1.3",
+  "versionCode": 5,
+  "versionName": "1.4",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "Delivery challans: send goods out before the invoice, print the challan and turn it into an invoice with one tap."
+  "notes": "Delivery challans, and a new invoice or challan is dated today."
 }
