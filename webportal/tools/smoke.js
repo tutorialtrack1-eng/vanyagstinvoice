@@ -53,10 +53,8 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('.modal .mf .btn.outline'); // company profile: Later
   await page.waitForSelector('.hero');
   check('works without a reachable server', ['This device only', 'Not connected'].includes(await page.evaluate(() => Sync.statusText())), await page.evaluate(() => Sync.statusText()));
-  check('no sync chip or trial chip in the header and hero, Download App instead', (await page.$('#syncBtn')) === null && (await page.$('#subChip')) === null && (await page.$('#dlApp')) !== null);
-  await page.click('#dlApp'); await page.waitForSelector('.menu-list');
-  check('Download App offers Android (APK) and iPhone / iPad', (await page.evaluate(() => Array.from(document.querySelectorAll('.menu-list button')).map(b => b.textContent))).join() === 'Android app (APK),iPhone / iPad');
-  await page.click('.menu-list button:nth-child(2)'); await page.waitForSelector('.modal .mh');
+  check('no sync chip or trial chip in the header and hero; Android App and iOS App buttons instead', (await page.$('#syncBtn')) === null && (await page.$('#subChip')) === null && (await page.evaluate(() => Array.from(document.querySelectorAll('#dlApp .navlink span')).map(e => e.textContent))).join() === 'Android App,iOS App');
+  await page.click('#dlIos'); await page.waitForSelector('.modal .mh');
   check('iPhone / iPad explains the Safari install (Add to Home Screen)', (await page.textContent('.modal .mb')).includes('Add to Home Screen') && (await page.textContent('.modal .mb')).includes('blitzbook.co.in'));
   await page.click('.modal .mf .btn.outline');
   check('installable: manifest, icons and the offline shell are linked', (await page.getAttribute('link[rel=manifest]', 'href')) === 'manifest.webmanifest' && (await page.getAttribute('link[rel=apple-touch-icon]', 'href')) === 'icons/apple-touch-icon.png' && fs.existsSync(path.resolve(__dirname, '..', 'sw.js')) && fs.existsSync(path.resolve(__dirname, '..', 'icons', 'icon-512.png')));

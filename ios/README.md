@@ -12,8 +12,8 @@ The portal at https://blitzbook.co.in is installable: `webportal/manifest.webman
 2. Tap **Share** (the square with the arrow), then **Add to Home Screen**, then **Add**.
 
 BlitzBook then opens full screen from the home screen, keeps its login and books, prints / saves PDFs through
-Safari's share sheet and syncs with the Android app through Supabase. The portal's **Download App** button
-shows these steps under *iPhone / iPad* (and downloads the APK under *Android*).
+Safari's share sheet and syncs with the Android app through Supabase. The portal's top bar has an **iOS App**
+button that shows these steps (and an **Android App** button that downloads the APK).
 
 ## 2. App Store app (this folder)
 
@@ -26,7 +26,7 @@ cannot do on its own:
 | `download {name, content, type}` | writes the Excel / CSV / backup file and opens the share sheet |
 | `open {url}`, `target="_blank"`, `upi:` `sms:` `tel:` `mailto:` links | opens them outside the app |
 
-The portal detects the shell (`Native.ios`) and hides its own Download App button there. Everything else -
+The portal detects the shell (`Native.ios`) and hides its own app buttons there. Everything else -
 storage, sync, the OTP flows, file pickers for uploads and the signature - works in the web view as in Safari.
 `WKAppBoundDomains` lists the portal, which is what lets the portal's service worker run inside the app.
 
@@ -49,7 +49,7 @@ In Xcode: select the BlitzBook target → *Signing & Capabilities* → choose yo
 2. Xcode → *Product → Archive* → *Distribute App* → App Store Connect; create the app record there, fill in
    the listing and screenshots, and submit (TestFlight first if you want testers).
 3. When it is live, put the App Store link in `IOS_APP_URL` at the top of `webportal/js/app.js`: the
-   *iPhone / iPad* option of Download App then opens the App Store (and still offers the web app).
+   **iOS App** button then opens the App Store (and still offers the web app).
 
 ### Changing the portal address
 

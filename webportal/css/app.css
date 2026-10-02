@@ -54,6 +54,7 @@ svg.ic { width: 18px; height: 18px; flex: none; }
 .navlink.active { background: var(--grad); color: #fff; box-shadow: 0 8px 20px -8px rgba(192,132,252,.95), inset 0 0 0 1px rgba(255,255,255,.2); }
 .navlink.logout, .navlink.dl { border-color: rgba(255,255,255,.22); }
 .navlink.dl { background: rgba(255,255,255,.1); }
+.dlgroup { display: inline-flex; gap: 6px; }
 .navlink.dl:hover { background: rgba(103,232,249,.25); border-color: rgba(103,232,249,.8); }
 .navlink.logout:hover { background: rgba(248,113,113,.22); border-color: rgba(252,165,165,.7); }
 .main { max-width: 1240px; margin: 0 auto; padding: 22px 18px 56px; }

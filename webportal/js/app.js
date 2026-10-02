@@ -129,7 +129,9 @@
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     shield: '<path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/>',
     sync: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
-    bank: '<path d="M3 10h18L12 4z"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 21h18M4 18h16"/>'
+    bank: '<path d="M3 10h18L12 4z"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 21h18M4 18h16"/>',
+    android: '<path d="M5 15a7 7 0 0 1 14 0v4H5z"/><path d="M8 9.5 6.5 7M16 9.5 17.5 7"/><path d="M9.5 13h.01M14.5 13h.01"/><path d="M8 19v2.5M16 19v2.5M3 12v4M21 12v4"/>',
+    apple: '<path d="M15.5 6.5c-1.6 0-2.3.9-3.5.9s-2.1-.9-3.5-.9C6.3 6.5 4 8.6 4 12.4c0 3.4 2.6 8.1 4.6 8.1 1.1 0 1.7-.8 3.4-.8s2.1.8 3.4.8c2 0 4.1-4 4.6-5.8-2.2-.8-3-3-3-3.5 0-1.7 1-2.9 2.5-3.6-1-1.2-2.4-1.1-4-1.1z"/><path d="M12.5 6c0-1.9 1.4-3.6 3.3-3.8.2 2-1.5 3.8-3.3 3.8z"/>'
   };
   function icon(name) { return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
 
@@ -196,12 +198,13 @@
       $('#root').innerHTML =
         '<header class="appbar"><button class="brandmark" id="homeBtn" title="Dashboard">' + BRAND + '</button>' +
         '<nav class="nav" id="nav" aria-label="Main">' + NAV.map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('') + '</nav>' +
-        '<div class="bar-right">' + (Native.ios ? '' : '<button class="navlink dl" id="dlApp" title="Get the BlitzBook app for Android or iPhone / iPad">' + icon('download') + '<span>Download App</span></button>') +
+        '<div class="bar-right">' + (Native.ios ? '' : '<span class="dlgroup" id="dlApp"><button class="navlink dl" id="dlAndroid" title="Download the BlitzBook Android app (APK)">' + icon('android') + '<span>Android App</span></button>' +
+          '<button class="navlink dl" id="dlIos" title="BlitzBook on iPhone / iPad">' + icon('apple') + '<span>iOS App</span></button></span>') +
         '<button class="cochip" id="barCo" title="Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
         '<button class="navlink logout" id="logoutBtn" title="Logout">' + icon('logout') + '<span>Logout</span></button></div></header>' +
         '<main class="main" id="view"></main>';
       $('#homeBtn').onclick = () => this.go('dashboard');
-      if ($('#dlApp')) $('#dlApp').onclick = () => GetApp.menu();
+      if ($('#dlAndroid')) { $('#dlAndroid').onclick = () => GetApp.android(); $('#dlIos').onclick = () => GetApp.ios(); }
       $('#barCo').onclick = () => this.go('company');
       $('#logoutBtn').onclick = () => UI.confirm('Logout', 'Do you want to logout?', () => this.logout(), 'Logout');
       $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
@@ -253,12 +256,10 @@
   };
 
   // ------------------------------------------------------------ get the app
-  // Android: the APK served next to the portal. iPhone / iPad: the App Store app when published, otherwise the
-  // portal installed from Safari (Add to Home Screen), which runs full screen with the same login and books.
+  // Two buttons in the top bar. Android: the APK served next to the portal. iPhone / iPad: the App Store app when
+  // published, otherwise the portal installed from Safari (Add to Home Screen), which runs full screen with the
+  // same login and books.
   const GetApp = {
-    menu() {
-      UI.menu('Download App', ['Android app (APK)', 'iPhone / iPad'], (i) => i === 0 ? GetApp.android() : GetApp.ios());
-    },
     android() {
       const a = document.createElement('a'); a.href = APK_URL; a.download = 'BlitzBook.apk'; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 1000);
       UI.alert('Android app', 'BlitzBook.apk is downloading. Open it on the phone to install (allow installing from this source if Android asks). Log in with the same mobile number or email and the books come down by sync.');
