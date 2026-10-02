@@ -63,6 +63,25 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.evaluate(() => App.go('company'));
   check('company profile shows the remaining days', (await page.textContent('#cSubLeft')).includes('30 days remaining'), await page.textContent('#cSubLeft'));
   await page.click('.modal .mf .btn.outline');
+  // invoice pack: an account past its trial with invoices in a pack sees invoicing only; every save uses one invoice,
+  // a saved invoice is read-only, and a used-up pack refuses the next one
+  await page.evaluate(() => { Store.set('registered_at', Date.now() - 40 * 86400000); Store.set('valid_until', 0); Store.set('inv_quota', 2); Store.set('inv_used', 0); App.checkSubscription(); App.go('dashboard'); });
+  await page.waitForSelector('#stPack');
+  check('invoice pack: only the invoicing features are offered', await page.evaluate(() => Sub.isLite() && Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales Report,Export / Import,Subscription' && Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customer,Supplier,Sales Report' && document.querySelector('#stPack').textContent === '2 of 2'), await page.evaluate(() => [Sub.statusText(), Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join()]));
+  await page.screenshot({ path: OUT + '/01b-pack-dashboard.png', fullPage: true });
+  const packSave = async (n) => { await page.evaluate(() => App.go('invoice')); await page.waitForSelector('#rows'); await page.fill('#bName', 'Pack Buyer ' + n); await page.fill(row(0) + '[data-k=desc]', 'Thing ' + n); await page.fill(row(0) + '[data-k=qty]', '1'); await page.fill(row(0) + '[data-k=rate]', '100'); await page.click('#iSave'); await page.waitForSelector('.toast'); return toast(page); };
+  await packSave(1);
+  check('a saved invoice uses one invoice of the pack', (await page.evaluate(() => [Sub.invoicesUsed(), Sub.invoicesLeft(), Store.list('invoices').length, Sub.statusText()])).join() === '1,1,1,Invoice pack: 1 of 2 invoices left', await page.evaluate(() => Sub.statusText()));
+  await page.evaluate(() => App.go('invoice', { id: Store.list('invoices')[0].id })); await page.waitForSelector('#rows');
+  check('on a pack a saved invoice is read-only: no Save or Delete, fields locked, Print stays', await page.evaluate(() => document.querySelector('#iSave').classList.contains('hidden') && document.querySelector('#iDel').classList.contains('hidden') && document.querySelector('#bName').disabled && !document.querySelector('#iPrint').disabled && !!document.querySelector('.pill.warn')));
+  await page.evaluate(() => App.go('sales')); await page.waitForSelector('table.list');
+  check('sales list on a pack: View and Print only, no Receipts / Outstanding', (await page.$$('[data-del]')).length === 0 && (await page.$('#sRct')) === null && (await page.textContent('[data-open]')) === 'View');
+  await packSave(2);
+  const refused = await packSave(3);
+  check('a used-up pack refuses the next invoice and opens the subscription', refused.includes('used up') && (await page.evaluate(() => Store.list('invoices').length)) === 2 && (await page.$('#subDlg')) !== null, refused);
+  check('subscription dialog lists the invoice packs among the plans', await page.evaluate(() => Sub.PLANS.map(p => p.name).join()) === 'Monthly plan,Yearly plan,2 years plan,5 years plan,20 invoices pack,50 invoices pack');
+  await page.click('#subDlg .mf .btn.outline');
+
   await page.context().close();
 
   // ------------------------------------------------------------ part 2: served by the sync server
@@ -240,6 +259,12 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('delete with "also from item master" removes both', await page.evaluate(() => !Books.stock(null).some(s => s.name === 'Wooden Chair') && !Store.items().some(i => i.name === 'Wooden Chair') && Store.list('purchases').some(p => p.no === 'PUR-0002')));
 
   // every screen renders; statements export
+  // every Excel export has a PDF twin: the sales report goes to the print dialog as a paged table
+  await page.evaluate(() => App.go('salesReport')); await page.waitForSelector('#rPdf');
+  await page.click('#rPdf');
+  await page.waitForFunction(() => { const f = document.getElementById('printFrame'); return f && f.srcdoc.includes('SALES REPORT - INVOICE WISE') && f.contentDocument && f.contentDocument.querySelector('.page'); });
+  check('sales report exports as PDF too (a paged table in the print dialog)', await page.evaluate(() => { const f = document.getElementById('printFrame'); return f.srcdoc.includes('OFFSI27-00001') && f.contentDocument.querySelectorAll('.page').length === 1 && f.contentDocument.querySelector('.pno').textContent === 'Page 1 of 1'; }));
+  check('ageing, ledger and statements have PDF buttons', await page.evaluate(() => { App.go('aging'); const a = !!document.querySelector('#agPdf'); App.go('pnl'); const b = !!document.querySelector('#stPdf'); App.go('ledger', { party: 'Solara Appliances' }); const c = !!document.querySelector('#lgPdf'); return a && b && c; }));
   const shots = [['sales', '06-sales'], ['items', '07-items'], ['purchases', '08-purchases'], ['expenses', '09-expenses'], ['journal', '10-journal'], ['money', '16a-money'], ['salesReport', '11-sales-report'], ['pnl', '12-pnl'], ['balance', '13-balance'], ['stock', '14-stock'], ['backup', '17-backup']];
   for (const [r, n] of shots) { await page.evaluate((r) => App.go(r), r); await page.waitForTimeout(80); await page.screenshot({ path: OUT + '/' + n + '.png', fullPage: true }); }
   await page.evaluate(() => App.go('contacts', { type: 'Customer' })); await page.screenshot({ path: OUT + '/15-contacts.png', fullPage: true });

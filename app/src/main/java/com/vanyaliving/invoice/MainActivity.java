@@ -433,8 +433,9 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void checkSubscription() {
         subscriptionTimer.removeCallbacks(subscriptionCheck);
         if (Subscription.isActive(this, userId)) {
+            // A plan runs out at a known moment; an invoice pack only when its invoices are used, which the saves report
             long left = Subscription.expiresAt(this, userId) - System.currentTimeMillis();
-            subscriptionTimer.postDelayed(subscriptionCheck, Math.max(1000, Math.min(left + 500, 6 * 60 * 60 * 1000L)));
+            if (Subscription.isTimeActive(this, userId)) subscriptionTimer.postDelayed(subscriptionCheck, Math.max(1000, Math.min(left + 500, 6 * 60 * 60 * 1000L)));
             // Activated on another device while this one was locked: the code arrived through sync
             if (subscriptionDialogLocked && subscriptionDialog != null && subscriptionDialog.isShowing()) { subscriptionDialog.dismiss(); showDashboardView(); }
             return;
@@ -512,9 +513,10 @@ public class MainActivity extends Activity implements Sync.Listener {
         TextView msg = new TextView(this);
         msg.setTextSize(13.5f);
         String pending = Subscription.pendingRequest(this, userId);
-        msg.setText((locked ? (Subscription.isOnTrial(this, userId) ? "Your free " + Subscription.TRIAL_LABEL + " activation has ended." : Subscription.statusText(this, userId) + ".")
+        msg.setText((locked ? (Subscription.isOnTrial(this, userId) && Subscription.invoiceQuota(this, userId) == 0 ? "Your free " + Subscription.TRIAL_LABEL + " activation has ended." : Subscription.statusText(this, userId) + ".")
                 + "\n\nA subscription is needed to continue." : Subscription.statusText(this, userId) + ".")
-                + "\n\nTap \"Buy / Renew\" to choose a plan and pay by UPI. The activation code is then sent to your mobile"
+                + (Subscription.isLite(this, userId) ? "\n\nOn an invoice pack only invoicing is offered: invoices, credit and debit notes, customers and suppliers, the sales report. Every saved invoice or note uses one invoice of the pack and cannot be changed or deleted afterwards. A monthly or longer plan opens every feature." : "")
+                + "\n\nTap \"Buy / Renew\" to choose a plan or an invoice pack and pay by UPI. The activation code is then sent to your mobile"
                 + (accountsDb.userEmail(userId).isEmpty() ? "" : " and email") + ". Enter it below."
                 + (pending.isEmpty() ? "" : "\n\n" + pending));
         box.addView(msg);
@@ -560,20 +562,20 @@ public class MainActivity extends Activity implements Sync.Listener {
     // ---- Payment: pick a plan, pay by UPI, then the activation request goes out ----
 
     private static final int REQ_UPI = 400;
-    private int pendingPlanDays, pendingPlanAmount;
+    private int pendingPlanDays, pendingPlanInvoices, pendingPlanAmount;
 
     private void showPlanChooser() {
         String[] labels = new String[Subscription.PLAN_DAYS.length];
         for (int i = 0; i < labels.length; i++) labels[i] = Subscription.planLabel(i);
         new AlertDialog.Builder(this).setTitle("Choose a Plan")
-                .setItems(labels, (d, w) -> startUpiPayment(Subscription.PLAN_DAYS[w], Subscription.PLAN_PRICES[w]))
+                .setItems(labels, (d, w) -> startUpiPayment(Subscription.PLAN_DAYS[w], Subscription.PLAN_INVOICES[w], Subscription.PLAN_PRICES[w]))
                 .setNegativeButton("Cancel", null).show();
     }
 
-    private void startUpiPayment(int days, int amount) {
-        pendingPlanDays = days; pendingPlanAmount = amount;
+    private void startUpiPayment(int days, int invoices, int amount) {
+        pendingPlanDays = days; pendingPlanInvoices = invoices; pendingPlanAmount = amount;
         String phone = accountsDb.userIdentity(userId);
-        Intent pay = new Intent(Intent.ACTION_VIEW, Uri.parse(Subscription.upiUri(phone, days, amount)));
+        Intent pay = new Intent(Intent.ACTION_VIEW, Uri.parse(Subscription.upiUri(phone, days, invoices, amount)));
         Intent chooser = Intent.createChooser(pay, "Pay Rs " + amount + " with");
         if (pay.resolveActivity(getPackageManager()) == null) {
             Toast.makeText(this, "No UPI app found on this phone. Install Google Pay, PhonePe, Paytm or your bank's UPI app.", Toast.LENGTH_LONG).show();
@@ -622,8 +624,8 @@ public class MainActivity extends Activity implements Sync.Listener {
     // SMS and the code comes back to the customer's mobile and email.
     private void submitActivationRequest(String txnRef, String status) {
         String phone = accountsDb.userIdentity(userId), email = accountsDb.userEmail(userId);
-        int days = pendingPlanDays, amount = pendingPlanAmount;
-        String summary = Subscription.planName(days) + " (" + days + " days), Rs " + amount + ", UPI ref " + (txnRef.isEmpty() ? "-" : txnRef) + ", paid on " + today();
+        int days = pendingPlanDays, invoices = pendingPlanInvoices, amount = pendingPlanAmount;
+        String summary = Subscription.planName(days, invoices) + " (" + Subscription.planWhat(days, invoices) + "), Rs " + amount + ", UPI ref " + (txnRef.isEmpty() ? "-" : txnRef) + ", paid on " + today();
         Subscription.savePendingRequest(this, userId, "Payment recorded: " + summary + ". Waiting for the activation code on " + phone + (email.isEmpty() ? "" : " / " + email) + ".");
         Toast.makeText(this, "Sending activation request...", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
@@ -1646,7 +1648,17 @@ public class MainActivity extends Activity implements Sync.Listener {
 
         // Three compact tiles per row with an icon badge, day-to-day work first (sell, who you deal with, buy),
         // then the books; the same order as the web portal. Company profile, reports and backup live in the sidebar.
-        DashboardTile[] tiles = {
+        // On an invoice pack only invoicing: invoices, the notes, the parties and the sales report
+        DashboardTile[] liteTiles = {
+                new DashboardTile("Invoice", R.drawable.ic_invoice, 0xFF1E88E5, 0xFFE3F2FD, v -> showInvoiceView()),
+                new DashboardTile("Sales", R.drawable.ic_reports, 0xFF00897B, 0xFFE0F2F1, v -> showSalesDialog()),
+                new DashboardTile("Credit Notes", R.drawable.ic_journal, 0xFFE53935, 0xFFFBE9E7, v -> showNotesDialog(Ledger.NOTE_CREDIT)),
+                new DashboardTile("Debit Notes", R.drawable.ic_journal, 0xFFF9A825, 0xFFFFFDE7, v -> showNotesDialog(Ledger.NOTE_DEBIT)),
+                new DashboardTile("Customer", R.drawable.ic_customer, 0xFF8E24AA, 0xFFF3E5F5, v -> showContactListFiltered("Customer")),
+                new DashboardTile("Supplier", R.drawable.ic_supplier, 0xFFFB8C00, 0xFFFFF3E0, v -> showContactListFiltered("Supplier")),
+                new DashboardTile("Sales Report", R.drawable.ic_stock, 0xFF546E7A, 0xFFECEFF1, v -> showSalesReport()),
+        };
+        DashboardTile[] fullTiles = {
                 new DashboardTile("Invoice", R.drawable.ic_invoice, 0xFF1E88E5, 0xFFE3F2FD, v -> showInvoiceView()),
                 new DashboardTile("Sales", R.drawable.ic_reports, 0xFF00897B, 0xFFE0F2F1, v -> showSalesDialog()),
                 new DashboardTile("Customer", R.drawable.ic_customer, 0xFF8E24AA, 0xFFF3E5F5, v -> showContactListFiltered("Customer")),
@@ -1657,6 +1669,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Journal", R.drawable.ic_journal, 0xFF5E35B1, 0xFFEDE7F6, v -> showJournalDialog()),
                 new DashboardTile("Reports", R.drawable.ic_stock, 0xFF546E7A, 0xFFECEFF1, v -> showReportsMenu()),
         };
+        DashboardTile[] tiles = Subscription.isLite(this, userId) ? liteTiles : fullTiles;
         root.addView(tileGrid(tiles, 3, 13f, 11));
 
         // At-a-glance figures for the month, under the tiles
@@ -1704,7 +1717,8 @@ public class MainActivity extends Activity implements Sync.Listener {
         r.setOrientation(LinearLayout.HORIZONTAL);
         r.addView(statCard("Sales this month", money(sales), 0xFF1E88E5), weightLp());
         r.addView(statCard("Invoices", String.valueOf(count), 0xFF43A047), weightLp());
-        r.addView(statCard("Credit outstanding", money(credit), 0xFFFB8C00), weightLp());
+        if (Subscription.isLite(this, userId)) r.addView(statCard("Invoices left", Subscription.invoicesLeft(this, userId) + " of " + Subscription.invoiceQuota(this, userId), 0xFFF9A825), weightLp());
+        else r.addView(statCard("Credit outstanding", money(credit), 0xFFFB8C00), weightLp());
         return r;
     }
 
@@ -1921,6 +1935,15 @@ public class MainActivity extends Activity implements Sync.Listener {
                 exportRowsAsExcel("Ledger_" + chosen.replaceAll("[^A-Za-z0-9]+", "_"), new String[]{"Date", "Voucher", "No", "Particulars", "Debit", "Credit", "Balance"}, rowsOut);
             });
             periodRow.addView(xlsBtn, weightLp());
+            Button pdfBtn = new Button(this); pdfBtn.setText("PDF"); styleButton(pdfBtn, BLUE); pdfBtn.setTextSize(12);
+            pdfBtn.setOnClickListener(v -> {
+                List<String[]> rowsOut = new ArrayList<>();
+                rowsOut.add(new String[]{from == null ? "" : from, "", "", "Opening balance", "", "", drCr(fin.opening)});
+                for (Ledger.LedgerEntry e : fin.entries) rowsOut.add(new String[]{e.date, e.type, e.no, e.particulars, e.dr > 0 ? String.format(Locale.US, "%.2f", e.dr) : "", e.cr > 0 ? String.format(Locale.US, "%.2f", e.cr) : "", drCr(e.bal)});
+                rowsOut.add(new String[]{"", "", "", "Closing balance", String.format(Locale.US, "%.2f", fin.totalDr), String.format(Locale.US, "%.2f", fin.totalCr), drCr(fin.closing)});
+                exportRowsAsPdf("Ledger_" + chosen.replaceAll("[^A-Za-z0-9]+", "_"), "Ledger of " + chosen, (from == null ? "All dates" : "Period: " + from + " to " + to) + "  ·  Dr = owed to you, Cr = owed by you", new String[]{"Date", "Voucher", "No", "Particulars", "Debit", "Credit", "Balance"}, rowsOut, 4);
+            });
+            periodRow.addView(pdfBtn, weightLp());
         }
         rootBox.addView(periodRow);
 
@@ -1970,6 +1993,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private String drCr(double v) { return Math.abs(v) < 0.005 ? money(0) : money(Math.abs(v)) + (v > 0 ? " Dr" : " Cr"); }
 
     private void showReportsMenu() {
+        if (Subscription.isLite(this, userId)) { showSalesReport(); return; }
         String[] opts = {"Sales Report", "Party Ledger", "Profit & Loss", "Balance Sheet", "Stock in Hand"};
         new AlertDialog.Builder(this).setTitle("Reports").setItems(opts, (d, w) -> {
             if (w == 0) showSalesReport();
@@ -2305,7 +2329,7 @@ public class MainActivity extends Activity implements Sync.Listener {
 
         saveBtn.setOnClickListener(v -> {
             if (!validateFieldsBool()) return;
-            saveFullInvoice();
+            if (!saveFullInvoice()) return;
             Toast.makeText(this, "Invoice " + invoiceNo.getText().toString().trim() + " saved", Toast.LENGTH_SHORT).show();
         });
         save.setOnClickListener(v -> choosePrintFormat(false));
@@ -2383,7 +2407,13 @@ public class MainActivity extends Activity implements Sync.Listener {
 
         // Small colour-coded icon tiles, three per row: profile, reports, backup and subscription. Sync has no
         // entry here: the Supabase project is built in and runs on its own.
-        DashboardTile[] menu = {
+        DashboardTile[] liteMenu = {
+                new DashboardTile("Company Profile", R.drawable.ic_business, 0xFF5E35B1, 0xFFEDE7F6, v -> { drawer.closeDrawers(); showCompanyMasterDialog(); }),
+                new DashboardTile("Sales Report", R.drawable.ic_reports, 0xFF1E88E5, 0xFFE3F2FD, v -> { drawer.closeDrawers(); showSalesReport(); }),
+                new DashboardTile("Export / Import", R.drawable.ic_backup, 0xFF546E7A, 0xFFECEFF1, v -> { drawer.closeDrawers(); showBackupDialog(); }),
+                new DashboardTile("Subscription", R.drawable.ic_key, 0xFF00897B, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
+        };
+        DashboardTile[] fullMenu = {
                 new DashboardTile("Company Profile", R.drawable.ic_business, 0xFF5E35B1, 0xFFEDE7F6, v -> { drawer.closeDrawers(); showCompanyMasterDialog(); }),
                 new DashboardTile("Sales Report", R.drawable.ic_reports, 0xFF1E88E5, 0xFFE3F2FD, v -> { drawer.closeDrawers(); showSalesReport(); }),
                 new DashboardTile("Profit & Loss", R.drawable.ic_journal, 0xFF43A047, 0xFFE8F5E9, v -> { drawer.closeDrawers(); showProfitAndLoss(); }),
@@ -2397,6 +2427,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         LinearLayout menuBox = new LinearLayout(this);
         menuBox.setOrientation(LinearLayout.VERTICAL);
         menuBox.setPadding(dp(8), dp(10), dp(8), dp(4));
+        DashboardTile[] menu = Subscription.isLite(this, userId) ? liteMenu : fullMenu;
         menuBox.addView(tileGrid(menu, 3, 10.5f, 10));
         menuScroll.addView(menuBox);
         side.addView(menuScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
@@ -3473,7 +3504,11 @@ public class MainActivity extends Activity implements Sync.Listener {
                 }).show();
     }
 
+    // Whether a saved invoice was made on this account (so a pack treats it as final); an unknown invoice counts as made here
+    private boolean invoiceSavedOnPack(String no) { return prefs.getBoolean("pack_inv_" + userId + "_" + no, true); }
+
     private void deleteCurrentInvoice() {
+        if (packLocked("invoice")) return;
         String no = invoiceNo.getText().toString().trim();
         if (no.isEmpty()) {
             Toast.makeText(this, "Enter/select an invoice number first", Toast.LENGTH_SHORT).show();
@@ -3502,9 +3537,33 @@ public class MainActivity extends Activity implements Sync.Listener {
                 }).show();
     }
 
-    private void saveFullInvoice() {
-        String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return;
+    // On an invoice pack a saved invoice or note is final: say so and stop
+    private boolean packLocked(String what) {
+        if (Subscription.isTimeActive(this, userId) || Subscription.invoiceQuota(this, userId) == 0) return false;
+        new AlertDialog.Builder(this).setTitle("Invoice pack").setMessage("On an invoice pack a saved " + what + " cannot be changed or deleted. Issue a credit or debit note for a correction.").setPositiveButton("OK", null).show();
+        return true;
+    }
+    // Whether one more invoice / note may be saved on the pack; opens the subscription dialog when the pack is used up
+    private boolean packAllows() {
+        if (Subscription.canAddInvoice(this, userId)) return true;
+        Toast.makeText(this, "Your invoice pack is used up. Buy another pack or a plan to continue.", Toast.LENGTH_LONG).show();
+        showSubscriptionDialog(false);
+        return false;
+    }
+
+    /** Stores the invoice on screen. False when an invoice pack forbids it (a saved invoice is final, or the pack is used up). */
+    private boolean saveFullInvoice() {
+        String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return false;
         SQLiteDatabase db = dbHelper.getWritableDatabase();
+        // Invoice pack (running or used up): a saved invoice is final, a new one needs an invoice left
+        if (!Subscription.isTimeActive(this, userId) && Subscription.invoiceQuota(this, userId) > 0) {
+            Cursor ex = db.query("invoices", new String[]{"id"}, "invoice_no=?", new String[]{no}, null, null, null);
+            boolean exists = ex.moveToFirst(); ex.close();
+            // The invoice came from a time plan or another device: it is printed as it is, not saved again
+            if (exists && !invoiceSavedOnPack(no)) return true;
+            if (exists) { packLocked("invoice"); return false; }
+            if (!packAllows()) return false;
+        }
         Cursor old = db.query("invoices", new String[]{"rowid"}, "invoice_no=?", new String[]{no}, null, null, null);
         while (old.moveToNext()) {
             long oldId = old.getLong(0);
@@ -3527,6 +3586,8 @@ public class MainActivity extends Activity implements Sync.Listener {
         cv.put("taxable_value", parseValue(taxableValue)); cv.put("cgst", rcm ? 0 : parseValue(cgstAmount)); cv.put("sgst", rcm ? 0 : parseValue(sgstAmount)); cv.put("igst", rcm ? 0 : parseValue(igstAmount));
         cv.put("grand_total", parseValue(grandTotal)); cv.put("rounded_total", parseValue(roundedTotal)); cv.put("amount_words", amountWords.getText().toString());
         long id = db.insert("invoices", null, cv);
+        Subscription.useInvoice(this, userId);
+        if (Subscription.isLite(this, userId) || Subscription.invoiceQuota(this, userId) > 0) prefs.edit().putBoolean("pack_inv_" + userId + "_" + no, true).apply();
         for (ItemRow r : rows) {
             String itemText = r.desc.getText().toString().trim();
             if (!itemText.isEmpty()) {
@@ -3550,6 +3611,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             iv.put("sub_other_info", r.subOtherInfo);
             db.insert("invoice_items", null, iv);
         }
+        return true;
     }
 
     private float calculatePdfRowHeight(Paint p, ItemRow r, float descWidth, boolean noGst) { return calculatePdfRowHeight(p, r, descWidth, noGst, false); }
@@ -3655,7 +3717,8 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void createInvoicePdf() {
         if (!validateFieldsBool()) return;
         try {
-            saveFullInvoice(); String invoice = invoiceNo.getText().toString().trim();
+            if (!saveFullInvoice()) return;
+            String invoice = invoiceNo.getText().toString().trim();
             Uri uri = writePdfToDownloads(renderPages(false), invoice.replaceAll("[^a-zA-Z0-9._-]", "_") + ".pdf");
             if (uri != null) {
                 logHistory(invoice, parseValue(roundedTotal), parseValue(taxableValue), parseValue(cgstAmount)+parseValue(sgstAmount)+parseValue(igstAmount));
@@ -5541,11 +5604,14 @@ public class MainActivity extends Activity implements Sync.Listener {
                     .setTitle("Sales Report - Invoice Wise")
                     .setView(box)
                     .setNegativeButton("Close", null)
+                    .setNeutralButton("PDF", null)
                     .setPositiveButton("Export Excel", null)
                     .create();
 
-            dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                    .setOnClickListener(v -> exportRowsAsExcel("Sales_Report", headers, excelRows)));
+            dialog.setOnShowListener(d -> {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> exportRowsAsExcel("Sales_Report", headers, excelRows));
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> exportRowsAsPdf("Sales_Report", "Sales Report - Invoice Wise", "Period: " + from + " to " + to, headers, excelRows, 3));
+            });
             dialog.show();
         } catch (Exception e) {
             Toast.makeText(this, "Error generating report: " + e.getMessage(), Toast.LENGTH_SHORT).show();
@@ -5569,6 +5635,78 @@ public class MainActivity extends Activity implements Sync.Listener {
         ReportRow(String invoiceNo, String date, String buyer, double taxable, double gst, double grand) {
             this.invoiceNo = invoiceNo; this.date = date; this.buyer = buyer;
             this.taxable = taxable; this.gst = gst; this.grand = grand;
+        }
+    }
+
+    /**
+     * The same table as a PDF (the Excel export's twin): A4 pages with the company name, the title, the heading row
+     * on every page and "Page X of Y"; columns from firstNumberCol on are right-aligned. Saved into Downloads/BlitzBook
+     * and offered to share.
+     */
+    private void exportRowsAsPdf(String fileTag, String title, String subtitle, String[] headers, List<String[]> rowsOut, int firstNumberCol) {
+        try {
+            final float W = 595, H = 842, L = 30, R = W - 30, top = 36, rowH = 15f;
+            Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); p.setColor(Color.BLACK);
+            int cols = headers.length;
+            // Column widths follow the longest text in each column, within bounds
+            float[] need = new float[cols];
+            p.setTextSize(8.5f); p.setTypeface(pdfTypeface(true));
+            for (int i = 0; i < cols; i++) need[i] = p.measureText(headers[i]) + 10;
+            p.setTypeface(pdfTypeface(false));
+            for (String[] r : rowsOut) for (int i = 0; i < cols && i < r.length; i++) need[i] = Math.max(need[i], Math.min(240, p.measureText(r[i] == null ? "" : r[i]) + 10));
+            float sum = 0; for (float v : need) sum += v;
+            float[] w = new float[cols]; for (int i = 0; i < cols; i++) w[i] = need[i] * (R - L) / sum;
+            float headBlock = 70, first = top + headBlock, bodyTop = 20, usable = H - 40 - bodyTop;
+            int perPage = Math.max(1, (int) ((usable - first + bodyTop) / rowH)), perNext = Math.max(1, (int) ((H - 40 - (top + 40)) / rowH));
+            int pages = rowsOut.size() <= perPage ? 1 : 1 + (int) Math.ceil((rowsOut.size() - perPage) / (double) perNext);
+            PdfDocument pdf = new PdfDocument();
+            int at = 0;
+            String today = today();
+            for (int pg = 1; pg <= pages; pg++) {
+                PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder((int) W, (int) H, pg).create());
+                Canvas c = page.getCanvas();
+                float y = top;
+                p.setTypeface(pdfTypeface(true)); p.setTextSize(13f); c.drawText(title.toUpperCase(Locale.ROOT) + (pg > 1 ? " (Continued)" : ""), L, y + 12, p);
+                p.setTextSize(8.5f); c.drawText("Date: " + today + "   Page " + pg + " of " + pages, R - p.measureText("Date: " + today + "   Page " + pg + " of " + pages), y + 12, p);
+                y += 20;
+                p.setTypeface(pdfTypeface(false)); p.setTextSize(9.5f); c.drawText(sellerNameStr == null ? "" : sellerNameStr, L, y + 10, p);
+                y += 14;
+                if (pg == 1 && subtitle != null && !subtitle.isEmpty()) { p.setTextSize(8.5f); c.drawText(subtitle, L, y + 10, p); y += 14; }
+                y += 6;
+                // heading row
+                p.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + rowH, p); p.setColor(Color.BLACK);
+                p.setTypeface(pdfTypeface(true)); p.setTextSize(8.5f);
+                float x = L;
+                for (int i = 0; i < cols; i++) { c.drawText(headers[i], i >= firstNumberCol ? x + w[i] - 4 - p.measureText(headers[i]) : x + 4, y + 11, p); x += w[i]; }
+                p.setStyle(Paint.Style.STROKE); c.drawRect(L, y, R, y + rowH, p); p.setStyle(Paint.Style.FILL);
+                y += rowH;
+                p.setTypeface(pdfTypeface(false));
+                int limit = pg == 1 ? perPage : perNext;
+                for (int n = 0; n < limit && at < rowsOut.size(); n++, at++) {
+                    String[] r = rowsOut.get(at);
+                    boolean last = at == rowsOut.size() - 1 && r.length > 3 && (String.valueOf(r[3]).startsWith("Closing") || String.valueOf(r[0]).startsWith("Total") || String.valueOf(r[0]).startsWith("NET"));
+                    p.setTypeface(pdfTypeface(last));
+                    x = L;
+                    for (int i = 0; i < cols; i++) {
+                        String t = i < r.length && r[i] != null ? r[i] : "";
+                        float max = w[i] - 8;
+                        while (t.length() > 1 && p.measureText(t) > max) t = t.substring(0, t.length() - 2) + "\u2026";
+                        c.drawText(t, i >= firstNumberCol ? x + w[i] - 4 - p.measureText(t) : x + 4, y + 11, p);
+                        x += w[i];
+                    }
+                    p.setColor(0xFFBDBDBD); c.drawLine(L, y + rowH, R, y + rowH, p); p.setColor(Color.BLACK);
+                    y += rowH;
+                }
+                p.setStyle(Paint.Style.STROKE); c.drawLine(L, first - headBlock + 20 + 14 + 6 + (pg == 1 && subtitle != null && !subtitle.isEmpty() ? 14 : 0), L, y, p); c.drawLine(R, first - headBlock + 20 + 14 + 6 + (pg == 1 && subtitle != null && !subtitle.isEmpty() ? 14 : 0), R, y, p); p.setStyle(Paint.Style.FILL);
+                if (pg < pages) { p.setTextSize(8f); c.drawText("Continued on next page...", R - p.measureText("Continued on next page..."), y + 11, p); }
+                poweredBy(c, p, W / 2, H - 14);
+                pdf.finishPage(page);
+            }
+            String fn = "BlitzBook_" + fileTag + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".pdf";
+            Uri uri = writePdfToDownloads(pdf, fn);
+            if (uri != null) { Toast.makeText(this, "PDF saved to Downloads/BlitzBook: " + fn, Toast.LENGTH_LONG).show(); sharePdf(uri); }
+        } catch (Exception e) {
+            Toast.makeText(this, "PDF export error: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -6486,6 +6624,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 printBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, true); });
                 row.addView(printBtn, iconLp(36, 4));
                 ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + no);
+                if (Subscription.isLite(this, userId)) delBtn.setVisibility(View.GONE);
                 delBtn.setOnClickListener(v -> { if (blockedByCreditNotes(no)) return; new AlertDialog.Builder(this).setTitle("Delete Invoice")
                         .setMessage("Delete invoice " + no + "? This cannot be undone.")
                         .setNegativeButton("Cancel", null)
@@ -6559,14 +6698,16 @@ public class MainActivity extends Activity implements Sync.Listener {
             ImageButton printBtn = iconButton(R.drawable.ic_print, NAVY, "Print " + n.noteNo);
             printBtn.setOnClickListener(v -> renderNotePdf(n));
             row.addView(printBtn, iconLp(36, 4));
-            ImageButton editBtn = iconButton(R.drawable.ic_edit, BLUE, "Edit " + n.noteNo);
-            editBtn.setOnClickListener(v -> showNoteEditor(n, kind));
-            row.addView(editBtn, iconLp(36, 4));
-            ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + n.noteNo);
-            delBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete " + kind)
-                    .setMessage("Delete " + n.noteNo + "?").setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete", (d, w) -> { Ledger.deleteNote(dbHelper.getWritableDatabase(), n.id); showNotesDialog(kind); }).show());
-            row.addView(delBtn, iconLp(36, 4));
+            if (!Subscription.isLite(this, userId)) {
+                ImageButton editBtn = iconButton(R.drawable.ic_edit, BLUE, "Edit " + n.noteNo);
+                editBtn.setOnClickListener(v -> showNoteEditor(n, kind));
+                row.addView(editBtn, iconLp(36, 4));
+                ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + n.noteNo);
+                delBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete " + kind)
+                        .setMessage("Delete " + n.noteNo + "?").setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete", (d, w) -> { Ledger.deleteNote(dbHelper.getWritableDatabase(), n.id); showNotesDialog(kind); }).show());
+                row.addView(delBtn, iconLp(36, 4));
+            }
             listContainer.addView(row);
             listContainer.addView(divider());
         }
@@ -6696,7 +6837,12 @@ public class MainActivity extends Activity implements Sync.Listener {
             n.reason = eReason.getText().toString().trim(); n.taxable = taxable; n.gstRate = chargesGst() ? (String) sRate.getSelectedItem() : "0";
             n.settlement = (String) sSettle.getSelectedItem();
             n.compute(isInterStateGstin(n.partyGstin));
+            // Invoice pack: a saved note is final, a new one uses one invoice of the pack
+            boolean fresh = n.id < 0;
+            if (!fresh && packLocked(kind.toLowerCase(Locale.ROOT))) return;
+            if (fresh && !packAllows()) return;
             Ledger.saveNote(dbHelper.getWritableDatabase(), n);
+            if (fresh) Subscription.useInvoice(this, userId);
             Toast.makeText(this, kind + " " + n.noteNo + " saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
             showNotesDialog(kind);
@@ -7171,9 +7317,13 @@ public class MainActivity extends Activity implements Sync.Listener {
         List<String[]> excelRows = new ArrayList<>();
         for (StatementLine l : lines) excelRows.add(new String[]{l.label, l.value.replace("₹ ", "")});
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(box)
-                .setNegativeButton("Close", null).setPositiveButton("Export Excel", null).create();
-        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener(v -> exportRowsAsExcel(fileTag, new String[]{"Particulars", "Amount"}, excelRows)));
+                .setNegativeButton("Close", null).setNeutralButton("PDF", null).setPositiveButton("Export Excel", null).create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> exportRowsAsExcel(fileTag, new String[]{"Particulars", "Amount"}, excelRows));
+            List<String[]> pdfRows = new ArrayList<>();
+            for (StatementLine l : lines) pdfRows.add(new String[]{l.label, l.value});
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> exportRowsAsPdf(fileTag, title, subtitle, new String[]{"Particulars", "Amount"}, pdfRows, 1));
+        });
         dialog.show();
     }
 

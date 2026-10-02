@@ -39,10 +39,12 @@ final class Subscription {
     static final long TRIAL_MILLIS = 30L * 24 * 60 * 60 * 1000L;
     // How the free period is named in messages
     static final String TRIAL_LABEL = "30-day";
-    // The activation packs on sale: a month, a year, two years, five years (same list in the portal's subscription.js)
-    static final String[] PLAN_NAMES = {"Monthly plan", "Yearly plan", "2 years plan", "5 years plan"};
-    static final int[] PLAN_DAYS = {30, 365, 730, 1825};
-    static final int[] PLAN_PRICES = {299, 2499, 3999, 7999};
+    // The packs on sale (same list in the portal's subscription.js): plans for a number of days, and invoice packs
+    // (a number of invoices, no end date; credit and debit notes count as invoices). days or invoices is 0.
+    static final String[] PLAN_NAMES = {"Monthly plan", "Yearly plan", "2 years plan", "5 years plan", "20 invoices pack", "50 invoices pack"};
+    static final int[] PLAN_DAYS = {30, 365, 730, 1825, 0, 0};
+    static final int[] PLAN_INVOICES = {0, 0, 0, 0, 20, 50};
+    static final int[] PLAN_PRICES = {299, 2499, 3999, 7999, 99, 199};
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
 
     // ---- Payment. Fill these in before release. ----
@@ -57,18 +59,21 @@ final class Subscription {
     // manual flow (request reaches VENDOR_PHONE; the code is sent back by SMS / email).
     static final String ACTIVATION_SERVER_URL = "";
 
-    static String planLabel(int i) { return PLAN_NAMES[i] + "  (" + PLAN_DAYS[i] + " days)  -  Rs " + PLAN_PRICES[i]; }
+    static String planLabel(int i) { return PLAN_NAMES[i] + "  (" + (PLAN_INVOICES[i] > 0 ? PLAN_INVOICES[i] + " invoices" : PLAN_DAYS[i] + " days") + ")  -  Rs " + PLAN_PRICES[i]; }
 
-    /** "Yearly plan" for 365 days; "N days" for a code whose length is not one of the packs. */
-    static String planName(int days) {
-        for (int i = 0; i < PLAN_DAYS.length; i++) if (PLAN_DAYS[i] == days) return PLAN_NAMES[i];
-        return days + " days";
+    /** "Yearly plan" for 365 days, "20 invoices pack" for 20 invoices; "N days" / "N invoices" otherwise. */
+    static String planName(int days, int invoices) {
+        for (int i = 0; i < PLAN_DAYS.length; i++) if (invoices > 0 ? PLAN_INVOICES[i] == invoices : PLAN_DAYS[i] == days && PLAN_INVOICES[i] == 0) return PLAN_NAMES[i];
+        return invoices > 0 ? invoices + " invoices" : days + " days";
     }
+    static String planName(int days) { return planName(days, 0); }
+    /** What a plan gives, for messages: "365 days" or "20 invoices, no end date". */
+    static String planWhat(int days, int invoices) { return invoices > 0 ? invoices + " invoices, no end date" : days + " days"; }
 
     /** upi://pay deep link that any UPI app understands; the note carries the phone and plan for matching. */
-    static String upiUri(String phone, int days, int amount) {
+    static String upiUri(String phone, int days, int invoices, int amount) {
         return "upi://pay?pa=" + android.net.Uri.encode(VENDOR_UPI_ID) + "&pn=" + android.net.Uri.encode(VENDOR_NAME)
-                + "&am=" + amount + ".00&cu=INR&tn=" + android.net.Uri.encode(VENDOR_NAME + " " + days + "d " + phone);
+                + "&am=" + amount + ".00&cu=INR&tn=" + android.net.Uri.encode(VENDOR_NAME + " " + (invoices > 0 ? invoices + "inv" : days + "d") + " " + phone);
     }
 
     /** Sends the paid request to the activation server. Returns the code from the reply, "" when the server
@@ -134,7 +139,25 @@ final class Subscription {
         return prefs(c).getLong("registered_at_" + userId, System.currentTimeMillis()) + TRIAL_MILLIS;
     }
 
-    static boolean isActive(Context c, long userId) { return System.currentTimeMillis() < expiresAt(c, userId); }
+    /** A running trial or time plan: every feature. */
+    static boolean isTimeActive(Context c, long userId) { return System.currentTimeMillis() < expiresAt(c, userId); }
+
+    // ---- invoice packs: inv_quota_<userId> invoices bought, inv_used_<userId> invoices (and notes) saved on the pack
+    static int invoiceQuota(Context c, long userId) { return prefs(c).getInt("inv_quota_" + userId, 0); }
+    static int invoicesUsed(Context c, long userId) { return prefs(c).getInt("inv_used_" + userId, 0); }
+    static int invoicesLeft(Context c, long userId) { return Math.max(0, invoiceQuota(c, userId) - invoicesUsed(c, userId)); }
+    /** An account living on an invoice pack: no running plan or trial, invoices left in the pack. Invoicing only. */
+    static boolean isLite(Context c, long userId) { return !isTimeActive(c, userId) && invoicesLeft(c, userId) > 0; }
+    /** Whether one more invoice / note may be saved: always on a plan or the trial, on a pack while invoices are left. */
+    static boolean canAddInvoice(Context c, long userId) { return isTimeActive(c, userId) || invoicesLeft(c, userId) > 0; }
+    /** One invoice, credit note or debit note saved: on a pack it uses one of the invoices. */
+    static void useInvoice(Context c, long userId) { if (isLite(c, userId)) prefs(c).edit().putInt("inv_used_" + userId, invoicesUsed(c, userId) + 1).apply(); }
+    /** The pack counters as another device knows them (sync): the highest seen wins. */
+    static void mergePack(Context c, long userId, int quota, int used) {
+        prefs(c).edit().putInt("inv_quota_" + userId, Math.max(invoiceQuota(c, userId), quota)).putInt("inv_used_" + userId, Math.max(invoicesUsed(c, userId), used)).apply();
+    }
+
+    static boolean isActive(Context c, long userId) { return isTimeActive(c, userId) || invoicesLeft(c, userId) > 0; }
 
     static boolean isOnTrial(Context c, long userId) { return subscriptionUntil(c, userId) <= 0; }
 
@@ -144,10 +167,16 @@ final class Subscription {
     static String statusText(Context c, long userId) {
         long end = expiresAt(c, userId), left = end - System.currentTimeMillis();
         String date = new SimpleDateFormat("dd/MM/yyyy", Locale.US).format(new Date(end));
-        if (left <= 0) return "Activation expired on " + date;
+        int quota = invoiceQuota(c, userId), packLeft = invoicesLeft(c, userId);
+        if (left <= 0) {
+            if (packLeft > 0) return "Invoice pack: " + packLeft + " of " + quota + " invoices left";
+            if (quota > 0) return "Invoice pack used up (" + quota + " invoices); activation expired on " + date;
+            return "Activation expired on " + date;
+        }
         long days = (left + DAY_MILLIS - 1) / DAY_MILLIS;
-        if (isOnTrial(c, userId)) return "Activated till " + date + " (" + days + (days == 1 ? " day" : " days") + " left)";
-        return "Subscription valid till " + date + " (" + days + " days)";
+        String pack = quota > 0 ? "; invoice pack: " + packLeft + " of " + quota + " left for later" : "";
+        if (isOnTrial(c, userId)) return "Activated till " + date + " (" + days + (days == 1 ? " day" : " days") + " left)" + pack;
+        return "Subscription valid till " + date + " (" + days + " days)" + pack;
     }
 
     /**
@@ -162,9 +191,10 @@ final class Subscription {
             if (entered.length() != 16) result = -1;
             else if (prefs(a).getStringSet("used_codes_" + userId, new HashSet<>()).contains(entered)) result = -2;
             else {
-                int online = Supabase.enabled(a) ? Supabase.redeem(a, userId, entered) : -3;
-                if (online > 0) { applyDays(a, userId, entered, online); result = online; }
-                else if (online == -2) result = -2;
+                // {days, invoices} from Supabase, or one error code (-1 unknown, -2 used, -3 not reachable)
+                int[] online = Supabase.enabled(a) ? Supabase.redeem(a, userId, entered) : new int[]{-3};
+                if (online.length == 2) { applyPlan(a, userId, entered, online[0], online[1]); result = online[0] > 0 ? online[0] : online[1]; }
+                else if (online[0] == -2) result = -2;
                 else result = activate(a, userId, identity, code);
             }
             final int r = result;
@@ -173,12 +203,17 @@ final class Subscription {
     }
 
     /** The given days follow whatever is still running: a code entered with 10 days left adds its days after those 10. */
-    private static void applyDays(Context c, long userId, String entered, int days) {
+    private static void applyDays(Context c, long userId, String entered, int days) { applyPlan(c, userId, entered, days, 0); }
+
+    /** A plan's days follow the current validity; a pack's invoices join the pack balance. */
+    private static void applyPlan(Context c, long userId, String entered, int days, int invoices) {
         SharedPreferences p = prefs(c);
         Set<String> used = new HashSet<>(p.getStringSet("used_codes_" + userId, new HashSet<>()));
-        long from = Math.max(System.currentTimeMillis(), expiresAt(c, userId));
         used.add(entered);
-        p.edit().putLong("valid_until_" + userId, from + days * DAY_MILLIS).putStringSet("used_codes_" + userId, used).apply();
+        SharedPreferences.Editor e = p.edit().putStringSet("used_codes_" + userId, used);
+        if (days > 0) e.putLong("valid_until_" + userId, Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS);
+        if (invoices > 0) e.putInt("inv_quota_" + userId, invoiceQuota(c, userId) + invoices);
+        e.apply();
     }
 
     /**

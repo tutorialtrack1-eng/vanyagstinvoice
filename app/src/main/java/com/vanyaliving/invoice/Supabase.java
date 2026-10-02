@@ -286,24 +286,36 @@ final class Supabase {
         return new JSONObject().put("epoch", epoch).put("rev", rev).put("changes", out);
     }
 
-    /** Redeems an activation code issued in Supabase for the signed-in account: plan days, -1 unknown code,
-     *  -2 already used, -3 not reachable / not signed in. Signs in again with the stored password when the token has expired. */
-    static int redeem(Context c, long userId, String code) {
+    /** Redeems an activation code issued in Supabase for the signed-in account: {days, invoices} of the plan or pack,
+     *  or one value: -1 unknown code, -2 already used, -3 not reachable / not signed in. redeem_code_v2 knows both
+     *  kinds; a project with only the older redeem_code answers the days. Signs in again when the token has expired. */
+    static int[] redeem(Context c, long userId, String code) {
         try {
             String token = Sync.token(c, userId);
             if (token.isEmpty()) token = freshToken(c, userId);
-            if (token.isEmpty()) return -3;
-            Object r;
-            try { r = http(c, "POST", "/rest/v1/rpc/redeem_code", json("code_in", code), token, null); }
+            if (token.isEmpty()) return new int[]{-3};
+            try { return redeemWith(c, code, token); }
             catch (Sync.SyncException e) {
                 if (e.status != 401) throw e;
                 token = freshToken(c, userId);
-                if (token.isEmpty()) return -3;
-                r = http(c, "POST", "/rest/v1/rpc/redeem_code", json("code_in", code), token, null);
+                if (token.isEmpty()) return new int[]{-3};
+                return redeemWith(c, code, token);
             }
-            int n = Integer.parseInt(String.valueOf(r).trim());
-            return n == -3 ? -3 : n;
-        } catch (Exception e) { return -3; }
+        } catch (Exception e) { return new int[]{-3}; }
+    }
+
+    private static int[] redeemWith(Context c, String code, String token) throws Exception {
+        Object r;
+        try { r = http(c, "POST", "/rest/v1/rpc/redeem_code_v2", json("code_in", code), token, null); }
+        catch (Sync.SyncException e) {
+            if (e.status != 404) throw e;
+            int n = Integer.parseInt(String.valueOf(http(c, "POST", "/rest/v1/rpc/redeem_code", json("code_in", code), token, null)).trim());
+            return n > 0 ? new int[]{n, 0} : new int[]{n == 0 ? -1 : n};
+        }
+        JSONObject o = r instanceof JSONObject ? (JSONObject) r : new JSONObject(String.valueOf(r));
+        if (o.has("error")) return new int[]{o.optInt("error", -3)};
+        int days = Math.max(0, o.optInt("days", 0)), invoices = Math.max(0, o.optInt("invoices", 0));
+        return days > 0 || invoices > 0 ? new int[]{days, invoices} : new int[]{-1};
     }
 
     private static String freshToken(Context c, long userId) {

@@ -1,4 +1,5 @@
-BlitzBook activation codes (02/10/2026). Each works once, on any account; its days are added after the current validity ends.
+BlitzBook activation codes (02/10/2026). Each works once, on any account; a plan's days are added after the current validity ends, an invoice pack's
+invoices are added to the pack balance (credit and debit notes count as invoices).
 They are live once server/supabase/activation.sql has been run in the Supabase SQL Editor.
 
 Monthly plan  (30 days)
@@ -48,3 +49,27 @@ Yearly plan  (365 days)
   JSX2-YZFU-PMCQ-MYGX
   6CV6-BFLT-5YQG-9DMB
   EVYB-QC3X-DLB8-JTBA
+
+20 invoices pack  (20 invoices, credit and debit notes included)
+  6Q28-EPU7-S2CU-68MA
+  7CPH-6XGZ-2YHM-YQZ5
+  XEW8-GXCR-KZ9H-MTWY
+  Z3L2-LARM-7MYP-PN2E
+  ZRWB-G7DR-HDJ2-7LJ9
+  5WGR-KY9S-2J4P-8PKR
+  8R8M-FVB2-J38A-NZSE
+  FRWE-NKCR-W44Q-LU4F
+  P6CS-JENT-V56S-PV86
+  AUKL-Q4LY-5RAP-KVW8
+
+50 invoices pack  (50 invoices, credit and debit notes included)
+  S2LE-AZ4Z-E6VE-AXAG
+  LKQ5-KZRJ-DVKM-2ME6
+  SWHP-KWKH-A5S6-ZZ4W
+  QGAN-7SDS-A853-PJC4
+  X4Q8-TEFV-4NUZ-BSR5
+  WTP3-MUV3-XGGE-JPTJ
+  QCJ7-JWX5-LJAF-8HK3
+  C6MY-QWD2-PQBT-NA88
+  TQR8-2Q6T-HAJM-6DT3
+  SNHD-Z832-QSU2-4LP9

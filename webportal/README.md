@@ -105,6 +105,8 @@ so export regularly.
   own statement (`Books.partyLedger`).
 - **Sales** has a search box: invoice number, date, party, phone, email, GSTIN, item name or amount; every
   word typed has to match.
+- Every **Export Excel** has a **PDF** beside it (sales report, outstanding & ageing, party ledger, profit &
+  loss, balance sheet): the same table laid out on pages by the print module and sent to the print dialog.
 - Quick item and item master prices are the price the customer pays, GST included ("Unit Price (inclusive of
   tax)"); on the invoice the rate before GST is worked back out of it, so qty x rate x (1 + GST) lands on
   the price again. The same in the app.
@@ -120,9 +122,12 @@ offer the APK and these iPhone / iPad steps. The native iPhone / iPad app (a she
 
 ## Activation codes
 
-The plans are a monthly plan (30 days), a yearly plan (365), a 2 years plan (730) and a 5 years plan (1825).
-Codes handed to customers are issued in Supabase and work once on any account: `server/supabase/activation.sql`
-loads ten of each plan (listed in `server/supabase/activation-codes.txt`). A code tied to one login can also be
+The plans are a monthly plan (30 days), a yearly plan (365), a 2 years plan (730), a 5 years plan (1825), and
+invoice packs of 20 and 50 invoices. A time plan opens every feature. An invoice pack has no end date; every
+saved invoice, credit note or debit note uses one invoice, the portal then shows only invoicing (New Invoice,
+Sales, Credit Notes, Debit Notes, Customer, Supplier, Sales Report), and a saved invoice or note is read-only
+(`Sub.isLite`). Codes handed to customers are issued in Supabase and work once on any account:
+`server/supabase/activation.sql` loads ten of each (listed in `server/supabase/activation-codes.txt`). A code tied to one login can also be
 made offline, exactly as for the Android app:
 
 ```

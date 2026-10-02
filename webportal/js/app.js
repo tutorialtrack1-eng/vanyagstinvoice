@@ -62,6 +62,8 @@
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     },
     csv(rows) { return rows.map(r => r.map(c => { const s = String(c == null ? '' : c); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\r\n'); },
+    // The same table as a PDF: laid out on pages by the print module and handed to the print dialog (Save as PDF)
+    pdf(title, subtitle, headers, rows, opts) { Print.show(Print.table(title, subtitle, headers, rows, Store.company(), opts)); },
     // Excel-readable .xls (an HTML table), the same file the app writes from its reports
     xls(tag, headers, rows) {
       const cell = (t, c) => '<' + t + '>' + esc(c == null ? '' : c) + '</' + t + '>';
@@ -153,8 +155,9 @@
   ];
   // The tiles in this account's order; tiles added since are appended, tiles that no longer exist are dropped
   function tileList() {
-    const byKey = new Map(TILES.map(t => [t.key, t])), out = (Store.get('tile_order', []) || []).map(k => byKey.get(k)).filter(Boolean);
-    TILES.forEach(t => { if (!out.includes(t)) out.push(t); });
+    const all = Sub.isLite() ? LITE_TILES : TILES;
+    const byKey = new Map(all.map(t => [t.key, t])), out = (Store.get('tile_order', []) || []).map(k => byKey.get(k)).filter(Boolean);
+    all.forEach(t => { if (!out.includes(t)) out.push(t); });
     return out;
   }
   /* Tiles can be dragged into a new order. With a mouse a tile is dragged straight away; on a touch screen the
@@ -206,6 +209,18 @@
   ];
   // Routes that open a dialog over the current screen: they never become the active link or the screen to redraw
   const DIALOGS = ['company', 'subscription', 'sync'];
+  // What an account on an invoice pack gets: invoicing only (Sub.isLite)
+  const LITE_NAV = ['dashboard', 'salesReport', 'backup', 'subscription'];
+  const LITE_TILES = [
+    { key: 'invoice', t: 'New Invoice', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
+    { key: 'sales', t: 'Sales', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
+    { key: 'cnotes', t: 'Credit Notes', ic: 'ledger', a: '#BE123C', b: '#F43F5E' },
+    { key: 'dnotes', t: 'Debit Notes', ic: 'ledger', a: '#B45309', b: '#F59E0B' },
+    { key: 'customers', t: 'Customer', ic: 'user', a: '#7E22CE', b: '#A855F7' },
+    { key: 'suppliers', t: 'Supplier', ic: 'truck', a: '#C2410C', b: '#F97316' },
+    { key: 'reports', t: 'Sales Report', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
+  ];
+  const navItems = () => Sub.isLite() ? NAV.filter(n => LITE_NAV.includes(n.key)) : NAV;
   // The Android app, served next to the portal. The iPhone / iPad app: the App Store link once it is published
   // (ios/README.md); until then the portal itself is installed from Safari as a web app.
   const APK_URL = 'BlitzBook.apk';
@@ -240,7 +255,7 @@
     shell() {
       $('#root').innerHTML =
         '<header class="appbar"><button class="brandmark" id="homeBtn" title="Dashboard">' + BRAND + '</button>' +
-        '<nav class="nav" id="nav" aria-label="Main">' + NAV.map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('') + '</nav>' +
+        '<nav class="nav" id="nav" aria-label="Main">' + navItems().map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('') + '</nav>' +
         '<div class="bar-right">' + (Native.ios ? '' : '<span class="dlgroup" id="dlApp"><button class="navlink dl" id="dlAndroid" title="Download the BlitzBook Android app (APK)">' + icon('android') + '<span>Android App</span></button>' +
           '<button class="navlink dl" id="dlIos" title="BlitzBook on iPhone / iPad">' + icon('apple') + '<span>iOS App</span></button></span>') +
         '<button class="cochip" id="barCo" title="Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
@@ -254,6 +269,16 @@
       this.refreshBar();
     },
     refreshBar() { if (!this.user || !$('#barSub')) return; const c = Store.company(); $('#barSub').textContent = c.name || 'Set up company'; $('#barAv').textContent = ((c.name || this.user.name || 'B').trim()[0] || 'B').toUpperCase(); },
+    // The top navigation follows the subscription kind (every screen, or invoicing only on an invoice pack)
+    refreshNav() {
+      const nav = $('#nav'); if (!nav) return;
+      const want = navItems().map(n => n.key).join();
+      if (nav.dataset.keys === want) return;
+      nav.dataset.keys = want;
+      nav.innerHTML = navItems().map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('');
+      $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
+      if (this.current) this.markNav(this.current.route);
+    },
     // Highlights the current screen in the top navigation and scrolls it into view on narrow screens
     markNav(route) {
       const nav = $('#nav'); let on = null;
@@ -291,9 +316,17 @@
     wireBack(root) { $$('[data-back]', root).forEach(b => b.onclick = () => this.go('dashboard')); },
     checkSubscription() {
       clearTimeout(this.subTimer);
-      if (Sub.isActive()) { const left = Sub.expiresAt() - Date.now(); this.subTimer = setTimeout(() => this.checkSubscription(), Math.max(1000, Math.min(left + 500, 6 * 3600 * 1000))); if ($('#subDlg.locked')) { $('#subDlg').remove(); this.go('dashboard'); } return; }
+      this.refreshNav();
+      if (Sub.isActive()) {
+        // A time plan runs out at a known moment; an invoice pack only when its invoices are used, which the saves report
+        if (Sub.isTimeActive()) { const left = Sub.expiresAt() - Date.now(); this.subTimer = setTimeout(() => this.checkSubscription(), Math.max(1000, Math.min(left + 500, 6 * 3600 * 1000))); }
+        if ($('#subDlg.locked')) { $('#subDlg').remove(); this.go('dashboard'); }
+        return;
+      }
       Subscription.dialog(true);
-    }
+    },
+    // Invoice-pack accounts only make invoices and notes: saved documents are not changed or deleted
+    lite() { return Sub.isLite(); }
   };
 
   // ------------------------------------------------------------ get the app
@@ -532,11 +565,14 @@
       // The month's figures close the page
       '<div class="section-title">At a glance</div><div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
       stat('stCount', 'receipt', '#059669', '#34D399', 'Invoices', month.length, 'Raised this month') +
-      stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging') + '</div>');
+      (Sub.isLite() ? stat('stPack', 'star', '#B45309', '#F59E0B', 'Invoices left', Sub.invoicesLeft() + ' of ' + Sub.invoiceQuota(), 'In your invoice pack · credit and debit notes count · tap to buy more', 'subscription')
+        : stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging')) + '</div>');
     countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
     $$('[data-go]', root).forEach(el => el.onclick = () => {
       const k = el.dataset.go;
-      if (k === 'reports') UI.menu('Reports', ['Sales Report', 'Outstanding & Ageing', 'Party Ledger', 'Profit & Loss', 'Balance Sheet', 'Stock in Hand'], (i) => App.go(['salesReport', 'aging', 'ledger', 'pnl', 'balance', 'stock'][i]));
+      if (k === 'reports') { if (Sub.isLite()) App.go('salesReport'); else UI.menu('Reports', ['Sales Report', 'Outstanding & Ageing', 'Party Ledger', 'Profit & Loss', 'Balance Sheet', 'Stock in Hand'], (i) => App.go(['salesReport', 'aging', 'ledger', 'pnl', 'balance', 'stock'][i])); }
+      else if (k === 'cnotes') App.go('notes', { kind: 'CN' });
+      else if (k === 'dnotes') App.go('notes', { kind: 'DN' });
       else if (k === 'customers') App.go('contacts', { type: 'Customer' });
       else if (k === 'suppliers') App.go('contacts', { type: 'Supplier' });
       else if (k === 'receipts') App.go('money', { kind: 'receipt' });
@@ -644,36 +680,38 @@
     dialog(locked) {
       if ($('#subDlg')) { if (!locked || $('#subDlg.locked')) return; $('#subDlg').remove(); }
       const pending = Sub.pendingRequest();
-      const msg = (locked ? (Sub.isOnTrial() ? 'Your free ' + Sub.TRIAL_LABEL + ' activation has ended.' : Sub.statusText() + '.') + '\n\nA subscription is needed to continue.' : Sub.statusText() + '.') +
-        '\n\nTap "Buy / Renew" to choose a plan and pay by UPI. The activation code is then sent to your mobile' + (App.user.email ? ' and email' : '') + '. Enter it below.' + (pending ? '\n\n' + pending : '');
+      const msg = (locked ? (Sub.isOnTrial() && !Sub.invoiceQuota() ? 'Your free ' + Sub.TRIAL_LABEL + ' activation has ended.' : Sub.statusText() + '.') + '\n\nA subscription is needed to continue.' : Sub.statusText() + '.') +
+        (Sub.isLite() ? '\n\nOn an invoice pack only invoicing is offered: invoices, credit and debit notes, customers and suppliers, the sales report. Every saved invoice or note uses one invoice of the pack and cannot be changed or deleted afterwards. A monthly or longer plan opens every feature.' : '') +
+        '\n\nTap "Buy / Renew" to choose a plan or an invoice pack and pay by UPI. The activation code is then sent to your mobile' + (App.user.email ? ' and email' : '') + '. Enter it below.' + (pending ? '\n\n' + pending : '');
       const bg = UI.modal({ title: locked ? 'Subscription Required' : 'Subscription', cancelable: !locked,
         body: '<p style="white-space:pre-line">' + esc(msg) + '</p>' + UI.field('Activation Code', UI.input('sCode', '', { placeholder: 'XXXX-XXXX-XXXX-XXXX', attrs: ' maxlength="19" style="text-transform:uppercase;letter-spacing:1px"' })),
         buttons: [{ label: locked ? 'Logout' : 'Close', cls: 'outline', onClick: () => { if (locked) App.logout(); } }, { label: 'Buy / Renew', cls: 'blue', onClick: () => { Subscription.plans(); return false; } },
           { label: 'Activate', cls: 'green', onClick: async (bg) => {
-            const days = await Sub.activate(App.identity(), UI.val('sCode', bg));
-            if (days === -2) { UI.toast('This code has already been used'); return false; }
-            if (days === -3) { UI.toast('The code could not be checked: the portal is not signed in to the server right now (see Sync under Export / Import). Check the connection and try again.', 7000); return false; }
-            if (days < 0) { UI.toast('Invalid activation code'); return false; }
+            const r = await Sub.activate(App.identity(), UI.val('sCode', bg));
+            if (r === -2) { UI.toast('This code has already been used'); return false; }
+            if (r === -3) { UI.toast('The code could not be checked: the portal is not signed in to the server right now. Check the connection and try again.', 7000); return false; }
+            if (typeof r !== 'object') { UI.toast('Invalid activation code'); return false; }
             Subscription.activated(); return true;
           } }] });
       bg.id = 'subDlg'; if (locked) bg.classList.add('locked');
     },
     activated() { Sub.clearPendingRequest(); UI.toast('Activated: ' + Sub.statusText(), 4000); App.checkSubscription(); App.go('dashboard'); },
     plans() {
-      UI.menu('Choose a Plan', Sub.PLAN_DAYS.map((d, i) => Sub.planLabel(i)), (i) => Subscription.pay(Sub.PLAN_DAYS[i], Sub.PLAN_PRICES[i]));
+      UI.menu('Choose a Plan', Sub.PLANS.map((p, i) => Sub.planLabel(i)), (i) => Subscription.pay(Sub.PLANS[i]));
     },
     // Pay by UPI, then the activation request goes out: to the activation server when one is set, else to the vendor
-    pay(days, amount) {
-      const phone = App.identity(), email = App.user.email || '', uri = Sub.upiUri(phone, days, amount);
-      UI.modal({ title: 'Pay Rs ' + amount + ' by UPI', body: '<p>Plan: <b>' + esc(Sub.planName(days)) + '</b> (' + days + ' days) for <b>Rs ' + amount + '</b>.</p><p>Pay to <b>' + esc(Sub.VENDOR_UPI_ID) + '</b> (' + esc(Sub.VENDOR_NAME) + ') with the note <b>' + esc(Sub.VENDOR_NAME + ' ' + days + 'd ' + phone) + '</b>. On a phone the button below opens your UPI app (Google Pay, PhonePe, Paytm or your bank\'s app).</p>' +
+    pay(plan) {
+      const amount = plan.price, phone = App.identity(), email = App.user.email || '', uri = Sub.upiUri(phone, plan, amount);
+      const what = plan.invoices ? plan.invoices + ' invoices, no end date' : plan.days + ' days', tag = plan.invoices ? plan.invoices + 'inv' : plan.days + 'd';
+      UI.modal({ title: 'Pay Rs ' + amount + ' by UPI', body: '<p>Plan: <b>' + esc(plan.name) + '</b> (' + what + ') for <b>Rs ' + amount + '</b>.</p>' + (plan.invoices ? '<p class="hint">An invoice pack offers the invoicing features only; every saved invoice, credit note or debit note uses one invoice.</p>' : '') + '<p>Pay to <b>' + esc(Sub.VENDOR_UPI_ID) + '</b> (' + esc(Sub.VENDOR_NAME) + ') with the note <b>' + esc(Sub.VENDOR_NAME + ' ' + tag + ' ' + phone) + '</b>. On a phone the button below opens your UPI app (Google Pay, PhonePe, Paytm or your bank\'s app).</p>' +
         '<p><a class="btn blue" href="' + esc(uri) + '">Open UPI app</a></p>' + UI.field('Transaction Reference', UI.input('sRef', '', { placeholder: 'UPI transaction ID / UTR' })),
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'I have paid', cls: 'green', onClick: async (bg) => {
           const ref = UI.val('sRef', bg).trim();
-          const summary = 'Plan ' + days + ' days, Rs ' + amount + ', UPI ref ' + (ref || '-') + ', paid on ' + U.today();
+          const summary = plan.name + ' (' + what + '), Rs ' + amount + ', UPI ref ' + (ref || '-') + ', paid on ' + U.today();
           Sub.savePendingRequest('Payment recorded: ' + summary + '. Waiting for the activation code on ' + phone + (email ? ' / ' + email : '') + '.');
           UI.toast('Sending activation request...');
-          const code = await Sub.requestActivation(phone, email, days, amount, ref, 'REPORTED');
-          if (code && (await Sub.activate(phone, code)) > 0) {
+          const code = await Sub.requestActivation(phone, email, plan, amount, ref, 'REPORTED');
+          if (code && typeof (await Sub.activate(phone, code)) === 'object') {
             if ($('#subDlg')) $('#subDlg').remove();
             Subscription.activated();
             UI.alert('Subscription Activated', Sub.statusText() + '.\n\nThe activation code has also been sent to ' + phone + (email ? ' and ' + email : '') + '.');

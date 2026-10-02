@@ -71,8 +71,13 @@
   }
   // What is still due on one credit invoice, null when it is not a credit invoice
   function invoiceBalance(no) { const r = outstanding().all.find(x => x.no === String(no || '').trim()); return r ? r : null; }
+  // On an invoice pack a saved invoice or note is final: say so and stop
+  function packLocked(what) { if (Sub.isTimeActive() || !Sub.invoiceQuota()) return false; UI.alert('Invoice pack', 'On an invoice pack a saved ' + what + ' cannot be changed or deleted. Issue a credit or debit note for a correction.'); return true; }
+  // Whether one more invoice / note may be saved on the pack; opens the subscription dialog when the pack is used up
+  function packAllows() { if (Sub.canAddInvoice()) return true; UI.toast('Your invoice pack is used up. Buy another pack or a plan to continue.', 6000); Subscription.dialog(false); return false; }
   // An invoice with credit notes against it stays until those are deleted
   function deleteInvoice(inv, then) {
+    if (packLocked('invoice')) return;
     const cns = creditNotesFor(inv.no);
     if (cns.length) { UI.alert('Cannot Delete Invoice', 'Credit note' + (cns.length > 1 ? 's ' : ' ') + cns.join(', ') + ' ' + (cns.length > 1 ? 'were' : 'was') + ' issued against invoice ' + inv.no + '. Delete ' + (cns.length > 1 ? 'them' : 'it') + ' first.'); return; }
     UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice ' + inv.no + ' deleted'); then(); }, 'Delete');
@@ -319,6 +324,12 @@
       $('#iSettings').onclick = () => this.printSettings();
       if ($('#iChallan')) $('#iChallan').onclick = () => this.print('challan');
       this.renderRows();
+      // On an invoice pack a saved invoice is read-only: it can be printed, not changed
+      if (inv.id && Sub.isLite()) {
+        $$('input, select, textarea, .step, .subbtn, .delbtn, #addRow, #quickBtn', root).forEach(el => { el.disabled = true; });
+        $('#iSave').classList.add('hidden'); $('#iDel').classList.add('hidden');
+        $('.page-h h2').insertAdjacentHTML('afterend', '<span class="pill warn" title="Invoice pack: saved invoices cannot be changed">Saved · read-only</span>');
+      }
     },
     renderRows() {
       const inv = this.inv, gst = chargesGst();
@@ -414,13 +425,17 @@
     },
     save() {
       const inv = this.inv;
+      // Invoice pack: a saved invoice is final, and a new one needs an invoice left in the pack
+      if (!Sub.isTimeActive()) { if (inv.id || Store.list('invoices').some(x => x.kind === 'invoice' && x.no === inv.no)) { packLocked('invoice'); return null; } if (!packAllows()) return null; }
       inv.rcm = !!inv.rcm && rcmAllowed();
       if (inv.sameShip) inv.consignee = JSON.parse(JSON.stringify(inv.buyer));
       const ex = Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id);
       if (ex) inv.id = ex.id;
       inv.kind = 'invoice';
+      const fresh = !inv.id;
       const saved = inv.id ? Store.update('invoices', inv) : Store.add('invoices', inv);
       inv.id = saved.id;
+      if (fresh) Sub.useInvoice();
       // Invoiced items join the item master. An item already there keeps its customised price and category.
       inv.items.forEach(it => { const name = String(it.desc).trim(); if (findMaster(name)) upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), hidden: false }); else upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), rate: inclPrice(it.rate, it.gst) }); });
       const bn = inv.buyer.name.trim();
@@ -430,7 +445,7 @@
     // Save only: the invoice is kept, nothing is printed, and the editor moves on to the next invoice number
     saveOnly() {
       if (!this.validate()) return;
-      const inv = this.save();
+      const inv = this.save(); if (!inv) return;
       Invoice.open({});
       UI.toast('Invoice ' + inv.no + ' saved. Next invoice: ' + this.inv.no, 3500);
     },
@@ -440,7 +455,8 @@
       const c = Store.company(), challan = kind === 'challan', layout = c.pdfLayout || 0, paper = Print.PAPERS[c.paper] && !Print.PAPERS[c.paper].envelope ? c.paper : 'A4';
       const go = () => {
         if (challan) { Print.open(Object.assign(JSON.parse(JSON.stringify(this.inv)), { kind: 'challan', consignee: this.inv.sameShip ? this.inv.buyer : this.inv.consignee }), c, 0, paper); return; }
-        const inv = this.save();
+        // A saved invoice on an invoice pack is printed as it is, not saved again
+        const inv = this.inv.id && Sub.isLite() ? this.inv : this.save(); if (!inv) return;
         $('#iDel').disabled = false;
         Print.open(inv, c, layout, paper);
         UI.modal({ title: 'Invoice ' + inv.no + ' Saved', body: '<p>The print dialog is open: choose "Save as PDF" or a printer.</p><p>Choose an action:</p>', buttons: [
@@ -488,11 +504,12 @@
     // Everything about an invoice that a search may hit: number, date, buyer (every line), phone, email, GSTIN,
     // state, payment mode, total and the item names
     const hay = (i) => [i.no, i.date, i.buyer.name, i.buyer.phone, i.buyer.email, i.buyer.gstin, i.buyer.state, i.payment, String(num(i.totals.rounded) || num(i.totals.grand)), money(num(i.totals.rounded) || num(i.totals.grand))].concat(i.items.map(x => x.desc)).join(' ').toLowerCase();
-    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button><button class="btn sm outline" id="sRct">Receipts</button><button class="btn sm outline" id="sOut">Outstanding</button><button class="btn sm outline" id="sRep">Report</button></div>') +
+    const lite = Sub.isLite();
+    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button>' + (lite ? '' : '<button class="btn sm outline" id="sRct">Receipts</button><button class="btn sm outline" id="sOut">Outstanding</button>') + '<button class="btn sm outline" id="sRep">Report</button></div>') +
       (invs.length ? '<div class="btnrow"><input id="sSearch" class="search" placeholder="Search by invoice no, party, phone, GSTIN, item, amount..." autocomplete="off"><span class="hint" id="sCount"></span></div>' : '') +
       '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th>Due</th><th></th></tr></thead><tbody>' +
         invs.map(i => '<tr data-s="' + esc(hay(i)) + '"><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + (i.buyer.phone ? '<div class="small muted">' + esc(i.buyer.phone) + '</div>' : '') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td><td data-l="Due">' + dueCell(i) + '</td>' +
-          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">Open</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button></td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one.</div>') + '</div>');
+          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">' + (lite ? 'View' : 'Open') + '</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button>' + (lite ? '' : '<button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one.</div>') + '</div>');
     App.wireBack(root);
     if ($('#sSearch')) {
       // Every word typed has to appear somewhere in the invoice
@@ -503,7 +520,8 @@
       };
       $('#sSearch').addEventListener('input', filter); filter();
     }
-    $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRct').onclick = () => App.go('money', { kind: 'receipt' }); $('#sOut').onclick = () => App.go('aging'); $('#sRep').onclick = () => App.go('salesReport');
+    $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRep').onclick = () => App.go('salesReport');
+    if (!lite) { $('#sRct').onclick = () => App.go('money', { kind: 'receipt' }); $('#sOut').onclick = () => App.go('aging'); }
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
     $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));
     $$('[data-del]', root).forEach(b => b.onclick = () => deleteInvoice(Store.find('invoices', b.dataset.del), () => App.go('sales')));
@@ -523,7 +541,7 @@
         '<div class="hint" style="margin-bottom:12px">' + (isCN ? 'Issued to a customer against a sales invoice for returns, discounts or corrections. Reduces sales, output GST and what the customer owes.' : 'Issued to a supplier against a purchase for returns, shortages or rate differences. Reduces purchases, input GST and what you owe.') + '</div>' +
         '<div class="tablewrap">' + (notes.length ? '<table class="list cards"><thead><tr><th>Note</th><th>Date</th><th>Party</th><th>Against</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th><th>Settlement</th><th></th></tr></thead><tbody>' +
           notes.map(n => '<tr><td data-l="Note"><b>' + esc(n.no) + '</b></td><td data-l="Date">' + esc(n.date) + '</td><td data-l="Party">' + esc(n.party || '-') + (n.reason ? '<div class="small muted">' + esc(n.reason) + '</div>' : '') + '</td><td data-l="Against">' + esc(n.ref || '-') + '</td><td class="num" data-l="Taxable">' + money(n.taxable) + '</td><td class="num" data-l="GST">' + money(n.gst) + '</td><td class="num" data-l="Total">' + money(n.total) + '</td><td data-l="Settlement">' + esc(n.settle) + '</td>' +
-            '<td class="actions"><button class="btn sm" data-p="' + esc(n.id) + '">Print</button><button class="btn sm outline" data-e="' + esc(n.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(n.id) + '">Delete</button></td></tr>').join('') + '</tbody></table>' : '<div class="empty">No ' + label.toLowerCase() + ' yet.</div>') + '</div>');
+            '<td class="actions"><button class="btn sm" data-p="' + esc(n.id) + '">Print</button>' + (Sub.isLite() ? '' : '<button class="btn sm outline" data-e="' + esc(n.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(n.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">No ' + label.toLowerCase() + ' yet.</div>') + '</div>');
       App.wireBack(root);
       $('#nNew').onclick = () => Notes.edit(kind, null);
       $$('[data-p]', root).forEach(b => b.onclick = () => Print.show(Print.note(Store.find('notes', b.dataset.p), Store.company())));
@@ -552,7 +570,9 @@
           const cap = noteCap(kind, n.ref, n.id);
           if (cap < 0) { UI.mark('nRef', true, bg); UI.toast(isCN ? 'Choose the invoice this credit note is against' : 'Choose the purchase this debit note is against'); return false; }
           if (n.taxable > cap + 0.005) { UI.mark('nTax', true, bg); UI.toast('Cannot exceed the remaining value of ' + n.ref + ': ' + money(cap), 4000); return false; }
-          noteTotals(n); if (n.id) Store.update('notes', n); else Store.add('notes', n); UI.toast((isCN ? 'Credit Note ' : 'Debit Note ') + n.no + ' saved'); Notes.open({ kind });
+          if (n.id && packLocked(isCN ? 'credit note' : 'debit note')) return false;
+          if (!n.id && !packAllows()) return false;
+          noteTotals(n); if (n.id) Store.update('notes', n); else { Store.add('notes', n); Sub.useInvoice(); } UI.toast((isCN ? 'Credit Note ' : 'Debit Note ') + n.no + ' saved'); Notes.open({ kind });
         } }] });
       const recalc = () => { const t = noteTotals({ taxable: UI.val('nTax', bg), rate: chargesGst() ? UI.val('nRate', bg) : 0, partyGstin: UI.val('nGstin', bg) }); $('#nTotal', bg).textContent = 'GST ' + money(t.gst) + '   Total ' + money(t.total); };
       ['nTax', 'nRate', 'nGstin'].forEach(id => { const el = $('#' + id, bg); if (el) { el.addEventListener('input', recalc); el.addEventListener('change', recalc); } });

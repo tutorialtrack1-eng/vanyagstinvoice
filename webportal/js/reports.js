@@ -35,13 +35,15 @@
     const rows = invs.map(i => ({ no: i.no, date: i.date, buyer: String(i.buyer.name || '').replace(/\n/g, ' '), taxable: num(i.totals.taxable), gst: i.rcm ? 0 : num(i.totals.cgst) + num(i.totals.sgst) + num(i.totals.igst), grand: num(i.totals.grand) }));
     const sum = (k) => rows.reduce((s, x) => s + x[k], 0);
     const headers = ['Invoice No', 'Date', 'Buyer Name', 'Taxable Value', 'GST Amount', 'Grand Total'];
-    const root = App.view(App.header('Sales Report - Invoice Wise', '<div class="btnrow" style="margin:0"><button class="btn sm outline" id="rPeriod">' + esc(r.label) + '</button><button class="btn sm green" id="rXls">Export Excel</button><button class="btn sm outline" id="rCsv">CSV</button></div>') +
+    const root = App.view(App.header('Sales Report - Invoice Wise', '<div class="btnrow" style="margin:0"><button class="btn sm outline" id="rPeriod">' + esc(r.label) + '</button><button class="btn sm green" id="rXls">Export Excel</button><button class="btn sm blue" id="rPdf">PDF</button><button class="btn sm outline" id="rCsv">CSV</button></div>') +
       '<div class="card white"><div class="bd"><div class="kv">' + kv('Period', esc(r.from + ' to ' + r.to)) + kv('Invoices', rows.length) + kv('Taxable', money(sum('taxable'))) + kv('GST', money(sum('gst'))) + kv('Grand Total', money(sum('grand')), 'tot') + '</div></div></div>' +
       '<div class="tablewrap">' + (rows.length ? '<table class="list cards"><thead><tr>' + headers.map((h, n) => '<th class="' + (n > 2 ? 'num' : '') + '">' + h + '</th>').join('') + '</tr></thead><tbody>' +
         rows.map(x => '<tr><td data-l="Invoice"><b>' + esc(x.no) + '</b></td><td data-l="Date">' + esc(x.date) + '</td><td data-l="Buyer">' + esc(U.titleCase(x.buyer)) + '</td><td class="num" data-l="Taxable">' + money(x.taxable) + '</td><td class="num" data-l="GST">' + money(x.gst) + '</td><td class="num" data-l="Total">' + money(x.grand) + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">No invoices in this period.</div>') + '</div>');
     App.wireBack(root);
     $('#rPeriod').onclick = () => pickPeriod('Sales Report', r, (rg) => App.go('salesReport', { range: rg }));
-    $('#rXls').onclick = () => UI.xls('Sales_Report', headers, rows.map(x => [x.no, x.date, x.buyer, U.indianNumber(x.taxable), U.indianNumber(x.gst), U.indianNumber(x.grand)]));
+    const flat = () => rows.map(x => [x.no, x.date, x.buyer, U.indianNumber(x.taxable), U.indianNumber(x.gst), U.indianNumber(x.grand)]);
+    $('#rXls').onclick = () => UI.xls('Sales_Report', headers, flat());
+    $('#rPdf').onclick = () => UI.pdf('Sales Report - Invoice Wise', 'Period: ' + r.from + ' to ' + r.to + '   ·   ' + rows.length + ' invoices', headers, flat(), { right: [3, 4, 5], total: ['Total', '', '', U.indianNumber(sum('taxable')), U.indianNumber(sum('gst')), U.indianNumber(sum('grand'))] });
     $('#rCsv').onclick = () => UI.download('BlitzBook_Sales_Report_' + U.stamp() + '.csv', UI.csv([headers].concat(rows.map(x => [x.no, x.date, x.buyer, x.taxable.toFixed(2), x.gst.toFixed(2), x.grand.toFixed(2)]))), 'text/csv');
   };
 
@@ -62,7 +64,7 @@
       g.rows.forEach(r => body.push('<tr><td></td><td data-l="Invoice"><b>' + esc(r.no) + '</b></td><td data-l="Date">' + esc(r.date) + '</td><td class="num" data-l="Days">' + r.days + '</td><td data-l="Age"><span class="pill ' + (r.bucket === 0 ? 'ok' : r.bucket === 1 ? '' : r.bucket === 2 ? 'warn' : 'bad') + '">' + BUCKETS[r.bucket] + '</span></td><td class="num" data-l="Total">' + money(r.total) + '</td><td class="num" data-l="Received">' + money(r.received + r.credited) + (r.credited ? '<div class="small muted">incl. credit notes ' + money(r.credited) + '</div>' : '') + '</td><td class="num" data-l="Balance"><b>' + money(r.balance) + '</b></td>' +
         '<td class="actions"><button class="btn sm green" data-rct="' + esc(r.id) + '">+ Receipt</button><button class="btn sm outline" data-open="' + esc(r.id) + '">Open</button></td></tr>'));
     });
-    const root = App.view(App.header('Outstanding & Ageing', '<div class="btnrow" style="margin:0"><div class="inline"><label class="muted small" for="agDate">as at</label>' + UI.input('agDate', U.toIso(asAt), { type: 'date', attrs: ' style="width:170px;min-height:36px"' }) + '</div><button class="btn sm outline" id="agMoney">Receipts</button><button class="btn sm green" id="agXls">Export Excel</button></div>') +
+    const root = App.view(App.header('Outstanding & Ageing', '<div class="btnrow" style="margin:0"><div class="inline"><label class="muted small" for="agDate">as at</label>' + UI.input('agDate', U.toIso(asAt), { type: 'date', attrs: ' style="width:170px;min-height:36px"' }) + '</div><button class="btn sm outline" id="agMoney">Receipts</button><button class="btn sm green" id="agXls">Export Excel</button><button class="btn sm blue" id="agPdf">PDF</button></div>') +
       '<div class="buckets">' + BUCKETS.map((b, i) => '<div class="bucket b' + i + '"><div class="k">' + b + '</div><div class="v">' + money(sums[i]) + '</div><div class="s">' + open.filter(r => r.bucket === i).length + ' invoice' + (open.filter(r => r.bucket === i).length === 1 ? '' : 's') + '</div></div>').join('') +
       '<div class="bucket tot"><div class="k">Total outstanding</div><div class="v">' + money(total) + '</div><div class="s">' + open.length + ' open credit invoice' + (open.length === 1 ? '' : 's') + ', ' + groups.size + ' customer' + (groups.size === 1 ? '' : 's') + '</div></div></div>' +
       '<div class="hint" style="margin-bottom:10px">A receipt recorded against an invoice number clears that invoice; a receipt without one stays on account of the customer and is shown under the customer. Age counts from the invoice date to the date chosen.</div>' +
@@ -70,7 +72,9 @@
     App.wireBack(root);
     $('#agDate').onchange = e => { if (e.target.value) App.go('aging', { asAt: U.fromIso(e.target.value) }); };
     $('#agMoney').onclick = () => App.go('money', { kind: 'receipt' });
-    $('#agXls').onclick = () => UI.xls('Outstanding_Ageing', headers, open.map(r => [r.party, r.no, r.date, r.days, BUCKETS[r.bucket], U.indianNumber(r.total), U.indianNumber(r.received + r.credited), U.indianNumber(r.balance)]));
+    const agRows = () => open.map(r => [r.party, r.no, r.date, r.days, BUCKETS[r.bucket], U.indianNumber(r.total), U.indianNumber(r.received + r.credited), U.indianNumber(r.balance)]);
+    $('#agXls').onclick = () => UI.xls('Outstanding_Ageing', headers, agRows());
+    $('#agPdf').onclick = () => UI.pdf('Outstanding & Ageing', 'As at ' + asAt + '   ·   ' + BUCKETS.map((b, i) => b + ': ' + money(sums[i])).join('   ·   '), headers, agRows(), { right: [3, 5, 6, 7], total: ['Total outstanding', '', '', '', '', '', '', U.indianNumber(total)] });
     $$('[data-rct]', root).forEach(b => b.onclick = () => { const r = open.find(x => x.id === b.dataset.rct); Money.edit('receipt', { party: r.party, ref: r.no, amount: r.balance }, () => App.go('aging', { asAt })); });
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
   };
@@ -91,7 +95,7 @@
     const pill = (t) => t === 'Receipt' ? 'ok' : t === 'Payment' ? 'warn' : t === 'Credit Note' || t === 'Debit Note' ? 'bad' : '';
     const headers = ['Date', 'Voucher', 'No', 'Particulars', 'Debit', 'Credit', 'Balance'];
     const root = App.view(App.header('Party Ledger', '<div class="btnrow" style="margin:0">' + UI.select('lgParty', parties, party, { blank: parties.length ? '— choose a ' + (p.type ? p.type.toLowerCase() : 'party') + ' —' : 'No parties yet' }) +
-        '<button class="btn sm outline" id="lgPeriod">' + esc(r ? r.label : 'All dates') + '</button>' + (r ? '<button class="btn sm outline" id="lgAll">All dates</button>' : '') + (party && L.entries.length ? '<button class="btn sm green" id="lgXls">Export Excel</button>' : '') + '</div>') +
+        '<button class="btn sm outline" id="lgPeriod">' + esc(r ? r.label : 'All dates') + '</button>' + (r ? '<button class="btn sm outline" id="lgAll">All dates</button>' : '') + (party && L.entries.length ? '<button class="btn sm green" id="lgXls">Export Excel</button><button class="btn sm blue" id="lgPdf">PDF</button>' : '') + '</div>') +
       '<div class="hint" style="margin-bottom:10px">Every bill, note, receipt and payment with the party in date order with a running balance, to reconcile with the party\'s own statement. Dr = the party owes you, Cr = you owe the party. A bill paid at once is shown as billed and settled on the same day.</div>' +
       (!party ? '<div class="empty">Choose a supplier or customer to see the ledger.</div>' :
         '<div class="card white"><div class="bd"><div class="kv">' + kv('Party', esc(party)) + kv('Period', esc(r ? r.from + ' to ' + r.to : 'All dates')) + kv('Opening balance', esc(side(L.opening))) + kv('Debits in the period', money(L.totalDr)) + kv('Credits in the period', money(L.totalCr)) + kv('Closing balance (' + who(L.closing) + ')', esc(side(L.closing)), 'tot') + '</div></div></div>' +
@@ -104,19 +108,21 @@
     $('#lgParty').onchange = e => App.go('ledger', { party: e.target.value, range: r, type: p.type });
     $('#lgPeriod').onclick = () => pickPeriod('Party Ledger', r || periodRange(3), (rg) => App.go('ledger', { party, range: rg, type: p.type }));
     if ($('#lgAll')) $('#lgAll').onclick = () => App.go('ledger', { party, type: p.type });
-    if ($('#lgXls')) $('#lgXls').onclick = () => UI.xls('Ledger_' + party.replace(/[^A-Za-z0-9]+/g, '_'), headers,
-      [[r ? r.from : '', '', '', 'Opening balance', '', '', side(L.opening)]].concat(L.entries.map(e => [e.date, e.type, e.no, e.particulars, e.dr ? U.indianNumber(e.dr) : '', e.cr ? U.indianNumber(e.cr) : '', side(e.bal)]), [['', '', '', 'Closing balance', U.indianNumber(L.totalDr), U.indianNumber(L.totalCr), side(L.closing)]]));
+    const lgRows = () => [[r ? r.from : '', '', '', 'Opening balance', '', '', side(L.opening)]].concat(L.entries.map(e => [e.date, e.type, e.no, e.particulars, e.dr ? U.indianNumber(e.dr) : '', e.cr ? U.indianNumber(e.cr) : '', side(e.bal)]));
+    if ($('#lgXls')) $('#lgXls').onclick = () => UI.xls('Ledger_' + party.replace(/[^A-Za-z0-9]+/g, '_'), headers, lgRows().concat([['', '', '', 'Closing balance', U.indianNumber(L.totalDr), U.indianNumber(L.totalCr), side(L.closing)]]));
+    if ($('#lgPdf')) $('#lgPdf').onclick = () => UI.pdf('Ledger of ' + party, (r ? 'Period: ' + r.from + ' to ' + r.to : 'All dates') + '   ·   Dr = owed to us, Cr = owed by us', headers, lgRows(), { right: [4, 5, 6], total: ['Closing balance (' + who(L.closing) + ')', '', '', '', U.indianNumber(L.totalDr), U.indianNumber(L.totalCr), side(L.closing)] });
   };
 
   // ------------------------------------------------------------ statements
   const kv = (k, v, cls) => '<div class="' + (cls || '') + '">' + k + '</div><div class="v ' + (cls || '') + '">' + v + '</div>';
   // One line of a financial statement: [label, value, style] with style 0 = normal, 1 = bold total, 2 = section heading
   function statement(title, subtitle, lines, fileTag, controls) {
-    const root = App.view(App.header(title, '<div class="btnrow" style="margin:0">' + controls + '<button class="btn sm green" id="stXls">Export Excel</button></div>') +
+    const root = App.view(App.header(title, '<div class="btnrow" style="margin:0">' + controls + '<button class="btn sm green" id="stXls">Export Excel</button><button class="btn sm blue" id="stPdf">PDF</button></div>') +
       '<div class="card white"><div class="bd"><div class="muted small" style="white-space:pre-line">' + esc(subtitle) + '</div><div class="kv">' +
       lines.map(l => l[2] === 2 ? '<div class="h">' + esc(l[0]) + '</div>' : kv(esc(l[0]).replace(/^ {6}/, '<span class="sub"></span>'), esc(l[1]), l[2] === 1 ? 'tot' : '')).join('') + '</div></div></div>');
     App.wireBack(root);
     $('#stXls').onclick = () => UI.xls(fileTag, ['Particulars', 'Amount'], lines.map(l => [l[0], l[1].replace('₹ ', '')]));
+    $('#stPdf').onclick = () => UI.pdf(title, subtitle.replace(/\n/g, '   ·   '), ['Particulars', 'Amount'], lines.map(l => [l[0].trim(), l[1]]), { right: [1], bold: lines.map((l, i) => l[2] ? i : -1).filter(i => i >= 0), widths: ['', '140pt'] });
     return root;
   }
 

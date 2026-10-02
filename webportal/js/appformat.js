@@ -67,7 +67,7 @@
       return clean({ date: s(j.date), narration: s(j.narration), kind: kind || null, doc_no: kind ? s(j.no) : null, party: kind ? s(j.party) : null, ref_no: kind ? s(j.ref) : null, mode: kind ? s(j.mode) : null, bank_ref: kind ? s(j.bankRef) : null,
         lines: (j.lines || []).map(l => ({ account: s(l.account), side: l.side === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) });
     },
-    sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort() }; }
+    sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort(), inv_quota: num(x.inv_quota), inv_used: num(x.inv_used) }; }
   };
 
   // ------------------------------------------------------------ app row -> portal document (old = the record already here, if any)
@@ -149,7 +149,7 @@
     { name: 'note', col: 'notes', prefix: 'note:', key: (d) => s(d.id), byId: true },
     { name: 'journal', col: 'journal', prefix: 'jrn:', key: (d) => s(d.id), byId: true }
   ];
-  function subState() { return { registered_at: Store.get('registered_at', 0), valid_until: Store.get('valid_until', 0), used_codes: Store.get('used_codes', []) }; }
+  function subState() { return { registered_at: Store.get('registered_at', 0), valid_until: Store.get('valid_until', 0), used_codes: Store.get('used_codes', []), inv_quota: Store.get('inv_quota', 0), inv_used: Store.get('inv_used', 0) }; }
 
   // Every record of the signed-in user as {key: app row}
   function snapshot() {
@@ -172,12 +172,15 @@
       if (c.k === 'company') return;
       if (c.k === 'sub') {
         if (c.x) return;
-        // Trial start is the earliest seen, validity the latest, and a code used anywhere is used everywhere
+        // Trial start is the earliest seen, validity the latest, a code used anywhere is used everywhere, and the
+        // invoice pack counters (bought, used) are the highest seen on any device
         const a = subState(), b = row.sub(c.d);
         const starts = [a.registered_at, b.registered_at].filter(v => v > 0);
         if (starts.length) Store.set('registered_at', Math.min.apply(null, starts));
         Store.set('valid_until', Math.max(a.valid_until, b.valid_until));
         Store.set('used_codes', Array.from(new Set(a.used_codes.concat(b.used_codes))));
+        Store.set('inv_quota', Math.max(num(a.inv_quota), num(b.inv_quota)));
+        Store.set('inv_used', Math.max(num(a.inv_used), num(b.inv_used)));
         done.push('sub'); return;
       }
       const kind = KINDS.find(k => c.k.startsWith(k.prefix)); if (!kind) return;
