@@ -335,6 +335,19 @@ table.list .actions button { margin-left: 4px; }
 .kv .h { grid-column: 1 / -1; font-weight: 800; margin-top: 14px; text-transform: uppercase; letter-spacing: .6px; font-size: 11.5px; color: #4338CA; border-bottom: 1px solid #E0E7FF; padding-bottom: 5px; }
 .kv .tot { font-weight: 800; border-top: 1px solid var(--border); padding-top: 6px; }
 .kv .big { font-size: 17px; font-weight: 800; color: var(--ink); margin-top: 6px; padding: 10px 0; border-top: 2px solid #C7D2FE; }
+/* outstanding & ageing */
+.stat.link { cursor: pointer; }
+.buckets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
+.bucket { padding: 14px 16px; border-radius: 16px; background: #fff; border: 1px solid #fff; box-shadow: var(--shadow); border-left: 5px solid var(--green); }
+.bucket.b1 { border-left-color: #6366F1; } .bucket.b2 { border-left-color: #F59E0B; } .bucket.b3 { border-left-color: var(--red); } .bucket.tot { border-left-color: var(--ink); background: var(--tint); }
+.bucket .k { font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .6px; color: var(--label); }
+.bucket .v { font-size: 20px; font-weight: 800; color: var(--ink); margin: 3px 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bucket .s { font-size: 12px; color: var(--label); }
+table.list tr.grp td { background: #F8FAFF; text-align: left; border-top: 2px solid #E0E7FF; }
+table.list.aging td:first-child { width: 24px; }
+@media (max-width: 1100px) { .buckets { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 760px) { .buckets { grid-template-columns: 1fr 1fr; } .bucket.tot { grid-column: 1 / -1; } table.list.cards.aging td:first-child:empty { display: none; } table.list.cards tr.grp td { text-align: left; justify-content: flex-start; } }
+.party-top textarea { min-height: 96px; }
 .preview { border: 1px solid var(--border); border-radius: 12px; width: 100%; height: 75vh; background: #fff; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media print { body::before, .appbar, .btnrow, .no-print { display: none !important; } .main { margin: 0; padding: 0; max-width: none; } .main > * { animation: none; } }

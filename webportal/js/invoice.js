@@ -42,6 +42,30 @@
     return U.round2(base - used);
   }
   function creditNotesFor(invoiceNo) { return Store.list('notes').filter(x => x.kind === 'CN' && x.ref === invoiceNo).map(x => x.no); }
+  /* Credit invoices and what is still due on each as at a date (today when none is given): the invoice total less
+     the receipts recorded against that invoice number and the credit notes adjusted against it on account. A
+     receipt that names no invoice (or not a credit one) is money on account of the customer and is reported as
+     such, so it still shows in the party balance but does not clear a particular invoice. days = age of the
+     invoice, bucket = 0: up to 30 days, 1: 31-60, 2: 61-90, 3: over 90. */
+  function outstanding(asAt) {
+    const at = asAt == null ? Date.now() : asAt, key = (s) => String(s || '').trim().toLowerCase();
+    const amountOf = (v) => (v.lines || []).filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0);
+    const receipts = Store.list('journal').filter(j => j.vtype === 'receipt' && Books.inRange(j.date, null, at));
+    const byRef = new Map(); receipts.forEach(v => { const k = key(v.ref); if (k) byRef.set(k, (byRef.get(k) || 0) + amountOf(v)); });
+    const credited = new Map(); Store.list('notes').forEach(n => { if (n.kind === 'CN' && n.settle === 'Credit' && Books.inRange(n.date, null, at)) { const k = key(n.ref); credited.set(k, (credited.get(k) || 0) + num(n.total)); } });
+    const all = [];
+    invoices().forEach(i => {
+      if (i.payment !== 'Credit' || !Books.inRange(i.date, null, at)) return;
+      const total = num(i.totals.rounded) || num(i.totals.grand), received = byRef.get(key(i.no)) || 0, cn = credited.get(key(i.no)) || 0;
+      const days = Math.max(0, Math.floor((at - U.dateMs(i.date)) / 86400000));
+      all.push({ id: i.id, no: i.no, date: i.date, party: Books.partyName(i.buyer.name) || '(cash sale)', total, received, credited: cn, balance: U.round2(total - received - cn), days, bucket: days <= 30 ? 0 : days <= 60 ? 1 : days <= 90 ? 2 : 3 });
+    });
+    const nos = new Set(all.map(r => key(r.no))), onAccount = new Map();
+    receipts.forEach(v => { if (nos.has(key(v.ref))) return; const k = key(v.party); if (k) onAccount.set(k, { party: v.party, amount: (onAccount.get(k) || { amount: 0 }).amount + amountOf(v) }); });
+    return { all, open: all.filter(r => r.balance > 0.005), onAccount: Array.from(onAccount.values()) };
+  }
+  // What is still due on one credit invoice, null when it is not a credit invoice
+  function invoiceBalance(no) { const r = outstanding().all.find(x => x.no === String(no || '').trim()); return r ? r : null; }
   // An invoice with credit notes against it stays until those are deleted
   function deleteInvoice(inv, then) {
     const cns = creditNotesFor(inv.no);
@@ -226,12 +250,14 @@
     render() {
       const inv = this.inv, c = Store.company(), gst = chargesGst();
       const allContacts = contactsOf(null);
+      // Name & address on the left with the contact picker beside it, then phone, email, GSTIN and state in one line
       const partyBlock = (p, pre, label) =>
-        '<div class="grid2">' + UI.field(label, '<textarea id="' + pre + 'Name" placeholder="' + (pre === 'b' ? 'Buyer' : 'Consignee') + ' Name &amp; Address (name on the first line)">' + esc(p.name) + '</textarea>', { req: pre === 'b', span: true }) +
-        UI.field('Choose from contacts', UI.select(pre + 'Pick', allContacts.map(x => [x.id, x.name + ' (' + (x.type || 'Customer') + ')']), '', { blank: '— select a saved party —' })) +
-        UI.field('State', UI.select(pre + 'State', U.STATES, U.matchState(p.state, '') || p.state)) +
+        '<div class="grid2 party-top">' + UI.field(label, '<textarea id="' + pre + 'Name" placeholder="' + (pre === 'b' ? 'Buyer' : 'Consignee') + ' Name &amp; Address (name on the first line)">' + esc(p.name) + '</textarea>', { req: pre === 'b' }) +
+        UI.field('Choose from contacts', UI.select(pre + 'Pick', allContacts.map(x => [x.id, x.name + ' (' + (x.type || 'Customer') + ')']), '', { blank: '— select a saved party —' }), { hint: 'Fills in the name, address, phone, email, GSTIN and state' }) + '</div>' +
+        '<div class="grid4 keep2 party-line">' +
         UI.field('Phone', UI.input(pre + 'Phone', p.phone, { type: 'tel', placeholder: 'Phone Number', attrs: ' maxlength="10"' })) + UI.field('Email', UI.input(pre + 'Email', p.email, { type: 'email', placeholder: 'Email Address' })) +
-        UI.field('GSTIN', UI.input(pre + 'Gstin', p.gstin, { placeholder: 'GSTIN Number', attrs: ' maxlength="15" style="text-transform:uppercase"' })) + '</div>';
+        UI.field('GSTIN', UI.input(pre + 'Gstin', p.gstin, { placeholder: 'GSTIN Number', attrs: ' maxlength="15" style="text-transform:uppercase"' })) +
+        UI.field('State', UI.select(pre + 'State', U.STATES, U.matchState(p.state, '') || p.state)) + '</div>';
       const root = App.view(App.header(inv.id ? 'Invoice ' + inv.no : 'New Invoice', '<span class="muted">' + esc(c.name || 'My Company Profile') + '</span>') +
         '<div class="card"><div class="hd">Invoice Details</div><div class="bd"><div class="grid3">' +
         UI.field('Invoice No', '<div class="inline">' + UI.input('iNo', inv.no) + '<button class="step" id="iUp" title="Next number">▲</button><button class="step" id="iDn" title="Previous number">▼</button></div>', { req: true }) +
@@ -430,7 +456,7 @@
       const current = c.pdfLayout || 0;
       const bg = UI.modal({ title: 'Print Settings', wide: true, focus: false,
         body: '<div class="hint">Tap the layout you want to print with. It is used for every invoice until changed.</div><div class="previews">' +
-          [0, 1].map(l => '<label class="pv' + (l === current ? ' on' : '') + '"><span class="frame"><iframe sandbox="" title="Layout ' + (l + 1) + '" srcdoc="' + esc(Print.html(sample, c, l, 'A4')) + '"></iframe></span><span class="pick"><input type="radio" name="pvLayout" value="' + l + '"' + (l === current ? ' checked' : '') + '> ' + (l === current ? 'In use' : 'Use this layout') + '</span></label>').join('') + '</div>' +
+          [0, 1].map(l => '<label class="pv' + (l === current ? ' on' : '') + '"><span class="frame"><iframe sandbox="allow-scripts" title="Layout ' + (l + 1) + '" srcdoc="' + esc(Print.html(sample, c, l, 'A4')) + '"></iframe></span><span class="pick"><input type="radio" name="pvLayout" value="' + l + '"' + (l === current ? ' checked' : '') + '> ' + (l === current ? 'In use' : 'Use this layout') + '</span></label>').join('') + '</div>' +
           '<div class="grid2 keep2">' + UI.field('Paper size', UI.select('pvPaper', Print.SHEETS.map(p => [p, Print.PAPERS[p].label]), Print.PAPERS[c.paper] && !Print.PAPERS[c.paper].envelope ? c.paper : 'A4')) +
           '<div class="field"><label>Envelope (addresses only)</label><div class="btnrow" style="margin:0">' + Object.keys(Print.PAPERS).filter(k => Print.PAPERS[k].envelope).map(k => '<button class="btn sm outline" data-env="' + k + '">' + esc(Print.PAPERS[k].label.split('  ')[0]) + '</button>').join('') + '</div></div></div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
@@ -450,13 +476,15 @@
   // ------------------------------------------------------------ sales register
   // Every saved invoice, newest first: open it on the invoice screen, print it again, or delete it
   App.routes.sales = function () {
-    const invs = invoices();
-    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button><button class="btn sm outline" id="sRct">Receipts</button><button class="btn sm outline" id="sRep">Report</button></div>') +
-      '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th></th></tr></thead><tbody>' +
-        invs.map(i => '<tr><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td>' +
+    const invs = invoices(), due = new Map(outstanding().all.map(r => [r.no, r]));
+    // Credit invoices show what is still due on them (receipts mapped to the invoice bring it down)
+    const dueCell = (i) => { const r = due.get(i.no); if (!r) return '-'; return r.balance > 0.005 ? '<span class="pill bad">' + money(r.balance) + ' due</span><div class="small muted">' + r.days + ' day' + (r.days === 1 ? '' : 's') + '</div>' : '<span class="pill ok">Settled</span>'; };
+    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button><button class="btn sm outline" id="sRct">Receipts</button><button class="btn sm outline" id="sOut">Outstanding</button><button class="btn sm outline" id="sRep">Report</button></div>') +
+      '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th>Due</th><th></th></tr></thead><tbody>' +
+        invs.map(i => '<tr><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td><td data-l="Due">' + dueCell(i) + '</td>' +
           '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">Open</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button></td></tr>').join('') + '</tbody></table>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one.</div>') + '</div>');
     App.wireBack(root);
-    $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRct').onclick = () => App.go('money', { kind: 'receipt' }); $('#sRep').onclick = () => App.go('salesReport');
+    $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRct').onclick = () => App.go('money', { kind: 'receipt' }); $('#sOut').onclick = () => App.go('aging'); $('#sRep').onclick = () => App.go('salesReport');
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
     $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));
     $$('[data-del]', root).forEach(b => b.onclick = () => deleteInvoice(Store.find('invoices', b.dataset.del), () => App.go('sales')));
@@ -516,6 +544,6 @@
   App.routes.notes = (p) => Notes.open(p);
 
   global.Invoice = Invoice; global.Notes = Notes; global.Quick = Quick;
-  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, contactsOf, computeTotals, noteTotals, invoices, noteCap, creditNotesFor,
+  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, contactsOf, computeTotals, noteTotals, invoices, noteCap, creditNotesFor, outstanding, invoiceBalance,
     findMaster, upsertMaster, hideMaster, categories, itemLabels, itemFromLabel };
 })(window);

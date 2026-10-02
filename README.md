@@ -27,7 +27,7 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   registration and password reset go out by email (and SMS, with an SMS provider): `server/supabase/README.md`.
   Alternatively `server/` is a small Node server doing the same (`server/README.md`). Without either, data
   moves between the app and the portal by backup file (Export / Import on either side).
-- The trial after registering lasts 1 day; trial, validity and activation codes are shared between app and
+- The trial after registering lasts 30 days; trial, validity and activation codes are shared between app and
   portal when sync is on.
 - Registration and password reset OTPs are sent by Supabase Auth (`server/supabase/README.md`) or by the
   sync server (`server/README.md`, *OTP delivery*); with neither, the OTP is shown on screen (test mode).

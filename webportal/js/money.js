@@ -38,10 +38,11 @@
     return '<option value="">— choose —</option><option value="' + NEW + '">+ New party / account…</option>' + (selected && !known ? '<option selected>' + esc(selected) + '</option>' : '') +
       groups.map(g => g[1].length ? '<optgroup label="' + g[0] + '">' + g[1].map(a => '<option value="' + esc(a.name) + '"' + (lower(a.name) === lower(selected) ? ' selected' : '') + '>' + esc(a.name) + (g[0] === 'Accounts' ? '   (' + esc(a.nature) + ')' : '') + '</option>').join('') + '</optgroup>' : '').join('');
   }
-  // Open bills of a party: credit invoices for a receipt, credit purchases for a payment
+  // Open bills of a party: credit invoices with something still due on them for a receipt (the amount is what is
+  // left after earlier receipts and credit notes), credit purchases for a payment
   function billsOf(kind, party) {
     const k = lower(party); if (!k) return [];
-    if (kind === 'receipt') return Biz.invoices().filter(i => i.payment === 'Credit' && lower(Books.partyName(i.buyer.name)) === k).map(i => ({ no: i.no, date: i.date, amount: num(i.totals.rounded) || num(i.totals.grand) }));
+    if (kind === 'receipt') return Biz.outstanding().open.filter(r => lower(r.party) === k).map(r => ({ no: r.no, date: r.date, amount: r.balance, days: r.days }));
     return Store.list('purchases').filter(p => p.kind === 'PUR' && p.paidBy === 'Credit' && lower(p.supplier) === k).map(p => ({ no: p.no, date: p.date, amount: num(p.total) - num(p.tds) }));
   }
 
@@ -53,7 +54,7 @@
       const list = kind ? all.filter(v => v.vtype === kind) : all;
       const sum = (k) => all.filter(v => v.vtype === k).reduce((s, v) => s + amountOf(v), 0);
       const chip = (k, label) => '<button class="btn sm ' + (kind === k ? '' : 'outline') + '" data-kind="' + k + '">' + label + '</button>';
-      const root = App.view(App.header('Receipts & Payments', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="mRct">+ Receipt</button><button class="btn sm red" id="mPmt">+ Payment</button><button class="btn sm blue" id="mBank">Upload Bank Statement</button><button class="btn sm outline" id="mTpl">Template</button></div>') +
+      const root = App.view(App.header('Receipts & Payments', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="mRct">+ Receipt</button><button class="btn sm red" id="mPmt">+ Payment</button><button class="btn sm blue" id="mBank">Upload Bank Statement</button><button class="btn sm outline" id="mTpl">Template</button><button class="btn sm outline" id="mOut">Outstanding</button></div>') +
         '<div class="btnrow">' + chip('', 'All') + chip('receipt', 'Receipts') + chip('payment', 'Payments') + '<span class="hint bold" style="margin-left:auto">Received ' + money(sum('receipt')) + '   |   Paid ' + money(sum('payment')) + '</span></div>' +
         '<div class="hint" style="margin-bottom:10px">A receipt against a credit invoice brings the customer\'s outstanding down; a payment against a credit purchase brings what you owe the supplier down. Both move Cash or Bank and appear on the Balance Sheet and in the Journal.</div>' +
         listTable(['Date', 'No', 'Type', 'Party / Account', 'Against', 'Mode / Ref', '#Amount', ''], list.map(v => { const K = KIND[v.vtype]; return '<tr>' + td('Date', esc(v.date)) + td('No', '<b>' + esc(v.no || '-') + '</b>') + td('Type', '<span class="pill ' + K.pill + '">' + K.label + '</span>') +
@@ -64,6 +65,7 @@
       const back = () => Money.open({ kind });
       $('#mRct').onclick = () => Money.edit('receipt', null, back); $('#mPmt').onclick = () => Money.edit('payment', null, back);
       $('#mBank').onclick = () => Money.upload(back);
+      $('#mOut').onclick = () => App.go('aging');
       $('#mTpl').onclick = () => { UI.download('BlitzBook_Bank_Statement_Template.csv', 'Date,Description,Debit,Credit,Reference\n01/10/2026,UPI/The Chef Store/payment for invoice 0001,,15000,UTR2026100112345\n02/10/2026,NEFT Solara Appliances PUR-0001,20880,,NEFT987654\n03/10/2026,Bank charges,118,,\n', 'text/csv'); UI.toast('Template downloaded. Most bank statement exports (CSV / Excel) also upload as they are.', 4000); };
       $$('[data-kind]', root).forEach(b => b.onclick = () => Money.open({ kind: b.dataset.kind }));
       $$('[data-p]', root).forEach(b => b.onclick = () => Print.show(Print.voucher(Store.find('journal', b.dataset.p), Store.company())));
@@ -71,16 +73,18 @@
       $$('[data-d]', root).forEach(b => b.onclick = () => { const v = Store.find('journal', b.dataset.d); UI.confirm('Delete ' + KIND[v.vtype].label, 'Delete ' + KIND[v.vtype].label.toLowerCase() + ' ' + (v.no || '') + ' of ' + money(amountOf(v)) + ' (' + v.party + ')?', () => { Store.delete('journal', v.id); UI.toast(KIND[v.vtype].label + ' deleted'); back(); }, 'Delete'); });
     },
 
-    // One receipt or payment
+    // One receipt or payment. v may be a saved voucher, or {party, ref, amount} to start a new one filled in
+    // (a receipt for what is due on an invoice, from the Outstanding & Ageing screen).
     edit(kind, v, onDone) {
-      const K = KIND[kind], fresh = !v;
+      const K = KIND[kind], fresh = !v || !v.id;
       v = Object.assign({ vtype: kind, no: nextNo(kind), date: U.today(), party: '', mode: 'Bank Transfer', ref: '', bankRef: '', narration: '', lines: [] }, v ? JSON.parse(JSON.stringify(v)) : {});
-      const amount = fresh ? '' : amountOf(v).toFixed(2);
+      const amount = v.lines.length ? amountOf(v).toFixed(2) : num(v.amount) > 0 ? num(v.amount).toFixed(2) : '';
+      delete v.amount;
       const bg = UI.modal({ title: (fresh ? 'New ' : 'Edit ') + K.label, body: '<div class="grid2">' +
         UI.field(K.label + ' No', UI.input('vNo', v.no)) + UI.field('Date', UI.dateInput('vDate', v.date), { req: true }) +
         '<div class="field span"><label>' + K.party + ' <b>*</b></label><select id="vParty">' + accountOptions(kind, v.party) + '</select><div class="hint" id="vBal"></div></div>' +
         UI.field('Amount ₹', UI.input('vAmt', amount, { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' }), { req: true }) + UI.field(K.cash, UI.select('vMode', MODES, MODES.includes(v.mode) ? v.mode : 'Bank Transfer'), { hint: 'Cash goes to the cash book, everything else to the bank book' }) +
-        UI.field(K.against, UI.input('vRef', v.ref, { list: 'vRefDl', placeholder: kind === 'receipt' ? 'Invoice No (optional)' : 'Purchase No (optional)' }) + '<datalist id="vRefDl"></datalist>') + UI.field('Bank / UPI / Cheque ref', UI.input('vBankRef', v.bankRef, { placeholder: 'UTR, cheque no (optional)' })) +
+        '<div class="field"><label>' + K.against + '</label>' + UI.input('vRef', v.ref, { list: 'vRefDl', placeholder: kind === 'receipt' ? 'Invoice No (optional)' : 'Purchase No (optional)' }) + '<datalist id="vRefDl"></datalist><div class="hint" id="vRefHint">' + (kind === 'receipt' ? 'Name the invoice and this receipt clears what is due on it' : '') + '</div></div>' + UI.field('Bank / UPI / Cheque ref', UI.input('vBankRef', v.bankRef, { placeholder: 'UTR, cheque no (optional)' })) +
         UI.field('Narration', UI.input('vNarr', v.narration, { placeholder: 'optional' }), { span: true }) + '</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
           const g = (id) => UI.val(id, bg);
@@ -99,14 +103,25 @@
         const bal = party && party !== NEW ? Books.partyBalance(party) : 0;
         $('#vBal', bg).textContent = !party || party === NEW ? '' : Math.abs(bal) < 0.005 ? 'No outstanding balance' : bal > 0 ? 'Outstanding: ' + money(bal) + ' owed to you' : 'Outstanding: ' + money(-bal) + ' owed by you';
         const bills = billsOf(kind, party);
-        $('#vRefDl', bg).innerHTML = bills.map(b => '<option value="' + esc(b.no) + '">' + esc(b.date + '  ' + money(b.amount)) + '</option>').join('');
+        $('#vRefDl', bg).innerHTML = bills.map(b => '<option value="' + esc(b.no) + '">' + esc(b.date + '  ' + money(b.amount) + (b.days != null ? ' due, ' + b.days + ' days' : '')) + '</option>').join('');
+        refHint();
+      };
+      // What is still due on the invoice named, so the amount can be matched to it
+      const refHint = () => {
+        const h = $('#vRefHint', bg), ref = UI.val('vRef', bg).trim();
+        if (kind !== 'receipt') { h.textContent = ''; return; }
+        if (!ref) { h.textContent = 'Name the invoice and this receipt clears what is due on it'; h.className = 'hint'; return; }
+        const r = Biz.invoiceBalance(ref), own = v.id ? amountOf(v) : 0, due = r ? U.round2(r.balance + (lower(v.ref) === lower(ref) ? own : 0)) : 0;
+        if (!r) { h.textContent = ref + ' is not a credit invoice; the money is kept on account of the party'; h.className = 'hint red'; return; }
+        h.textContent = ref + ' (' + r.date + ', ' + r.days + ' days): ' + (due > 0.005 ? money(due) + ' still due' : 'fully paid'); h.className = 'hint ' + (due > 0.005 ? 'green' : '');
       };
       sel.addEventListener('change', () => {
         if (sel.value !== NEW) { refresh(); return; }
         sel.value = v.party;
         Ledger.Journal.newAccount((name) => { sel.innerHTML = accountOptions(kind, name); refresh(); });
       });
-      $('#vRef', bg).addEventListener('change', e => { const b = billsOf(kind, sel.value).find(x => x.no === e.target.value.trim()); if (b && !num(UI.val('vAmt', bg))) $('#vAmt', bg).value = b.amount.toFixed(2); });
+      $('#vRef', bg).addEventListener('input', refHint);
+      $('#vRef', bg).addEventListener('change', e => { const b = billsOf(kind, sel.value).find(x => x.no === e.target.value.trim()); if (b && !num(UI.val('vAmt', bg))) $('#vAmt', bg).value = b.amount.toFixed(2); refHint(); });
       refresh();
     },
 

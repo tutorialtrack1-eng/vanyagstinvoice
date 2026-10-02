@@ -45,6 +45,36 @@
     $('#rCsv').onclick = () => UI.download('BlitzBook_Sales_Report_' + U.stamp() + '.csv', UI.csv([headers].concat(rows.map(x => [x.no, x.date, x.buyer, x.taxable.toFixed(2), x.gst.toFixed(2), x.grand.toFixed(2)]))), 'text/csv');
   };
 
+  // ------------------------------------------------------------ outstanding & ageing, customer wise
+  // Every credit invoice with something still due on it (Biz.outstanding), grouped by customer, with its age and
+  // the age bucket totals. A receipt can be recorded straight from a line; it is mapped to that invoice.
+  const BUCKETS = ['0 - 30 days', '31 - 60 days', '61 - 90 days', 'Over 90 days'];
+  App.routes.aging = function (p) {
+    const asAt = p.asAt || U.today(), o = Biz.outstanding(U.dateMs(asAt)), open = o.open.slice().sort((a, b) => a.party.localeCompare(b.party) || U.dateMs(a.date) - U.dateMs(b.date));
+    const sums = [0, 0, 0, 0]; open.forEach(r => sums[r.bucket] += r.balance);
+    const total = sums.reduce((s, v) => s + v, 0);
+    const groups = new Map(); open.forEach(r => { const k = r.party.toLowerCase(); if (!groups.has(k)) groups.set(k, { party: r.party, rows: [], total: 0 }); groups.get(k).rows.push(r); groups.get(k).total += r.balance; });
+    const onAccount = new Map(o.onAccount.map(x => [x.party.toLowerCase(), x.amount]));
+    const headers = ['Customer', 'Invoice', 'Date', 'Days', 'Age', 'Total', 'Received', 'Balance Due'];
+    const body = [];
+    groups.forEach(g => {
+      body.push('<tr class="grp"><td colspan="7" data-l="Customer"><b>' + esc(g.party) + '</b>' + (onAccount.has(g.party.toLowerCase()) ? '<span class="small muted">   ·   ' + money(onAccount.get(g.party.toLowerCase())) + ' received on account, not mapped to an invoice</span>' : '') + '</td><td class="num" data-l="Due"><b>' + money(g.total) + '</b></td><td></td></tr>');
+      g.rows.forEach(r => body.push('<tr><td></td><td data-l="Invoice"><b>' + esc(r.no) + '</b></td><td data-l="Date">' + esc(r.date) + '</td><td class="num" data-l="Days">' + r.days + '</td><td data-l="Age"><span class="pill ' + (r.bucket === 0 ? 'ok' : r.bucket === 1 ? '' : r.bucket === 2 ? 'warn' : 'bad') + '">' + BUCKETS[r.bucket] + '</span></td><td class="num" data-l="Total">' + money(r.total) + '</td><td class="num" data-l="Received">' + money(r.received + r.credited) + (r.credited ? '<div class="small muted">incl. credit notes ' + money(r.credited) + '</div>' : '') + '</td><td class="num" data-l="Balance"><b>' + money(r.balance) + '</b></td>' +
+        '<td class="actions"><button class="btn sm green" data-rct="' + esc(r.id) + '">+ Receipt</button><button class="btn sm outline" data-open="' + esc(r.id) + '">Open</button></td></tr>'));
+    });
+    const root = App.view(App.header('Outstanding & Ageing', '<div class="btnrow" style="margin:0"><div class="inline"><label class="muted small" for="agDate">as at</label>' + UI.input('agDate', U.toIso(asAt), { type: 'date', attrs: ' style="width:170px;min-height:36px"' }) + '</div><button class="btn sm outline" id="agMoney">Receipts</button><button class="btn sm green" id="agXls">Export Excel</button></div>') +
+      '<div class="buckets">' + BUCKETS.map((b, i) => '<div class="bucket b' + i + '"><div class="k">' + b + '</div><div class="v">' + money(sums[i]) + '</div><div class="s">' + open.filter(r => r.bucket === i).length + ' invoice' + (open.filter(r => r.bucket === i).length === 1 ? '' : 's') + '</div></div>').join('') +
+      '<div class="bucket tot"><div class="k">Total outstanding</div><div class="v">' + money(total) + '</div><div class="s">' + open.length + ' open credit invoice' + (open.length === 1 ? '' : 's') + ', ' + groups.size + ' customer' + (groups.size === 1 ? '' : 's') + '</div></div></div>' +
+      '<div class="hint" style="margin-bottom:10px">A receipt recorded against an invoice number clears that invoice; a receipt without one stays on account of the customer and is shown under the customer. Age counts from the invoice date to the date chosen.</div>' +
+      '<div class="tablewrap">' + (open.length ? '<table class="list cards aging"><thead><tr>' + headers.map((h, n) => '<th class="' + (n >= 3 && n !== 4 ? 'num' : '') + '">' + h + '</th>').join('') + '<th></th></tr></thead><tbody>' + body.join('') + '</tbody></table>' : '<div class="empty">Nothing is due on credit invoices' + (o.all.length ? ' as at ' + esc(asAt) : '') + '.</div>') + '</div>');
+    App.wireBack(root);
+    $('#agDate').onchange = e => { if (e.target.value) App.go('aging', { asAt: U.fromIso(e.target.value) }); };
+    $('#agMoney').onclick = () => App.go('money', { kind: 'receipt' });
+    $('#agXls').onclick = () => UI.xls('Outstanding_Ageing', headers, open.map(r => [r.party, r.no, r.date, r.days, BUCKETS[r.bucket], U.indianNumber(r.total), U.indianNumber(r.received + r.credited), U.indianNumber(r.balance)]));
+    $$('[data-rct]', root).forEach(b => b.onclick = () => { const r = open.find(x => x.id === b.dataset.rct); Money.edit('receipt', { party: r.party, ref: r.no, amount: r.balance }, () => App.go('aging', { asAt })); });
+    $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
+  };
+
   // ------------------------------------------------------------ statements
   const kv = (k, v, cls) => '<div class="' + (cls || '') + '">' + k + '</div><div class="v ' + (cls || '') + '">' + v + '</div>';
   // One line of a financial statement: [label, value, style] with style 0 = normal, 1 = bold total, 2 = section heading

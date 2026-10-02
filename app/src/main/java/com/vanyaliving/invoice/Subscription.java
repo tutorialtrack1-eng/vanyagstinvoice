@@ -38,8 +38,10 @@ final class Subscription {
     static final long TRIAL_MILLIS = 30L * 24 * 60 * 60 * 1000L;
     // How the free period is named in messages
     static final String TRIAL_LABEL = "30-day";
-    static final int[] PLAN_DAYS = {1, 30, 90, 180, 365, 730};
-    static final int[] PLAN_PRICES = {49, 299, 799, 1499, 2499, 3999};
+    // The activation packs on sale: a month, a year, two years, five years (same list in the portal's subscription.js)
+    static final String[] PLAN_NAMES = {"Monthly plan", "Yearly plan", "2 years plan", "5 years plan"};
+    static final int[] PLAN_DAYS = {30, 365, 730, 1825};
+    static final int[] PLAN_PRICES = {299, 2499, 3999, 7999};
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
 
     // ---- Payment. Fill these in before release. ----
@@ -54,7 +56,13 @@ final class Subscription {
     // manual flow (request reaches VENDOR_PHONE; the code is sent back by SMS / email).
     static final String ACTIVATION_SERVER_URL = "";
 
-    static String planLabel(int i) { return PLAN_DAYS[i] + (PLAN_DAYS[i] == 1 ? " day" : " days") + "  -  Rs " + PLAN_PRICES[i]; }
+    static String planLabel(int i) { return PLAN_NAMES[i] + "  (" + PLAN_DAYS[i] + " days)  -  Rs " + PLAN_PRICES[i]; }
+
+    /** "Yearly plan" for 365 days; "N days" for a code whose length is not one of the packs. */
+    static String planName(int days) {
+        for (int i = 0; i < PLAN_DAYS.length; i++) if (PLAN_DAYS[i] == days) return PLAN_NAMES[i];
+        return days + " days";
+    }
 
     /** upi://pay deep link that any UPI app understands; the note carries the phone and plan for matching. */
     static String upiUri(String phone, int days, int amount) {

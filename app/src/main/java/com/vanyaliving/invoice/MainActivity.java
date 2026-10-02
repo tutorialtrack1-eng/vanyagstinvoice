@@ -625,7 +625,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void submitActivationRequest(String txnRef, String status) {
         String phone = accountsDb.userIdentity(userId), email = accountsDb.userEmail(userId);
         int days = pendingPlanDays, amount = pendingPlanAmount;
-        String summary = "Plan " + days + " days, Rs " + amount + ", UPI ref " + (txnRef.isEmpty() ? "-" : txnRef) + ", paid on " + today();
+        String summary = Subscription.planName(days) + " (" + days + " days), Rs " + amount + ", UPI ref " + (txnRef.isEmpty() ? "-" : txnRef) + ", paid on " + today();
         Subscription.savePendingRequest(this, userId, "Payment recorded: " + summary + ". Waiting for the activation code on " + phone + (email.isEmpty() ? "" : " / " + email) + ".");
         Toast.makeText(this, "Sending activation request...", Toast.LENGTH_SHORT).show();
         new Thread(() -> {

@@ -81,12 +81,14 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
   check('sync is on', await page.evaluate(() => Sync.status === 'idle'));
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
+  check('top bar: Purchases in, Company Profile out (reached through the company chip)', await page.evaluate(() => { const t = Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent); return t.includes('Purchases') && !t.includes('Company Profile') && !!document.querySelector('#barCo'); }));
   check('dashboard tiles in the agreed order, without descriptions', await page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join()) === 'Invoice,Sales,Customer,Supplier,Purchase,Stock,Expense,Receipts,Journal,Reports' && (await page.$('.tiles.dash .d')) === null);
 
   // invoice
   await page.click('.tiles [data-go=invoice]');
   await page.waitForSelector('#rows');
   check('invoice number follows the format', (await page.inputValue('#iNo')) === 'OFFSI27-00001', await page.inputValue('#iNo'));
+  check('buyer form: contact picker beside the name, phone / email / GSTIN / state on one line', await page.evaluate(() => { const r = s => document.querySelector(s).getBoundingClientRect(); const nm = r('#bName'), pk = r('#bPick'), l = ['#bPhone', '#bEmail', '#bGstin', '#bState'].map(r); return pk.left > nm.right && l.every(x => Math.abs(x.top - l[0].top) < 2) && l[0].left < l[1].left && l[1].left < l[2].left && l[2].left < l[3].left; }));
   await page.fill('#bName', 'The Chef Store - Banjara Hills\n8-2-287/4/1, Road No 14\nBanjara Hills\nHyderabad, Telangana, 500034');
   await page.fill('#bGstin', '36AAOFT3399K1ZB'); await page.fill('#bPhone', '9849194056'); await page.fill('#bEmail', 'thechefstorehyd@gmail.com');
   await page.selectOption('#iPay', 'Credit');
@@ -176,6 +178,16 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('an invoice with a credit note cannot be deleted', (await page.textContent('.modal .mh')) === 'Cannot Delete Invoice' && (await page.textContent('.modal .mb')).includes('CN-0001'), await page.textContent('.modal .mb'));
   await page.click('.modal .mf .btn');
   check('print carries the footer', htmlStd.includes('Powered by BlitzBook') && htmlEnv.includes('Powered by BlitzBook') && fs.readFileSync(OUT + '/print-purchase.html', 'utf8').includes('Powered by BlitzBook'));
+  // a long invoice prints page by page: numbered pages, "Continued on next page..." and a "(Continued)" strip
+  const longInv = await page.evaluate(() => { const i = JSON.parse(JSON.stringify(Store.list('invoices')[0])); i.items = Array.from({ length: 45 }, (_, n) => Object.assign({}, i.items[0], { sl: n + 1, desc: 'Item ' + (n + 1) })); Biz.computeTotals(i); return [Print.html(i, Store.company(), 0, 'A4'), Print.html(i, Store.company(), 1, 'A4')]; });
+  for (const [n, h] of longInv.entries()) {
+    await pp.setViewportSize({ width: 820, height: 1200 }); await pp.setContent(h, { waitUntil: 'load' });
+    const pg = await pp.evaluate(() => ({ pages: document.querySelectorAll('.page').length, over: Array.from(document.querySelectorAll('.page .pbody')).some(b => b.scrollHeight > b.clientHeight + 1), pno: Array.from(document.querySelectorAll('.pfoot .pno')).map(e => e.textContent).join(), cont: document.querySelectorAll('.page div.cont').length, strip: (document.querySelector('.contbar') || { textContent: '' }).textContent, rows: Array.from(document.querySelectorAll('.page')).map(p => p.querySelectorAll('table.items tbody tr:not(.tot)').length) }));
+    check((n ? 'classic' : 'standard') + ' layout: 45 items run over two numbered pages with the continued strip', pg.pages === 2 && !pg.over && pg.pno === 'Page 1 of 2,Page 2 of 2' && pg.cont === 1 && pg.strip.includes('TAX INVOICE (Continued)') && pg.strip.includes('OFFSI27-00001') && pg.rows[0] + pg.rows[1] === 45, pg);
+    if (n) await pp.screenshot({ path: OUT + '/05e-print-classic-pages.png', fullPage: true });
+  }
+  await pp.setContent(htmlCls, { waitUntil: 'load' });
+  check('classic head: the buyer box and the terms cell run down to the item table', await pp.evaluate(() => { const t = document.querySelector('table.items').getBoundingClientRect().top; return !!document.querySelector('.cell.terms') && t - document.querySelector('.party:last-child').getBoundingClientRect().bottom < 3 && t - document.querySelector('.right').getBoundingClientRect().bottom < 3; }));
   fs.writeFileSync(OUT + '/print-note.html', await page.evaluate(() => Print.note(Store.list('notes')[0], Store.company())));
   await pp.setViewportSize({ width: 794, height: 1123 }); await pp.setContent(fs.readFileSync(OUT + '/print-note.html', 'utf8')); await pp.screenshot({ path: OUT + '/05c-print-note.png', fullPage: true });
   await pp.setContent(fs.readFileSync(OUT + '/print-purchase.html', 'utf8')); await pp.screenshot({ path: OUT + '/05d-print-purchase.png', fullPage: true });
@@ -230,12 +242,17 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('receipt form shows the outstanding balance', (await page.textContent('#vBal')).includes('30,934.00'), await page.textContent('#vBal'));
   check('open invoices of the party are offered', (await page.innerHTML('#vRefDl')).includes('OFFSI27-00001'));
   await page.fill('#vRef', 'OFFSI27-00001'); await page.dispatchEvent('#vRef', 'change');
-  check('choosing the invoice fills its amount', (await page.inputValue('#vAmt')) === '32114.00', await page.inputValue('#vAmt'));
+  check('choosing the invoice fills what is still due on it (after the credit note)', (await page.inputValue('#vAmt')) === '30934.00', await page.inputValue('#vAmt'));
+  check('the invoice line says what is due', (await page.textContent('#vRefHint')).includes('30,934.00 still due'), await page.textContent('#vRefHint'));
   await page.fill('#vAmt', '10000'); await page.selectOption('#vMode', 'UPI'); await page.fill('#vBankRef', 'UTR123'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
   const moneyList = (await page.textContent('table.list')).replace(/\s+/g, ' ');
   check('receipt listed', moneyList.includes('RCT-0001') && moneyList.includes('Receipt') && moneyList.includes('10,000.00') && moneyList.includes('UTR123'), moneyList.slice(0, 300));
   const bsAfter = await page.evaluate(() => { const b = Books.balanceSheet(U.dateMs(U.today())); return [b.receivables, b.bank, Math.abs(b.totalAssets - b.totalLiabilities - b.capital)]; });
   check('receipt moves money to the bank and cuts receivables', bsAfter[0] === 32114 - 1180 - 10000 && bsAfter[1] === 50000 + 10000 && bsAfter[2] < 0.01, bsAfter);
+  await page.evaluate(() => App.go('aging')); await page.waitForSelector('.buckets');
+  const ageing = (await page.textContent('#view')).replace(/\s+/g, ' ');
+  check('outstanding & ageing: the receipt mapped to the invoice leaves the rest due', ageing.includes('OFFSI27-00001') && ageing.includes('₹ 20,934.00') && ageing.includes('0 - 30 days') && ageing.includes('1 open credit invoice'), ageing.slice(0, 400));
+  await page.screenshot({ path: OUT + '/11b-ageing.png', fullPage: true });
   check('receipt prints as a voucher', (await page.evaluate(() => Print.voucher(Store.list('journal').find(j => j.vtype === 'receipt'), Store.company()))).includes('RECEIPT'));
   check('receipt is a journal entry too', await page.evaluate(() => { App.go('journal'); return document.querySelector('table.list').textContent.includes('Receipt RCT-0001'); }));
   // a bank statement in a bank's own export layout: parties matched from the narration, duplicates spotted on re-upload

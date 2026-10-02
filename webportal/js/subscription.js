@@ -6,8 +6,10 @@
 (function (global) {
   'use strict';
   const TRIAL_MILLIS = 30 * 24 * 60 * 60 * 1000;
-  const PLAN_DAYS = [1, 30, 90, 180, 365, 730];
-  const PLAN_PRICES = [49, 299, 799, 1499, 2499, 3999];
+  // The activation packs on sale: a month, a year, two years, five years (same list in Subscription.java)
+  const PLAN_NAMES = ['Monthly plan', 'Yearly plan', '2 years plan', '5 years plan'];
+  const PLAN_DAYS = [30, 365, 730, 1825];
+  const PLAN_PRICES = [299, 2499, 3999, 7999];
   const SECRET = 'VANYA-INVOICE-BOOK-2026';
   const VENDOR_UPI_ID = 'blitzbook@upi';
   const VENDOR_NAME = 'BlitzBook';
@@ -26,9 +28,11 @@
   function normalize(code) { return String(code || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(); }
 
   const Sub = {
-    TRIAL_MILLIS, PLAN_DAYS, PLAN_PRICES, VENDOR_UPI_ID, VENDOR_NAME, VENDOR_PHONE, ACTIVATION_SERVER_URL,
+    TRIAL_MILLIS, PLAN_NAMES, PLAN_DAYS, PLAN_PRICES, VENDOR_UPI_ID, VENDOR_NAME, VENDOR_PHONE, ACTIVATION_SERVER_URL,
     TRIAL_LABEL: '30-day',
-    planLabel(i) { return PLAN_DAYS[i] + (PLAN_DAYS[i] === 1 ? ' day' : ' days') + '  -  Rs ' + PLAN_PRICES[i]; },
+    planLabel(i) { return PLAN_NAMES[i] + '  (' + PLAN_DAYS[i] + ' days)  -  Rs ' + PLAN_PRICES[i]; },
+    // "Yearly plan" for 365 days; "N days" for a code whose length is not one of the packs
+    planName(days) { const i = PLAN_DAYS.indexOf(days); return i >= 0 ? PLAN_NAMES[i] : days + ' days'; },
     upiUri(phone, days, amount) {
       return 'upi://pay?pa=' + encodeURIComponent(VENDOR_UPI_ID) + '&pn=' + encodeURIComponent(VENDOR_NAME) +
         '&am=' + amount + '.00&cu=INR&tn=' + encodeURIComponent(VENDOR_NAME + ' ' + days + 'd ' + phone);
@@ -71,17 +75,20 @@
         return isNaN(n) || n === -3 ? -3 : n;
       } catch (e) { return -3; }
     },
-    // Returns plan days, -1 wrong code, -2 already used. Codes issued in Supabase are tried first, then the
-    // codes made for this login with tools/LicenceKeyGen.java. The validity runs from now for the plan days.
+    // Returns plan days, -1 wrong code, -2 already used, -3 when the code could not be checked online (the codes
+    // handed out live in Supabase: without a connection, or signed out there, they cannot be verified). Codes
+    // issued in Supabase are tried first, then the codes made for this login with tools/LicenceKeyGen.java.
+    // The validity runs from now for the plan days.
     async activate(identity, code) {
       const entered = normalize(code);
       if (entered.length !== 16) return -1;
       const used = Store.get('used_codes', []);
       if (used.includes(entered)) return -2;
-      let days = await this.redeemOnline(entered);
-      if (days === -2) return -2;
+      const online = await this.redeemOnline(entered);
+      if (online === -2) return -2;
+      let days = online;
       if (days <= 0) { days = -1; for (const d of PLAN_DAYS) if (entered === normalize(await makeCode(identity, d))) { days = d; break; } }
-      if (days < 0) return -1;
+      if (days < 0) return online === -3 && global.Sync && Sync.isSupabase && Sync.isSupabase() ? -3 : -1;
       const from = Date.now(); // the validity starts the moment the code is entered
       used.push(entered);
       Store.set('used_codes', used);

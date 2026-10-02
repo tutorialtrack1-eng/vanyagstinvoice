@@ -94,13 +94,16 @@ so export regularly.
 
 ## Activation codes
 
-Generate codes exactly as for the Android app:
+The plans are a monthly plan (30 days), a yearly plan (365), a 2 years plan (730) and a 5 years plan (1825).
+Codes handed to customers are issued in Supabase and work once on any account: `server/supabase/activation.sql`
+loads ten of each plan (listed in `server/supabase/activation-codes.txt`). A code tied to one login can also be
+made offline, exactly as for the Android app:
 
 ```
 java tools/LicenceKeyGen.java <mobile-or-email> <days>
 ```
 
-Days can be 1, 30, 90, 180, 365 or 730. The identity must be what the user registered with.
+Days can be 30, 365, 730 or 1825. The identity must be what the user registered with.
 
 ## Tests
 

@@ -74,11 +74,15 @@ sync server is not needed.
 ## 5. Activation codes
 
 Run `activation.sql` in the SQL Editor the same way. It creates `public.activation_codes` and the
-`redeem_code` function, and loads the first 20 codes (also listed in `activation-codes.txt`): five of
-1 month, five of 3 months, four of 6 months, four of 1 year and two of 2 years. A code works once, on any
-account, and the validity runs from the moment it is entered. To issue more, insert rows the same way
-(16 letters / digits, uppercase, no dashes). **Table Editor → activation_codes** shows which codes are used
-and by whom.
+`redeem_code` function, and loads 40 codes (also listed in `activation-codes.txt`): ten each of the
+monthly plan (30 days), the yearly plan (365), the 2 years plan (730) and the 5 years plan (1825). A code
+works once, on any account, and the validity runs from the moment it is entered. **The codes only work once
+this SQL has been run in the project**: until then the app and the portal answer "Invalid activation code".
+To issue more, insert rows the same way (16 letters / digits, uppercase, no dashes). **Table Editor →
+activation_codes** shows which codes are used and by whom.
+
+Entering a code needs the client to be signed in to Supabase (the portal shows *Synced* under Export /
+Import, the app shows *Synced* on its Sync line). Otherwise the portal says the code could not be checked.
 
 ## How it is used
 

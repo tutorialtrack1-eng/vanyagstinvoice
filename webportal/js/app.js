@@ -144,10 +144,10 @@
     { key: 'journal', t: 'Journal', d: 'Manual ledger entries', ic: 'book', a: '#6D28D9', b: '#8B5CF6' },
     { key: 'reports', t: 'Reports', d: 'Sales, P&L, balance sheet', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
   ];
-  // Top navigation. dlg entries open a dialog over the current screen, so they never become the active link.
+  // Top navigation. The company profile is reached through the company chip on the right of the bar.
   const NAV = [
     { key: 'dashboard', t: 'Dashboard', ic: 'home' },
-    { key: 'company', t: 'Company Profile', ic: 'building', dlg: true },
+    { key: 'purchases', t: 'Purchases', ic: 'cart' },
     { key: 'salesReport', t: 'Sales Report', ic: 'trend' },
     { key: 'pnl', t: 'Profit & Loss', ic: 'pie' },
     { key: 'balance', t: 'Balance Sheet', ic: 'scale' },
@@ -156,6 +156,8 @@
     { key: 'backup', t: 'Export / Import', ic: 'download' },
     { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true }
   ];
+  // Routes that open a dialog over the current screen: they never become the active link or the screen to redraw
+  const DIALOGS = ['company', 'subscription', 'sync'];
   // The Android app, served next to the portal
   const APK_URL = 'BlitzBook.apk';
   const BRAND = '<span class="logo">' + icon('bolt') + '</span><span>Blitz<b>Book</b></span>';
@@ -211,8 +213,7 @@
     go(route, params) {
       const fn = this.routes[route];
       if (!fn) { UI.toast('Screen not available: ' + route); return; }
-      const n = NAV.find(x => x.key === route);
-      if (!n || !n.dlg) { window.scrollTo(0, 0); this.markNav(route); this.current = { route, params: params || {} }; this.stale = false; $('#view').classList.remove('still'); }
+      if (!DIALOGS.includes(route)) { window.scrollTo(0, 0); this.markNav(route); this.current = { route, params: params || {} }; this.stale = false; $('#view').classList.remove('still'); }
       fn(params || {});
       this.refreshBar();
     },
@@ -447,9 +448,10 @@
     const total = (i) => U.num(i.totals.rounded) || U.num(i.totals.grand);
     const month = invs.filter(i => U.dateMs(i.date) >= monthStart);
     const salesMonth = month.reduce((s, i) => s + total(i), 0);
-    const credit = invs.filter(i => i.payment === 'Credit').reduce((s, i) => s + total(i), 0);
+    // What customers still owe on credit invoices, after the receipts mapped to them
+    const open = Biz.outstanding().open, credit = open.reduce((s, r) => s + r.balance, 0);
     const recent = []; invs.forEach(i => i.items.forEach(it => { const d = String(it.desc || '').trim(); if (d && recent.length < 8 && !recent.some(r => r.toLowerCase() === d.toLowerCase())) recent.push(d); }));
-    const stat = (id, ic, a, b, k, v, s) => '<div class="stat" style="--a:' + a + ';--b:' + b + '"><div class="ic-badge">' + icon(ic) + '</div><div class="meta"><div class="k">' + k + '</div><div class="v" id="' + id + '">' + v + '</div><div class="s">' + esc(s) + '</div></div></div>';
+    const stat = (id, ic, a, b, k, v, s, go) => '<div class="stat' + (go ? ' link' : '') + '" style="--a:' + a + ';--b:' + b + '"' + (go ? ' data-go="' + go + '" role="button" tabindex="0" title="Outstanding & Ageing"' : '') + '><div class="ic-badge">' + icon(ic) + '</div><div class="meta"><div class="k">' + k + '</div><div class="v" id="' + id + '">' + v + '</div><div class="s">' + esc(s) + '</div></div></div>';
     const root = App.view(
       '<section class="hero"><span class="orb o1"></span><span class="orb o2"></span>' +
       '<div class="art" aria-hidden="true"><div class="sheet s1"><i></i><i></i><i></i><i></i><u></u></div><div class="sheet s2"><i></i><i></i><i></i><i></i><u></u></div><div class="coin">₹</div></div>' +
@@ -458,14 +460,14 @@
       '<div class="cta"><button class="btn light" data-go="invoice">' + icon('plus') + 'New Invoice</button><button class="btn ghost" data-go="sales">View Sales' + icon('arrow') + '</button></div></section>' +
       '<div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
       stat('stCount', 'receipt', '#059669', '#34D399', 'Invoices', month.length, 'Raised this month') +
-      stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), 'Across all credit invoices') + '</div>' +
+      stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging') + '</div>' +
       (recent.length ? '<div class="section-title">Recent products</div><div class="recent">' + recent.map(r => '<button data-item="' + esc(r) + '">' + esc(r) + '</button>').join('') + '</div>' : '') +
       '<div class="section-title">What would you like to do?</div><div class="tiles dash">' +
       TILES.map(t => '<button class="tile" data-go="' + t.key + '" style="--a:' + t.a + ';--b:' + t.b + '"><span class="badge">' + icon(t.ic) + '</span><span class="tx"><span class="t">' + esc(t.t) + '</span></span><span class="go">' + icon('arrow') + '</span></button>').join('') + '</div>');
     countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
     $$('[data-go]', root).forEach(el => el.onclick = () => {
       const k = el.dataset.go;
-      if (k === 'reports') UI.menu('Reports', ['Sales Report', 'Profit & Loss', 'Balance Sheet', 'Stock in Hand'], (i) => App.go(['salesReport', 'pnl', 'balance', 'stock'][i]));
+      if (k === 'reports') UI.menu('Reports', ['Sales Report', 'Outstanding & Ageing', 'Profit & Loss', 'Balance Sheet', 'Stock in Hand'], (i) => App.go(['salesReport', 'aging', 'pnl', 'balance', 'stock'][i]));
       else if (k === 'customers') App.go('contacts', { type: 'Customer' });
       else if (k === 'suppliers') App.go('contacts', { type: 'Supplier' });
       else App.go(k);
@@ -576,7 +578,8 @@
           { label: 'Activate', cls: 'green', onClick: async (bg) => {
             const days = await Sub.activate(App.identity(), UI.val('sCode', bg));
             if (days === -2) { UI.toast('This code has already been used'); return false; }
-            if (days < 0) { UI.toast('Invalid activation code for this account'); return false; }
+            if (days === -3) { UI.toast('The code could not be checked: the portal is not signed in to the server right now (see Sync under Export / Import). Check the connection and try again.', 7000); return false; }
+            if (days < 0) { UI.toast('Invalid activation code'); return false; }
             Subscription.activated(); return true;
           } }] });
       bg.id = 'subDlg'; if (locked) bg.classList.add('locked');
@@ -588,7 +591,7 @@
     // Pay by UPI, then the activation request goes out: to the activation server when one is set, else to the vendor
     pay(days, amount) {
       const phone = App.identity(), email = App.user.email || '', uri = Sub.upiUri(phone, days, amount);
-      UI.modal({ title: 'Pay Rs ' + amount + ' by UPI', body: '<p>Plan: <b>' + days + (days === 1 ? ' day' : ' days') + '</b> for <b>Rs ' + amount + '</b>.</p><p>Pay to <b>' + esc(Sub.VENDOR_UPI_ID) + '</b> (' + esc(Sub.VENDOR_NAME) + ') with the note <b>' + esc(Sub.VENDOR_NAME + ' ' + days + 'd ' + phone) + '</b>. On a phone the button below opens your UPI app (Google Pay, PhonePe, Paytm or your bank\'s app).</p>' +
+      UI.modal({ title: 'Pay Rs ' + amount + ' by UPI', body: '<p>Plan: <b>' + esc(Sub.planName(days)) + '</b> (' + days + ' days) for <b>Rs ' + amount + '</b>.</p><p>Pay to <b>' + esc(Sub.VENDOR_UPI_ID) + '</b> (' + esc(Sub.VENDOR_NAME) + ') with the note <b>' + esc(Sub.VENDOR_NAME + ' ' + days + 'd ' + phone) + '</b>. On a phone the button below opens your UPI app (Google Pay, PhonePe, Paytm or your bank\'s app).</p>' +
         '<p><a class="btn blue" href="' + esc(uri) + '">Open UPI app</a></p>' + UI.field('Transaction Reference', UI.input('sRef', '', { placeholder: 'UPI transaction ID / UTR' })),
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'I have paid', cls: 'green', onClick: async (bg) => {
           const ref = UI.val('sRef', bg).trim();
