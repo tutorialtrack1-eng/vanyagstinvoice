@@ -14,3 +14,8 @@ build/
 .cxx
 local.properties
 .tmp.driveupload/
+
+# Supabase CLI and local scratch
+supabase/.temp/
+server/supabase/.temp/
+.tmp_pdf/
