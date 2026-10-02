@@ -299,7 +299,7 @@
     login() {
       Auth.frame('<div class="brand">' + BRAND + '</div><div class="tag">GST Invoice &amp; Accounts</div>' +
         UI.field('Mobile Number / Email', UI.input('lId', '', { attrs: ' autocomplete="username"' })) + UI.field('Password', UI.input('lPw', '', { type: 'password', attrs: ' autocomplete="current-password"' })) +
-        '<button class="btn block" id="lGo">Login</button><div class="links"><button class="link" id="lReset">Forgot / Reset Password?</button><button class="link" id="lReg">New User? Register Now</button><button class="link small muted" id="lSync">Sync settings</button></div>');
+        '<button class="btn block" id="lGo">Login</button><div class="links"><button class="link" id="lReset">Forgot / Reset Password?</button><button class="link" id="lReg">New User? Register Now</button></div>');
       let busy = false;
       const go = async () => {
         if (busy) return;
@@ -326,7 +326,6 @@
       $('#lGo').onclick = go; $('#lPw').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
       $('#lReg').onclick = () => Auth.register();
       $('#lReset').onclick = () => Auth.reset();
-      $('#lSync').onclick = () => SyncUI.dialog();
     },
     validPassword(p) { return p.length >= 6 && /[A-Za-z]/.test(p) && /\d/.test(p) && /[^A-Za-z0-9]/.test(p); },
     // Where an OTP went, for the message shown after sending it
