@@ -195,7 +195,7 @@ table.list .actions button { margin-left: 4px; }
 .words { margin-top: 12px; font-weight: 600; font-size: 13.5px; color: #475569; text-align: right; }
 
 /* ---------- dashboard */
-.hero { position: relative; isolation: isolate; overflow: hidden; color: #fff; border-radius: 28px; padding: 36px 36px 84px; box-shadow: var(--shadow-lg); background:
+.hero { position: relative; isolation: isolate; overflow: hidden; color: #fff; border-radius: 28px; padding: 36px; box-shadow: var(--shadow-lg); background:
   radial-gradient(110% 150% at 0% 0%, #4338CA 0%, transparent 58%),
   radial-gradient(80% 130% at 100% 0%, #DB2777 0%, transparent 58%),
   radial-gradient(60% 90% at 100% 120%, #FB923C 0%, transparent 60%), #7C3AED; }
@@ -222,7 +222,7 @@ table.list .actions button { margin-left: 4px; }
 .hero .sheet u { position: absolute; right: 16px; bottom: 16px; width: 74px; height: 30px; border-radius: 10px; background: #fff; box-shadow: 0 8px 16px -6px rgba(15,23,42,.4); }
 .hero .coin { position: absolute; left: -14px; top: 0; width: 62px; height: 62px; border-radius: 50%; display: grid; place-items: center; font-size: 28px; font-weight: 800; color: #92400E; background: linear-gradient(135deg, #FDE68A, #F59E0B); border: 3px solid rgba(255,255,255,.75); box-shadow: 0 16px 28px -10px rgba(146,64,14,.7); animation: float 6s ease-in-out infinite; }
 @media (max-width: 1020px) { .hero .art { display: none; } }
-.stats { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: -50px 26px 8px; }
+.stats { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 0 0 8px; }
 .stat { position: relative; overflow: hidden; display: flex; align-items: center; gap: 16px; min-width: 0; padding: 20px; border-radius: 22px; background: rgba(255,255,255,.94); border: 1px solid #fff; backdrop-filter: blur(14px); box-shadow: var(--shadow); transition: transform .2s, box-shadow .2s; }
 .stat:hover { transform: translateY(-3px); box-shadow: 0 22px 40px -20px var(--a); }
 .stat::after { content: ""; position: absolute; right: -36px; top: -46px; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(circle, var(--b), transparent 70%); opacity: .2; }
@@ -234,8 +234,8 @@ table.list .actions button { margin-left: 4px; }
 .stat .v { font-size: clamp(20px, 2.3vw, 27px); line-height: 1.2; font-weight: 800; letter-spacing: -.5px; color: var(--ink); margin: 2px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .stat .s { font-size: 12px; color: var(--label); }
 @media (max-width: 760px) {
-  .hero { border-radius: 22px; padding: 24px 20px 68px; }
-  .stats { grid-template-columns: 1fr; gap: 10px; margin: -46px 12px 8px; }
+  .hero { border-radius: 22px; padding: 24px 20px; }
+  .stats { grid-template-columns: 1fr; gap: 10px; margin: 0 0 8px; }
   .stat { padding: 14px 16px; border-radius: 18px; }
   .stat .ic-badge { width: 44px; height: 44px; border-radius: 14px; }
 }
