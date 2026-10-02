@@ -36,6 +36,7 @@ here and vice versa, and the trial and activation are shared.
 | `js/ledger.js` | Books (Profit & Loss, Balance Sheet with party-wise receivables / payables, stock figures; a port of Ledger.java), Customers / Suppliers, Item master, Purchases & Quotations, Expenses, Journal, Stock in hand |
 | `js/money.js` | Receipts & Payments (kept as journal vouchers), receipt / payment voucher printout, bank statement upload |
 | `js/reports.js` | Sales report, Profit & Loss, Balance sheet, period picker, Excel export |
+| `js/gst.js` | GST returns: fetches a return period from the books and writes the GSTR-1 and GSTR-3B JSON files for the GST portal's offline tool (yearly plan or longer) |
 
 ## Screens
 
@@ -53,10 +54,35 @@ Everything the app has:
 - Quick items: starter items for the line of activity plus the item master, with search, category chips
   (rename / remove), list or grid view, quantity steppers, per-invoice price and GST, add / customise /
   remove items.
-- Printing: Save keeps the invoice and moves on to the next invoice number, Print / PDF prints straight away with the layout picked from previews under Print Settings (A4 unless changed); delivery challan (composition dealers), envelopes
+- Printing: Save keeps the invoice and moves on to the next invoice number, Print / PDF prints straight away with the layout picked from previews under Print Settings (A4 unless changed); delivery challan for any invoice (also from the Challan button in Sales), envelopes
   (DL, C5, #10), purchase record / quotation, credit and debit notes; paper sizes A4 / A5 / Letter / Legal;
   e-way bill warning above ₹50,000 (₹1,00,000 in Maharashtra, Delhi, Tamil Nadu and Bihar). The browser's
-  print dialog saves the PDF. Every printout ends with "Powered by BlitzBook".
+  print dialog saves the PDF. Every printout ends with "Powered by BlitzBook". While the print dialog is up the
+  page title is the document number and date ("Invoice 0001 - 03/10/2026"), so a browser header line or the
+  PDF's title shows that and not the portal's own title. On the Classic layout the last page fills the room
+  above the totals with the item columns, so the totals, bank details and signature sit at the foot of the
+  frame instead of a blank box following them.
+- Terms & conditions and payment due date: the company profile holds the terms (one per line) and a credit
+  period in days. Each invoice has *Include terms & conditions on the PDF* (on by default when terms exist)
+  and a *Payment Due Date*; a Credit invoice gets the date filled in from the credit period until one is
+  typed. Both layouts print the due date beside the payment mode and the numbered terms at the foot. The
+  terms are kept with the invoice as saved (`due_date`, `terms` in the sync row; the app leaves them as they are).
+- Delivery challans (Sales > Delivery Challans): goods sent out before or without an invoice, numbered
+  DC-0001 onwards in the same editor (no rate needed), printed as a challan, turned into a Credit invoice with
+  Make Invoice (the invoice carries the challan number under Delivery Note and the challan shows which
+  invoice it became; deleting that invoice reopens the challan). They sync with the app as `dc:<no>`.
+- Upload PO (Sales): a CSV / Excel file of customer purchase orders in the BlitzBook template (one row per
+  item, PO Number on each row; a blank PO Number continues the row above; Rate is the price before GST,
+  blank takes the item master price). A preview shows what each PO will do, then every PO becomes one Credit
+  invoice: a PO number already on an invoice updates that invoice, the rest are inserted; customers and items
+  are upserted into the masters. Dates may be dd/mm/yyyy, ISO or Excel serials.
+- Every upload (contacts, stock, purchase orders, bank statement) offers the same choice for rows already in
+  the books, **Upsert** (new rows are added, the ones already here are brought up to date) or **Insert only**
+  (new rows only, the rest are left as they are; remembered as `upload_mode`), and ends with a result dialog
+  counting what was *inserted*, *updated*, *unchanged* (identical already) and *skipped*, with the reasons.
+  Contacts match by name, stock items by name among the lines uploaded earlier (upsert sets the file's
+  quantity and rate; purchase-bill stock is never touched), purchase orders by PO number, statement lines by
+  date, amount and narration (upsert updates the party and the bill the voucher is against).
 - Credit notes must name their invoice and cannot exceed what is left of its value; an invoice with credit
   notes against it cannot be deleted until they are.
 - Customers / suppliers with TDS settings, CSV or Excel upload in the app's template, bulk delete.
@@ -114,6 +140,37 @@ so export regularly.
 - Quick item and item master prices are the price the customer pays, GST included ("Unit Price (inclusive of
   tax)"); on the invoice the rate before GST is worked back out of it, so qty x rate x (1 + GST) lands on
   the price again. The same in the app.
+- **Dark mode**: the moon / sun button in the top bar (and on the login page) switches the portal between
+  light and dark; the choice is kept in the browser (`blitzbook.theme`) and, until one is made, the system
+  setting decides. `index.html` applies it before the first paint. Printouts stay black on white.
+
+## GST returns (GSTR-1 and GSTR-3B JSON)
+
+**GST** in the top bar is shown to every account. It opens for accounts on a **yearly plan or longer**
+(`Sub.isYearly`: a plan of 365 days or more applied here, by code, by payment or by a sync that stretched the
+validity by a year, is remembered as `yearly_until`; an account activated elsewhere still counts while more
+than 300 days of validity remain); everyone else gets a *Yearly subscription required* dialog with the plans.
+A regular GST registration is needed (composition dealers file CMP-08 / GSTR-4).
+
+Pick the return period (a month, or a quarter for quarterly filers; the month gone by is offered first). The
+screen fetches the sales invoices, credit notes, purchases and expenses dated in it and shows the GSTR-1 and
+GSTR-3B figures, the documents with the GSTR-1 table each lands in, and anything to check (an invalid buyer
+GSTIN, missing HSN codes, B2C credit notes exceeding the sales). **GSTR-1 JSON** and **GSTR-3B JSON** download
+`GSTR1_<GSTIN>_<MMYYYY>.json` and `GSTR3B_<GSTIN>_<MMYYYY>.json` in the layout of the GST portal's Returns
+Offline Tool (open the file there, check and upload):
+
+- GSTR-1: `b2b` (registered buyers, invoice by invoice, rate-wise lines, reverse charge flagged), `b2cl`
+  (inter-state invoices above ₹1,00,000 to unregistered buyers), `b2cs` (every other sale summed by state and
+  rate, net of the credit notes against such sales), `cdnr` (credit notes to registered buyers), `cdnur`
+  (credit notes against B2CL invoices), `nil` (0% lines by supply type), `hsn` (table 12 by HSN, rate and
+  unit) and `doc_issue` (invoices, credit notes and delivery challans issued). Nil-rated lines are left out of
+  tables 4, 5 and 7, as the rules say.
+- GSTR-3B: 3.1(a) outward taxable supplies net of credit notes (reverse-charge sales excluded, the buyer pays
+  that tax), 3.1(c) nil-rated, 3.1(d) inward supplies under reverse charge (purchases and expenses marked
+  RCM), 3.2 inter-state supplies to unregistered persons by state, 4(A)(3) ITC on reverse charge and 4(A)(5)
+  all other ITC net of debit notes. Imports, ISD credit, reversals, interest and late fee are written as zero.
+
+The figures come from what is in the books; always check the files in the offline tool before filing.
 
 ## Installing the portal as an app
 
@@ -144,6 +201,9 @@ Days can be 30, 365, 730 or 1825. The identity must be what the user registered 
 
 - `node server/test.js` — sync protocol and data layout, no browser needed.
 - `node server/supabase/test.js` — the Supabase backend against a stand-in for the Supabase API.
+- `PLAYWRIGHT_CORE=/path/to/playwright-core node tools/po-challan.js` — purchase-order upload (upsert and
+  insert only, result counts), delivery challans, their printing, sync records and backup, terms & conditions
+  and the due date on the PDF, the GST lock and the GSTR-1 / GSTR-3B JSON, dark mode, in a portal opened as a file.
 - `PLAYWRIGHT_CORE=/path/to/playwright-core node tools/smoke.js` — drives the portal in Chromium through
   every screen, then a second browser signs in to the same account and both must stay in step.
 

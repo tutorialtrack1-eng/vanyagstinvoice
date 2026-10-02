@@ -24,6 +24,19 @@
   function invoices() {
     return Store.list('invoices').filter(i => i.kind === 'invoice').sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || String(b.no).localeCompare(String(a.no), undefined, { numeric: true }));
   }
+  // Delivery challans, newest first. They have a number series of their own (DC-0001, DC-0002 ...), and an
+  // invoiceNo once they have been turned into an invoice.
+  function challans() {
+    return Store.list('challans').sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || String(b.no).localeCompare(String(a.no), undefined, { numeric: true }));
+  }
+  function nextChallanNo() {
+    let max = 0; Store.list('challans').forEach(d => { const m = /(\d+)\s*$/.exec(String(d.no || '')); if (m) max = Math.max(max, +m[1]); });
+    return 'DC-' + String(max + 1).padStart(4, '0');
+  }
+  function stepChallanNo(no, dir) {
+    const m = /^(.*?)(\d+)\s*$/.exec(String(no || '')); if (!m) return nextChallanNo();
+    return m[1] + String(Math.max(1, +m[2] + dir)).padStart(m[2].length, '0');
+  }
   function nextInvoiceNo() {
     const fmt = Store.company().invoiceFormat || U.DEFAULT_INVOICE_FORMAT;
     let max = 0; Store.list('invoices').forEach(i => { if (i.kind === 'invoice') max = Math.max(max, U.parseInvoiceCounter(fmt, i.no)); });
@@ -80,13 +93,43 @@
     if (packLocked('invoice')) return;
     const cns = creditNotesFor(inv.no);
     if (cns.length) { UI.alert('Cannot Delete Invoice', 'Credit note' + (cns.length > 1 ? 's ' : ' ') + cns.join(', ') + ' ' + (cns.length > 1 ? 'were' : 'was') + ' issued against invoice ' + inv.no + '. Delete ' + (cns.length > 1 ? 'them' : 'it') + ' first.'); return; }
-    UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => { Store.delete('invoices', inv.id); UI.toast('Invoice ' + inv.no + ' deleted'); then(); }, 'Delete');
+    UI.confirm('Delete Invoice', 'Delete invoice ' + inv.no + '? This cannot be undone.', () => {
+      Store.delete('invoices', inv.id);
+      // A challan that was turned into this invoice is open again
+      Store.list('challans').forEach(dc => { if (dc.invoiceNo === inv.no) { dc.invoiceNo = ''; Store.update('challans', dc); } });
+      UI.toast('Invoice ' + inv.no + ' deleted'); then();
+    }, 'Delete');
+  }
+  function deleteChallan(dc, then) {
+    if (dc.invoiceNo) { UI.alert('Cannot Delete Challan', 'Delivery challan ' + dc.no + ' was turned into invoice ' + dc.invoiceNo + '. Delete that invoice first if the challan has to go.'); return; }
+    UI.confirm('Delete Delivery Challan', 'Delete delivery challan ' + dc.no + '? This cannot be undone.', () => { Store.delete('challans', dc.id); UI.toast('Delivery challan ' + dc.no + ' deleted'); then(); }, 'Delete');
+  }
+  // What a saved document leaves behind: its items join the item master (an item already there keeps its
+  // customised price and category) and a new buyer becomes a customer contact
+  function absorb(inv) {
+    inv.items.forEach(it => { const name = String(it.desc).trim(); if (!name) return; if (findMaster(name)) upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), hidden: false }); else upsertMaster(name, Object.assign({ hsn: String(it.hsn).trim(), gst: String(it.gst) }, num(it.rate) > 0 ? { rate: inclPrice(it.rate, it.gst) } : {})); });
+    const bn = inv.buyer.name.trim();
+    if (bn) { const first = bn.split('\n')[0].trim(); const contacts = Store.list('contacts'); if (!contacts.find(x => x.name.toLowerCase() === first.toLowerCase())) { contacts.push({ id: U.uid(), createdAt: Date.now(), type: 'Customer', name: first, address: bn.split('\n').slice(1).join('\n').trim().toUpperCase(), phone: inv.buyer.phone, email: inv.buyer.email.toLowerCase(), gstin: inv.buyer.gstin, state: inv.buyer.state, tds: false }); Store.saveList('contacts', contacts); } }
   }
   function newInvoice() {
+    const c = Store.company();
     return { id: null, kind: 'invoice', no: nextInvoiceNo(), date: U.today(), payment: 'Cash', rcm: false, buyer: blankParty(), sameShip: true, consignee: blankParty(),
-      other: { destination: '', vehicleType: '', vehicleNo: '', transporter: '', deliveryNote: '', orderNo: '', orderDate: '', reference: '', info: '' }, items: [blankItem(1)], totals: {} };
+      other: { destination: '', vehicleType: '', vehicleNo: '', transporter: '', deliveryNote: '', orderNo: '', orderDate: '', reference: '', info: '' }, items: [blankItem(1)], totals: {},
+      // Payment due date (set for Credit invoices from the company's credit period) and whether the company's
+      // terms & conditions print on this invoice
+      dueDate: '', termsOn: c.termsOn !== false && !!c.terms, terms: c.terms || '' };
   }
+  // dd/mm/yyyy a number of days after a dd/mm/yyyy date
+  function plusDays(date, days) { const ms = U.dateMs(date); if (!ms) return ''; const d = new Date(ms + Math.round(num(days)) * 86400000); return U.pad(d.getDate()) + '/' + U.pad(d.getMonth() + 1) + '/' + d.getFullYear(); }
+  function dueDateFor(inv) { return inv.payment === 'Credit' ? plusDays(inv.date, Store.company().creditDays) : ''; }
   // Row maths, as in ItemRow.updateAmounts()
+  function newChallan() { return Object.assign(newInvoice(), { kind: 'challan', no: nextChallanNo(), payment: 'Credit', invoiceNo: '' }); }
+  // The invoice for a delivery challan: the same parties and goods, the challan number under Delivery Note
+  function invoiceFromChallan(dc) {
+    const copy = (v) => JSON.parse(JSON.stringify(v));
+    return Object.assign(newInvoice(), { payment: 'Credit', buyer: copy(dc.buyer), sameShip: dc.sameShip, consignee: copy(dc.consignee), items: copy(dc.items).map((it, n) => Object.assign(it, { sl: n + 1 })),
+      other: Object.assign({}, dc.other, { deliveryNote: dc.no }), fromChallan: dc.id });
+  }
   function computeItem(it) {
     const q = num(it.qty), g = chargesGst() ? num(it.gst) : 0;
     if (!it.inc) { const r = num(it.rate); it.taxable = U.round2(q * r); it.totalIncl = U.round2(q * r * (1 + g / 100)); }
@@ -250,15 +293,18 @@
     open(params) {
       params = params || {};
       let inv = null;
-      if (params.id) inv = JSON.parse(JSON.stringify(Store.find('invoices', params.id) || {}));
-      if (!inv || !inv.no) inv = newInvoice();
+      if (params.challan) inv = JSON.parse(JSON.stringify(Store.find('challans', params.challan) || {}));
+      else if (params.id) inv = JSON.parse(JSON.stringify(Store.find('invoices', params.id) || {}));
+      else if (params.fromChallan) { const dc = Store.find('challans', params.fromChallan); if (dc) inv = invoiceFromChallan(dc); }
+      if (!inv || !inv.no) inv = params.kind === 'challan' ? newChallan() : newInvoice();
       if (params.quickItem) { const m = findMaster(params.quickItem); Object.assign(inv.items[0], { desc: params.quickItem, hsn: m && !m.hidden ? m.hsn : U.hsnFor(params.quickItem), gst: m && !m.hidden ? m.gst : '18', qty: 1, rate: m && !m.hidden && num(m.rate) > 0 ? exclRate(m.rate, m.gst) : '' }); }
       this.inv = inv;
       this.render();
-      if (params.print) this.print('invoice');
+      if (params.print) this.print(params.print === 'challan' ? 'challan' : 'invoice');
     },
     render() {
-      const inv = this.inv, c = Store.company(), gst = chargesGst();
+      const inv = this.inv, c = Store.company(), gst = chargesGst(), challan = inv.kind === 'challan';
+      const nextNo = () => challan ? nextChallanNo() : nextInvoiceNo(), stepNo = (no, d) => challan ? stepChallanNo(no, d) : stepInvoiceNo(no, d);
       const allContacts = contactsOf(null);
       // Name & address on the left with the contact picker beside it, then phone, email, GSTIN and state in one line
       const partyBlock = (p, pre, label) =>
@@ -268,11 +314,13 @@
         UI.field('Phone', UI.input(pre + 'Phone', p.phone, { type: 'tel', placeholder: 'Phone Number', attrs: ' maxlength="10"' })) + UI.field('Email', UI.input(pre + 'Email', p.email, { type: 'email', placeholder: 'Email Address' })) +
         UI.field('GSTIN', UI.input(pre + 'Gstin', p.gstin, { placeholder: 'GSTIN Number', attrs: ' maxlength="15" style="text-transform:uppercase"' })) +
         UI.field('State', UI.select(pre + 'State', U.STATES, U.matchState(p.state, '') || p.state)) + '</div>';
-      const root = App.view(App.header(inv.id ? 'Invoice ' + inv.no : 'New Invoice', '<span class="muted">' + esc(c.name || 'My Company Profile') + '</span>') +
-        '<div class="card"><div class="hd">Invoice Details</div><div class="bd"><div class="grid3">' +
-        UI.field('Invoice No', '<div class="inline">' + UI.input('iNo', inv.no) + '<button class="step" id="iUp" title="Next number">▲</button><button class="step" id="iDn" title="Previous number">▼</button></div>', { req: true }) +
+      const root = App.view(App.header(inv.id ? (challan ? 'Delivery Challan ' : 'Invoice ') + inv.no : challan ? 'New Delivery Challan' : 'New Invoice', '<span class="muted">' + esc(c.name || 'My Company Profile') + '</span>') +
+        '<div class="card"><div class="hd">' + (challan ? 'Challan Details' : 'Invoice Details') + '</div><div class="bd"><div class="grid3">' +
+        UI.field(challan ? 'Challan No' : 'Invoice No', '<div class="inline">' + UI.input('iNo', inv.no) + '<button class="step" id="iUp" title="Next number">▲</button><button class="step" id="iDn" title="Previous number">▼</button></div>', { req: true }) +
         UI.field('Dated', UI.dateInput('iDate', inv.date), { req: true }) +
-        UI.field('Payment Mode', UI.select('iPay', U.PAYMENT_MODES, inv.payment)) + '</div>' +
+        (challan ? UI.field('Status', UI.input('iStatus', inv.invoiceNo ? 'Invoiced: ' + inv.invoiceNo : 'Open - not invoiced yet', { disabled: true }), { hint: 'Make Invoice turns the challan into a sales invoice' }) : UI.field('Payment Mode', UI.select('iPay', U.PAYMENT_MODES, inv.payment))) + '</div>' +
+        (challan ? '' : '<div class="grid3" style="margin-top:12px">' + UI.field('Payment Due Date', UI.dateInput('iDue', inv.dueDate), { hint: 'Prints on the PDF. A Credit invoice gets ' + (num(c.creditDays) || 0) + ' days from the invoice date (Company Profile)' }) +
+          '<div class="field"><label>Terms &amp; Conditions</label>' + UI.check('iTerms', 'Include terms & conditions on the PDF', !!inv.termsOn) + '<div class="hint">' + (c.terms ? esc(c.terms.split('\n')[0]) + (c.terms.includes('\n') ? ' ...' : '') : 'No terms yet: add them under Company Profile') + '</div></div></div>') +
         (rcmAllowed() ? UI.check('iRcm', 'Reverse charge (RCM) - GST payable by the recipient', inv.rcm) : '') + '</div></div>' +
         '<div class="card"><div class="hd">Buyer & Shipping Details</div><div class="bd">' + partyBlock(inv.buyer, 'b', 'Buyer (Bill To)') +
         UI.check('iSame', 'Shipping same as Billing', inv.sameShip) + '<div id="shipBox" class="' + (inv.sameShip ? 'hidden' : '') + '">' + partyBlock(inv.consignee, 'c', 'Consignee (Ship To)') + '</div></div></div>' +
@@ -286,15 +334,25 @@
         UI.datalist('itemsDl', itemLabels()) +
         '<div class="btnrow"><button class="btn sm" id="addRow">+ Add Particular / Row</button></div></div></div>' +
         '<div class="card"><div class="hd">Totals Summary</div><div class="bd"><div class="totals" id="totals"></div><div class="words" id="words"></div></div></div>' +
-        '<div class="btnrow end"><button class="btn red outline" id="iDel" ' + (inv.id ? '' : 'disabled') + '>🗑 Delete</button><button class="btn outline" id="iNew">+ New</button><button class="btn outline" id="iSettings">Print Settings</button>' + (isComposition() ? '<button class="btn" id="iChallan">Delivery Challan</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print / PDF</button></div>');
+        '<div class="btnrow end"><button class="btn red outline" id="iDel" ' + (inv.id ? '' : 'disabled') + '>🗑 Delete</button><button class="btn outline" id="iNew">+ New</button><button class="btn outline" id="iSettings">Print Settings</button>' +
+        (challan ? (inv.id && !inv.invoiceNo ? '<button class="btn" id="iMakeInv">Make Invoice</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print Challan</button>'
+          : '<button class="btn" id="iChallan">Delivery Challan</button><button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print / PDF</button>') + '</div>');
       App.wireBack(root);
       const bind = (id, fn) => { const el = $('#' + id); if (el) el.addEventListener('input', fn), el.addEventListener('change', fn); };
-      bind('iNo', e => { inv.no = e.target.value.trim(); const ex = Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id); if (ex && !$('#dialogs').children.length) UI.confirm('Load invoice', 'Invoice ' + ex.no + ' already exists. Open it?', () => Invoice.open({ id: ex.id }), 'Open'); });
+      bind('iNo', e => {
+        inv.no = e.target.value.trim();
+        const ex = challan ? Store.list('challans').find(x => x.no === inv.no && x.id !== inv.id) : Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id);
+        if (ex && !$('#dialogs').children.length) UI.confirm(challan ? 'Load challan' : 'Load invoice', (challan ? 'Delivery challan ' : 'Invoice ') + ex.no + ' already exists. Open it?', () => Invoice.open(challan ? { challan: ex.id } : { id: ex.id }), 'Open');
+      });
       // The running number is never left blank: leaving the field empty restores the next number in sequence
-      $('#iNo').addEventListener('blur', e => { if (!e.target.value.trim()) e.target.value = inv.no = nextInvoiceNo(); });
-      $('#iUp').onclick = () => { $('#iNo').value = inv.no = stepInvoiceNo($('#iNo').value.trim() || nextInvoiceNo(), 1); $('#iNo').dispatchEvent(new Event('change')); };
-      $('#iDn').onclick = () => { $('#iNo').value = inv.no = stepInvoiceNo($('#iNo').value.trim() || nextInvoiceNo(), -1); $('#iNo').dispatchEvent(new Event('change')); };
-      bind('iDate', e => inv.date = U.fromIso(e.target.value)); bind('iPay', e => inv.payment = e.target.value); bind('iRcm', e => { inv.rcm = e.target.checked; this.updateTotals(); });
+      $('#iNo').addEventListener('blur', e => { if (!e.target.value.trim()) e.target.value = inv.no = nextNo(); });
+      $('#iUp').onclick = () => { $('#iNo').value = inv.no = stepNo($('#iNo').value.trim() || nextNo(), 1); $('#iNo').dispatchEvent(new Event('change')); };
+      $('#iDn').onclick = () => { $('#iNo').value = inv.no = stepNo($('#iNo').value.trim() || nextNo(), -1); $('#iNo').dispatchEvent(new Event('change')); };
+      // Dated and the payment mode keep the due date of a Credit invoice in step until one is typed by hand
+      let dueAuto = !inv.dueDate || inv.dueDate === dueDateFor(inv);
+      const refreshDue = () => { if (!dueAuto || challan) return; inv.dueDate = dueDateFor(inv); $('#iDue').value = U.toIso(inv.dueDate); };
+      bind('iDate', e => { inv.date = U.fromIso(e.target.value); refreshDue(); }); bind('iPay', e => { inv.payment = e.target.value; refreshDue(); }); bind('iRcm', e => { inv.rcm = e.target.checked; this.updateTotals(); });
+      bind('iDue', e => { inv.dueDate = U.fromIso(e.target.value); dueAuto = !inv.dueDate; }); bind('iTerms', e => inv.termsOn = e.target.checked);
       const wireParty = (pre, p) => {
         p.state = $('#' + pre + 'State').value;
         bind(pre + 'Name', e => p.name = e.target.value); bind(pre + 'State', e => { p.state = e.target.value; this.updateTotals(); });
@@ -317,15 +375,17 @@
         const rows = $$('#rows tr'); const el = $('[data-k=desc]', rows[rows.length - 1]); if (el) el.focus();
       };
       $('#quickBtn').onclick = () => Quick.open(inv, (menu) => this.applyQuick(menu));
-      $('#iNew').onclick = () => Invoice.open({});
-      $('#iDel').onclick = () => deleteInvoice(inv, () => Invoice.open({}));
+      $('#iNew').onclick = () => Invoice.open(challan ? { kind: 'challan' } : {});
+      $('#iDel').onclick = () => challan ? deleteChallan(inv, () => Invoice.open({ kind: 'challan' })) : deleteInvoice(inv, () => Invoice.open({}));
       $('#iSave').onclick = () => this.saveOnly();
-      $('#iPrint').onclick = () => this.print('invoice');
+      $('#iPrint').onclick = () => this.print(challan ? 'challan' : 'invoice');
       $('#iSettings').onclick = () => this.printSettings();
       if ($('#iChallan')) $('#iChallan').onclick = () => this.print('challan');
+      if ($('#iMakeInv')) $('#iMakeInv').onclick = () => Invoice.open({ fromChallan: inv.id });
       this.renderRows();
+      if (inv.fromChallan) UI.toast('Invoice prepared from delivery challan ' + inv.other.deliveryNote + '. Check it and Save.', 5000);
       // On an invoice pack a saved invoice is read-only: it can be printed, not changed
-      if (inv.id && Sub.isLite()) {
+      if (inv.id && Sub.isLite() && !challan) {
         $$('input, select, textarea, .step, .subbtn, .delbtn, #addRow, #quickBtn', root).forEach(el => { el.disabled = true; });
         $('#iSave').classList.add('hidden'); $('#iDel').classList.add('hidden');
         $('.page-h h2').insertAdjacentHTML('afterend', '<span class="pill warn" title="Invoice pack: saved invoices cannot be changed">Saved · read-only</span>');
@@ -406,9 +466,11 @@
       inv.items.forEach((x, n) => x.sl = n + 1);
       this.renderRows();
       const bad = (msg, id) => { UI.toast(msg); if (id) UI.mark(id, true); return false; };
-      if (!inv.no.trim()) { inv.no = nextInvoiceNo(); $('#iNo').value = inv.no; }
-      if (!inv.date) return bad('Invoice date is required', 'iDate');
+      const challan = inv.kind === 'challan';
+      if (!inv.no.trim()) { inv.no = challan ? nextChallanNo() : nextInvoiceNo(); $('#iNo').value = inv.no; }
+      if (!inv.date) return bad((challan ? 'Challan' : 'Invoice') + ' date is required', 'iDate');
       const buyerName = inv.buyer.name.trim();
+      if (challan && !buyerName) return bad('The party the goods go to is required on a delivery challan', 'bName');
       if ((inv.payment === 'Credit' || inv.payment === 'Cheque') && !buyerName) return bad('Buyer details are mandatory for Credit sales', 'bName');
       if (!U.isValidPhone(inv.buyer.phone)) return bad('Enter correct buyer phone number', 'bPhone');
       if (!U.isValidEmail(inv.buyer.email)) return bad('Enter correct buyer email address', 'bEmail');
@@ -418,42 +480,66 @@
       for (const it of inv.items) {
         if (!String(it.desc).trim()) return bad(inv.items.length === 1 && !num(it.qty) && !num(it.rate) ? 'Please add at least one item' : 'Item Particulars is required for row #' + it.sl);
         if (num(it.qty) <= 0) return bad('Quantity is required for item #' + it.sl);
-        if (num(it.rate) <= 0) return bad('Rate is required for item #' + it.sl);
+        if (!challan && num(it.rate) <= 0) return bad('Rate is required for item #' + it.sl);
       }
       computeTotals(inv);
       return true;
     },
     save() {
       const inv = this.inv;
+      if (inv.kind === 'challan') return this.saveChallan();
       // Invoice pack: a saved invoice is final, and a new one needs an invoice left in the pack
       if (!Sub.isTimeActive()) { if (inv.id || Store.list('invoices').some(x => x.kind === 'invoice' && x.no === inv.no)) { packLocked('invoice'); return null; } if (!packAllows()) return null; }
       inv.rcm = !!inv.rcm && rcmAllowed();
+      // The terms printed are the company's as they stand when the invoice is saved
+      inv.terms = inv.termsOn ? Store.company().terms || '' : ''; inv.termsOn = !!inv.termsOn && !!inv.terms;
       if (inv.sameShip) inv.consignee = JSON.parse(JSON.stringify(inv.buyer));
       const ex = Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id);
       if (ex) inv.id = ex.id;
       inv.kind = 'invoice';
-      const fresh = !inv.id;
+      const fresh = !inv.id, from = inv.fromChallan; delete inv.fromChallan;
       const saved = inv.id ? Store.update('invoices', inv) : Store.add('invoices', inv);
       inv.id = saved.id;
       if (fresh) Sub.useInvoice();
-      // Invoiced items join the item master. An item already there keeps its customised price and category.
-      inv.items.forEach(it => { const name = String(it.desc).trim(); if (findMaster(name)) upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), hidden: false }); else upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), rate: inclPrice(it.rate, it.gst) }); });
-      const bn = inv.buyer.name.trim();
-      if (bn) { const first = bn.split('\n')[0].trim(); const contacts = Store.list('contacts'); if (!contacts.find(x => x.name.toLowerCase() === first.toLowerCase())) { contacts.push({ id: U.uid(), createdAt: Date.now(), type: 'Customer', name: first, address: bn.split('\n').slice(1).join('\n').trim().toUpperCase(), phone: inv.buyer.phone, email: inv.buyer.email.toLowerCase(), gstin: inv.buyer.gstin, state: inv.buyer.state, tds: false }); Store.saveList('contacts', contacts); } }
+      if (from) { const dc = Store.find('challans', from); if (dc) { dc.invoiceNo = inv.no; Store.update('challans', dc); } }
+      absorb(inv);
+      return inv;
+    },
+    // A delivery challan uses no invoice of a pack; it needs a running subscription or pack like everything else
+    saveChallan() {
+      const inv = this.inv;
+      if (!Sub.isActive()) { UI.toast('Your subscription has ended. Renew to continue.', 6000); Subscription.dialog(false); return null; }
+      if (inv.sameShip) inv.consignee = JSON.parse(JSON.stringify(inv.buyer));
+      const ex = Store.list('challans').find(x => x.no === inv.no && x.id !== inv.id);
+      if (ex) inv.id = ex.id;
+      inv.kind = 'challan'; inv.invoiceNo = inv.invoiceNo || '';
+      const saved = inv.id ? Store.update('challans', inv) : Store.add('challans', inv);
+      inv.id = saved.id;
+      absorb(inv);
       return inv;
     },
     // Save only: the invoice is kept, nothing is printed, and the editor moves on to the next invoice number
     saveOnly() {
       if (!this.validate()) return;
       const inv = this.save(); if (!inv) return;
-      Invoice.open({});
-      UI.toast('Invoice ' + inv.no + ' saved. Next invoice: ' + this.inv.no, 3500);
+      const challan = inv.kind === 'challan';
+      Invoice.open(challan ? { kind: 'challan' } : {});
+      UI.toast((challan ? 'Delivery challan ' : 'Invoice ') + inv.no + ' saved. Next ' + (challan ? 'challan' : 'invoice') + ': ' + this.inv.no, 3500);
     },
     // Print / PDF: saves, then prints with the layout and paper chosen under Print Settings (A4 unless changed)
     print(kind) {
       if (!this.validate()) return;
-      const c = Store.company(), challan = kind === 'challan', layout = c.pdfLayout || 0, paper = Print.PAPERS[c.paper] && !Print.PAPERS[c.paper].envelope ? c.paper : 'A4';
+      const c = Store.company(), isDoc = this.inv.kind === 'challan', challan = kind === 'challan' || isDoc, layout = c.pdfLayout || 0, paper = Print.PAPERS[c.paper] && !Print.PAPERS[c.paper].envelope ? c.paper : 'A4';
       const go = () => {
+        if (isDoc) {
+          const dc = this.save(); if (!dc) return;
+          $('#iDel').disabled = false;
+          Print.open(dc, c, 0, paper);
+          UI.modal({ title: 'Delivery Challan ' + dc.no + ' Saved', body: '<p>The print dialog is open: choose "Save as PDF" or a printer.</p><p>Choose an action:</p>', buttons: [
+            { label: 'Stay Here', cls: 'outline' }, { label: 'Next Challan', onClick: () => Invoice.open({ kind: 'challan' }) }, { label: 'Print again', cls: 'outline', onClick: () => { Print.open(dc, c, 0, paper); return false; } },
+            dc.invoiceNo ? null : { label: 'Make Invoice', cls: 'green', onClick: () => Invoice.open({ fromChallan: dc.id }) }].filter(Boolean) });
+          return;
+        }
         if (challan) { Print.open(Object.assign(JSON.parse(JSON.stringify(this.inv)), { kind: 'challan', consignee: this.inv.sameShip ? this.inv.buyer : this.inv.consignee }), c, 0, paper); return; }
         // A saved invoice on an invoice pack is printed as it is, not saved again
         const inv = this.inv.id && Sub.isLite() ? this.inv : this.save(); if (!inv) return;
@@ -505,11 +591,11 @@
     // state, payment mode, total and the item names
     const hay = (i) => [i.no, i.date, i.buyer.name, i.buyer.phone, i.buyer.email, i.buyer.gstin, i.buyer.state, i.payment, String(num(i.totals.rounded) || num(i.totals.grand)), money(num(i.totals.rounded) || num(i.totals.grand))].concat(i.items.map(x => x.desc)).join(' ').toLowerCase();
     const lite = Sub.isLite();
-    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sCN">Credit Notes</button>' + (lite ? '' : '<button class="btn sm outline" id="sRct">Receipts</button><button class="btn sm outline" id="sOut">Outstanding</button>') + '<button class="btn sm outline" id="sRep">Report</button></div>') +
+    const root = App.view(App.header('Sales', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="sNew">+ New Invoice</button><button class="btn sm outline" id="sPO">Upload PO</button><button class="btn sm outline" id="sDC">Delivery Challans</button><button class="btn sm outline" id="sCN">Credit Notes</button>' + (lite ? '' : '<button class="btn sm outline" id="sRct">Receipts</button><button class="btn sm outline" id="sOut">Outstanding</button>') + '<button class="btn sm outline" id="sRep">Report</button></div>') +
       (invs.length ? '<div class="btnrow"><input id="sSearch" class="search" placeholder="Search by invoice no, party, phone, GSTIN, item, amount..." autocomplete="off"><span class="hint" id="sCount"></span></div>' : '') +
       '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th>Due</th><th></th></tr></thead><tbody>' +
         invs.map(i => '<tr data-s="' + esc(hay(i)) + '"><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + (i.buyer.phone ? '<div class="small muted">' + esc(i.buyer.phone) + '</div>' : '') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td><td data-l="Due">' + dueCell(i) + '</td>' +
-          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">' + (lite ? 'View' : 'Open') + '</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button>' + (lite ? '' : '<button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one.</div>') + '</div>');
+          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">' + (lite ? 'View' : 'Open') + '</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm outline" data-dc="' + esc(i.id) + '" title="Print a delivery challan for this invoice">Challan</button>' + (lite ? '' : '<button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one, or "Upload PO" to make invoices from purchase orders.</div>') + '</div>');
     App.wireBack(root);
     if ($('#sSearch')) {
       // Every word typed has to appear somewhere in the invoice
@@ -521,11 +607,167 @@
       $('#sSearch').addEventListener('input', filter); filter();
     }
     $('#sNew').onclick = () => App.go('invoice'); $('#sCN').onclick = () => App.go('notes', { kind: 'CN' }); $('#sRep').onclick = () => App.go('salesReport');
+    $('#sPO').onclick = () => PurchaseOrders.dialog(); $('#sDC').onclick = () => App.go('challans');
     if (!lite) { $('#sRct').onclick = () => App.go('money', { kind: 'receipt' }); $('#sOut').onclick = () => App.go('aging'); }
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
     $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));
+    $$('[data-dc]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.dc, print: 'challan' }));
     $$('[data-del]', root).forEach(b => b.onclick = () => deleteInvoice(Store.find('invoices', b.dataset.del), () => App.go('sales')));
   };
+
+  // ------------------------------------------------------------ delivery challans
+  // Goods sent out before (or without) an invoice: numbered DC-0001 onwards, printed as a challan, and turned
+  // into a sales invoice with one tap. The invoice carries the challan number under Delivery Note.
+  App.routes.challans = function () {
+    const list = challans();
+    const qty = (d) => U.fmtQty(d.items.reduce((s, i) => s + num(i.qty), 0));
+    const hay = (d) => [d.no, d.date, d.buyer.name, d.buyer.phone, d.buyer.gstin, d.invoiceNo].concat(d.items.map(x => x.desc)).join(' ').toLowerCase();
+    const root = App.view(App.header('Delivery Challans', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="dNew">+ New Challan</button><button class="btn sm outline" id="dSales">Sales</button></div>') +
+      (list.length ? '<div class="btnrow"><input id="dSearch" class="search" placeholder="Search by challan no, party, item, invoice no..." autocomplete="off"><span class="hint" id="dCount"></span></div>' : '') +
+      '<div class="tablewrap">' + (list.length ? '<table class="list cards"><thead><tr><th>Challan</th><th>Date</th><th>Party</th><th class="num">Qty</th><th>Status</th><th></th></tr></thead><tbody>' +
+        list.map(d => '<tr data-s="' + esc(hay(d)) + '"><td data-l="Challan"><b>' + esc(d.no) + '</b></td><td data-l="Date">' + esc(d.date) + '</td><td data-l="Party">' + esc(U.titleCase((d.buyer.name || '').split('\n')[0])) + (d.buyer.phone ? '<div class="small muted">' + esc(d.buyer.phone) + '</div>' : '') + '</td><td class="num" data-l="Qty">' + qty(d) + '<div class="small muted">' + d.items.length + ' item' + (d.items.length === 1 ? '' : 's') + '</div></td>' +
+          '<td data-l="Status">' + (d.invoiceNo ? '<span class="pill ok">Invoice ' + esc(d.invoiceNo) + '</span>' : '<span class="pill warn">Open</span>') + '</td>' +
+          '<td class="actions"><button class="btn sm outline" data-open="' + esc(d.id) + '">Open</button><button class="btn sm" data-print="' + esc(d.id) + '">Print</button>' + (d.invoiceNo ? '<button class="btn sm outline" data-inv="' + esc(d.invoiceNo) + '">View Invoice</button>' : '<button class="btn sm green" data-conv="' + esc(d.id) + '">Make Invoice</button>') + '<button class="btn sm red" data-del="' + esc(d.id) + '">Delete</button></td></tr>').join('') +
+        '</tbody></table><div class="empty hidden" id="dNone">No challan matches the search.</div>' : '<div class="empty">No delivery challans yet. Tap "+ New Challan" to send goods out before the invoice, or print a challan for any saved invoice from Sales.</div>') + '</div>');
+    App.wireBack(root);
+    if ($('#dSearch')) {
+      const filter = () => {
+        const words = $('#dSearch').value.toLowerCase().split(/\s+/).filter(Boolean); let shown = 0;
+        $$('tbody tr', root).forEach(tr => { const hit = words.every(w => tr.dataset.s.includes(w)); tr.classList.toggle('hidden', !hit); if (hit) shown++; });
+        $('#dNone').classList.toggle('hidden', shown > 0); $('#dCount').textContent = words.length ? shown + ' of ' + list.length + ' challans' : list.length + ' challans';
+      };
+      $('#dSearch').addEventListener('input', filter); filter();
+    }
+    $('#dNew').onclick = () => App.go('invoice', { kind: 'challan' }); $('#dSales').onclick = () => App.go('sales');
+    $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { challan: b.dataset.open }));
+    $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { challan: b.dataset.print, print: 'challan' }));
+    $$('[data-conv]', root).forEach(b => b.onclick = () => App.go('invoice', { fromChallan: b.dataset.conv }));
+    $$('[data-inv]', root).forEach(b => b.onclick = () => { const inv = invoices().find(i => i.no === b.dataset.inv); if (inv) App.go('invoice', { id: inv.id }); else UI.toast('Invoice ' + b.dataset.inv + ' is not on this device'); });
+    $$('[data-del]', root).forEach(b => b.onclick = () => deleteChallan(Store.find('challans', b.dataset.del), () => App.go('challans')));
+  };
+
+  // ------------------------------------------------------------ purchase orders -> sales invoices
+  // A CSV / Excel file in the BlitzBook template, one row per line of a purchase order, with the PO number on
+  // every row (a blank PO number continues the row above). Each PO becomes one invoice: a PO number already on an
+  // invoice updates that invoice, the rest are inserted. Customers and items are upserted into the masters.
+  const PO_TEMPLATE = 'PO Number,PO Date,Customer,GSTIN,Phone,Email,Address,State,Item,HSN,Qty,UQC,Rate,GST%\n' +
+    'PO-1001,02/10/2026,Ramesh Traders,37ABCDE1234F1ZZ,9876543210,ramesh@gmail.com,100 Feet Road Vijayawada,Andhra Pradesh,Steel Pipe 2 inch,7306,10,NOS,450,18\n' +
+    'PO-1001,,,,,,,,Welding Rods,8311,5,BOX,320,18\n' +
+    'PO-1002,02/10/2026,Suresh Enterprises,36XYZAB5678G2ZY,9123456789,suresh@gmail.com,MG Road Hyderabad,Telangana,Office Chair,9401,4,NOS,3200,18\n';
+  // dd/mm/yyyy from what a sheet may hold: an Excel serial, an ISO date, or d/m/y with any separator
+  function poDate(v) {
+    v = String(v || '').trim(); if (!v) return '';
+    if (/^\d{5}$/.test(v)) { const d = new Date(Date.UTC(1899, 11, 30) + (+v) * 86400000); return U.pad(d.getUTCDate()) + '/' + U.pad(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear(); }
+    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v); if (m) return U.pad(+m[3]) + '/' + U.pad(+m[2]) + '/' + m[1];
+    m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(v); if (m) return U.pad(+m[1]) + '/' + U.pad(+m[2]) + '/' + (m[3].length === 2 ? '20' + m[3] : m[3]);
+    return v;
+  }
+  // The purchase orders in the uploaded rows: [{no, date, customer, gstin, phone, email, address, state, items: [{desc, hsn, qty, uqc, rate, gst}]}]
+  function parsePurchaseOrders(rows) {
+    const head = rows.length ? rows[0].map(c => String(c == null ? '' : c).trim().toLowerCase().replace(/[^a-z]/g, '')) : [];
+    const at = {};
+    ['customer', 'gstin', 'phone', 'email', 'address', 'state', 'item', 'hsn', 'qty', 'uqc', 'rate'].forEach(n => { at[n] = head.findIndex(h => h.startsWith(n)); });
+    at.ponumber = head.findIndex(h => h.startsWith('ponum') || h.startsWith('pono') || h === 'po');
+    at.podate = head.findIndex(h => h.startsWith('podat'));
+    at.gst = head.findIndex(h => h.startsWith('gst') && !h.startsWith('gstin'));
+    if (at.ponumber < 0 || at.item < 0 || at.qty < 0) throw new Error('The first row must carry the template headings: PO Number, PO Date, Customer, GSTIN, Phone, Email, Address, State, Item, HSN, Qty, UQC, Rate, GST%. Download the template from Upload PO.');
+    const pos = [], byNo = new Map(); let cur = null;
+    rows.slice(1).forEach(r => {
+      const g = (n) => at[n] >= 0 && r[at[n]] != null ? String(r[at[n]]).trim() : '';
+      const no = g('ponumber');
+      if (no) { cur = byNo.get(no.toLowerCase()); if (!cur) { cur = { no, date: '', customer: '', gstin: '', phone: '', email: '', address: '', state: '', items: [] }; byNo.set(no.toLowerCase(), cur); pos.push(cur); } }
+      if (!cur) return;
+      [['date', 'podate'], ['customer', 'customer'], ['gstin', 'gstin'], ['phone', 'phone'], ['email', 'email'], ['address', 'address'], ['state', 'state']].forEach(([k, col]) => { const v = g(col); if (v && !cur[k]) cur[k] = v; });
+      const item = g('item'); if (!item) return;
+      cur.items.push({ desc: item, hsn: g('hsn'), qty: num(g('qty')), uqc: g('uqc').toUpperCase(), rate: g('rate'), gst: g('gst').replace('%', '').trim() });
+    });
+    return pos;
+  }
+  // What each purchase order will do: a new invoice, an update of the invoice that already carries the PO number
+  // (upsert) or, with insert only, nothing for those; skipped rows carry the reason. The invoice is built here so
+  // the preview can show its total.
+  function planPurchaseOrders(pos, mode) {
+    const contacts = Store.list('contacts'), existing = invoices();
+    return pos.map(po => {
+      const p = { po, action: 'new', reason: '', inv: null, contact: null };
+      const skip = (reason) => Object.assign(p, { action: 'skip', reason });
+      const gstin = po.gstin.toUpperCase();
+      if (gstin && !U.isValidGstin(gstin)) return skip('Invalid GSTIN ' + gstin);
+      const items = po.items.filter(it => it.desc && it.qty > 0);
+      if (!items.length) return skip('No item with a quantity');
+      const ct = (gstin && contacts.find(c => String(c.gstin || '').toUpperCase() === gstin)) || (po.customer && contacts.find(c => c.name.toLowerCase() === po.customer.toLowerCase())) || null;
+      const name = po.customer || (ct && ct.name) || '';
+      if (!name) return skip('No customer name');
+      const address = po.address || (ct && ct.address) || '', phone = po.phone || (ct && ct.phone) || '', email = (po.email || (ct && ct.email) || '').toLowerCase();
+      const state = U.matchState(po.state, gstin) || (ct && U.matchState(ct.state, ct.gstin)) || U.stateByCode(sellerStateCode()) || U.STATES[0];
+      const buyer = { name: name + (address ? '\n' + address : ''), phone: U.isValidPhone(phone) ? phone : '', email: U.isValidEmail(email) ? email : '', gstin: gstin || (ct && ct.gstin) || '', state };
+      const ex = existing.find(i => String((i.other || {}).orderNo || '').trim().toLowerCase() === po.no.toLowerCase());
+      const inv = ex ? JSON.parse(JSON.stringify(ex)) : newInvoice();
+      if (!ex) { inv.payment = 'Credit'; inv.dueDate = dueDateFor(inv); }
+      inv.buyer = buyer; inv.sameShip = true; inv.consignee = JSON.parse(JSON.stringify(buyer));
+      inv.other.orderNo = po.no; inv.other.orderDate = poDate(po.date) || inv.other.orderDate;
+      inv.items = items.map((it, n) => {
+        const m = findMaster(it.desc), gst = it.gst !== '' ? String(num(it.gst)) : (m && m.gst) || '18';
+        const rate = num(it.rate) > 0 ? num(it.rate) : m && num(m.rate) > 0 ? exclRate(m.rate, gst) : 0;
+        return Object.assign(blankItem(n + 1), { desc: m ? m.name : it.desc, hsn: it.hsn || (m && m.hsn) || U.hsnFor(it.desc) || '', gst, qty: it.qty, uqc: U.UQC_CODES.includes(it.uqc) ? it.uqc : 'NOS', rate });
+      });
+      const noRate = inv.items.find(it => num(it.rate) <= 0);
+      if (noRate) return skip('No rate for "' + noRate.desc + '" and no price in the item master');
+      computeTotals(inv);
+      p.inv = inv; p.contact = { name, address, phone: buyer.phone, email: buyer.email, gstin: buyer.gstin, state };
+      if (ex) { p.action = 'update'; if (mode === 'insert') skip('Already on invoice ' + ex.no + ' (insert only)'); else if (!Sub.isTimeActive() && Sub.invoiceQuota()) skip('Invoice ' + ex.no + ' is final on an invoice pack'); }
+      return p;
+    });
+  }
+  function applyPurchaseOrders(plan) {
+    let created = 0, updated = 0, skipped = 0;
+    const contacts = Store.list('contacts'); let touched = false;
+    plan.forEach(p => {
+      if (p.action === 'new' && !Sub.isTimeActive() && !Sub.canAddInvoice()) { p.action = 'skip'; p.reason = 'Invoice pack used up'; }
+      if (p.action === 'skip') { skipped++; return; }
+      const inv = p.inv;
+      if (p.action === 'new') { inv.no = nextInvoiceNo(); inv.id = null; Store.add('invoices', inv); Sub.useInvoice(); created++; }
+      else { Store.update('invoices', inv); updated++; }
+      // The customer: a known one takes the PO's details, a new one is added
+      const c = p.contact;
+      const ct = (c.gstin && contacts.find(x => String(x.gstin || '').toUpperCase() === c.gstin)) || contacts.find(x => x.name.toLowerCase() === c.name.toLowerCase());
+      if (ct) Object.assign(ct, { address: c.address || ct.address, phone: c.phone || ct.phone, email: c.email || ct.email, gstin: c.gstin || ct.gstin, state: c.state, updatedAt: Date.now() });
+      else contacts.push({ id: U.uid(), createdAt: Date.now(), type: 'Customer', name: c.name, address: c.address.toUpperCase(), phone: c.phone, email: c.email, gstin: c.gstin, state: c.state, tds: false, tdsSection: '', tdsRate: 0 });
+      touched = true;
+      inv.items.forEach(it => { const name = String(it.desc).trim(); if (findMaster(name)) upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), hidden: false }); else upsertMaster(name, { hsn: String(it.hsn).trim(), gst: String(it.gst), rate: inclPrice(it.rate, it.gst) }); });
+    });
+    if (touched) Store.saveList('contacts', contacts);
+    return { created, updated, skipped };
+  }
+  const PurchaseOrders = {
+    template() { UI.download('BlitzBook_PurchaseOrders_Template.csv', PO_TEMPLATE, 'text/csv'); UI.toast('Template downloaded'); },
+    dialog() {
+      UI.modal({ title: 'Upload Purchase Orders', body: '<p>Upload a CSV or Excel file of customer purchase orders in the BlitzBook template and every purchase order becomes a sales invoice.</p>' +
+        '<ul class="hint"><li>One row per item, with the <b>PO Number</b> on each row (a blank PO Number continues the row above).</li><li><b>Rate</b> is the unit price before GST; left blank, the item master price is used.</li><li>With <b>Upsert</b> a PO number already on an invoice <b>updates</b> that invoice and the others are <b>inserted</b> as new Credit invoices; with <b>Insert only</b> those POs are skipped. The choice is made on the preview.</li><li>New customers and items join the masters; known ones are updated.</li></ul>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Download template', cls: 'outline', onClick: () => { PurchaseOrders.template(); return false; } }, { label: 'Choose file', cls: 'green', onClick: () => PurchaseOrders.upload() }] });
+    },
+    upload() {
+      UI.pickSheet((rows) => {
+        let pos; try { pos = parsePurchaseOrders(rows); } catch (e) { UI.alert('Upload Purchase Orders', e.message); return; }
+        if (!pos.length) { UI.alert('Upload Purchase Orders', 'No purchase orders found: every row needs a PO Number, an Item and a Qty.'); return; }
+        let plan = planPurchaseOrders(pos, Store.get('upload_mode', 'upsert'));
+        const label = (p) => p.action === 'new' ? '<span class="pill ok">New invoice</span>' : p.action === 'update' ? '<span class="pill warn">Update ' + esc(p.inv.no) + '</span>' : '<span class="pill bad">Skip</span><div class="small muted">' + esc(p.reason) + '</div>';
+        const todo = () => plan.filter(p => p.action !== 'skip').length;
+        const table = () => '<table class="list"><thead><tr><th>PO</th><th>Customer</th><th class="num">Items</th><th class="num">Total</th><th>Action</th></tr></thead><tbody>' +
+          plan.map(p => '<tr><td>' + esc(p.po.no) + (p.po.date ? '<div class="small muted">' + esc(poDate(p.po.date)) + '</div>' : '') + '</td><td>' + esc(p.contact ? p.contact.name : p.po.customer || '-') + '</td><td class="num">' + p.po.items.length + '</td><td class="num">' + (p.inv ? money(p.inv.totals.rounded) : '-') + '</td><td>' + label(p) + '</td></tr>').join('') + '</tbody></table>';
+        const goLabel = () => { const n = todo(); return n ? (n === 1 ? 'Create / update 1 invoice' : 'Create / update ' + n + ' invoices') : 'Nothing to do'; };
+        const bg = UI.modal({ title: 'Upload Purchase Orders', wide: true, focus: false, body: '<p>' + plan.length + ' purchase order' + (plan.length === 1 ? '' : 's') + ' in the file.</p>' + UI.modeField('Purchase orders') + '<div class="tablewrap" id="poPlan">' + table() + '</div>',
+          buttons: [{ label: 'Cancel', cls: 'outline' }, { label: goLabel(), cls: 'green', onClick: () => {
+            if (!todo()) return false;
+            const r = applyPurchaseOrders(plan);
+            UI.importResult('Purchase orders uploaded', { inserted: r.created, updated: r.updated, skipped: r.skipped, note: r.created + ' new invoice' + (r.created === 1 ? '' : 's') + ' inserted, ' + r.updated + ' existing invoice' + (r.updated === 1 ? '' : 's') + ' updated.', lines: plan.filter(p => p.action === 'skip').map(p => p.po.no + ': ' + p.reason) }, () => App.go('sales'));
+          } }] });
+        // Switching between upsert and insert only redraws the plan
+        $$('input[name=impMode]', bg).forEach(r => r.addEventListener('change', () => { plan = planPurchaseOrders(pos, UI.modeOf(bg)); $('#poPlan', bg).innerHTML = table(); $$('.mf .btn', bg)[1].textContent = goLabel(); }));
+      });
+    }
+  };
+  global.PurchaseOrders = PurchaseOrders;
 
   // ------------------------------------------------------------ credit / debit notes
   function noteTotals(n) {

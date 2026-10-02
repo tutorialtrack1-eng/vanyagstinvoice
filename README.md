@@ -23,6 +23,14 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   it was left (dashboard, an invoice, or the list that was open)
 - Party ledger (Reports, a contact's ledger button, Purchases, Journal): every bill, note, receipt and payment
   with a supplier or customer with a running balance, for a period or all dates, exported to Excel
+- Delivery challans (Sales > Challans): goods sent out before or without an invoice, numbered DC-0001 onwards
+  on the invoice screen in challan mode (no rate needed), printed as a challan PDF, and turned into a Credit
+  invoice with Make Invoice; the invoice carries the challan number under Delivery Note and the challan shows
+  which invoice it became. A challan PDF for any saved invoice from the DC button beside it in Sales.
+- Upload PO (Sales): a CSV / Excel file of customer purchase orders in the BlitzBook template (Template button;
+  one row per item with the PO Number on each row) previews what each PO will do, then every PO becomes one
+  Credit invoice: a PO number already on an invoice updates that invoice, the rest are inserted in bulk;
+  customers and items are upserted into the masters.
 
 ## Web portal and sync
 
@@ -34,7 +42,8 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   Alternatively `server/` is a small Node server doing the same (`server/README.md`). Without either, data
   moves between the app and the portal by backup file (Export / Import on either side).
 - The trial after registering lasts 30 days; trial, validity and activation codes are shared between app and
-  portal when sync is on.
+  portal when sync is on. The portal's GST screen (GSTR-1 and GSTR-3B JSON for the GST portal) is for accounts
+  on a yearly plan or longer; invoices carry a payment due date and optional terms & conditions on the PDF.
 - Registration and password reset OTPs are sent by Supabase Auth (`server/supabase/README.md`) or by the
   sync server (`server/README.md`, *OTP delivery*); with neither, the OTP is shown on screen (test mode).
 

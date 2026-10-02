@@ -82,6 +82,14 @@
     useInvoice() { if (this.isLite()) Store.set('inv_used', this.invoicesUsed() + 1); },
 
     isActive() { return this.isTimeActive() || this.invoicesLeft() > 0; },
+
+    // ---- yearly plans: the GST return files (gst.js) are for accounts on a yearly plan or longer (2 years, 5 years).
+    // yearly_until is set when such a plan is applied here (code, payment or a sync that stretched the validity by
+    // a year or more). An account activated elsewhere before this was recorded still counts while more than 300
+    // days of validity remain, which only a yearly or longer plan can give.
+    yearlyUntil() { return n0(Store.get('yearly_until', 0)); },
+    isYearly() { const now = Date.now(), paid = this.subscriptionUntil(); return this.yearlyUntil() > now || (paid > now && paid - now > 300 * DAY); },
+    noteYearly(days, until) { if (n0(days) >= 360 && until > this.yearlyUntil()) Store.set('yearly_until', until); },
     // "Activated till 31/10/2026 (29 days left)", "Subscription valid till 31/03/2027 (180 days)",
     // "Invoice pack: 17 of 20 invoices left" or "Activation expired on ..." / "Invoice pack used up"
     statusText() {
@@ -140,7 +148,7 @@
     },
     // What a code or a payment gives: a plan's days follow whatever is still running, a pack's invoices join the balance
     applyPlan(plan) {
-      if (n0(plan.days) > 0) Store.set('valid_until', Math.max(Date.now(), this.expiresAt()) + n0(plan.days) * DAY);
+      if (n0(plan.days) > 0) { const until = Math.max(Date.now(), this.expiresAt()) + n0(plan.days) * DAY; Store.set('valid_until', until); this.noteYearly(plan.days, until); }
       if (n0(plan.invoices) > 0) Store.set('inv_quota', this.invoiceQuota() + n0(plan.invoices));
     },
 

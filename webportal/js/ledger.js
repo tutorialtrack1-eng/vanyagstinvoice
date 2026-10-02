@@ -250,22 +250,34 @@
       $$('[data-e]', root).forEach(b => b.onclick = () => Contacts.edit(Store.find('contacts', b.dataset.e)));
       $$('[data-d]', root).forEach(b => b.onclick = () => { const c = Store.find('contacts', b.dataset.d); UI.confirm('Delete Contact', 'Are you sure you want to delete contact "' + c.name + '"?', () => { Store.delete('contacts', c.id); UI.toast('Contact "' + c.name + '" deleted'); Contacts.open({ type }); }, 'Delete'); });
     },
-    // Columns: Name, Phone, Email, GSTIN, Address, State (the app's template). The same name updates the contact.
+    // Columns: Name, Phone, Email, GSTIN, Address, State (the app's template). A name already in the contacts is
+    // updated (upsert) or left alone (insert only); the preview says how many of each the file holds.
     importRows(rows, type) {
       const col = columns(rows, rows.length && /^type$/i.test(String(rows[0][0]).trim()) ? 'type' : 'name', ['name', 'phone', 'email', 'gstin', 'address', 'state']);
       const head = rows.length ? rows[0].map(c => String(c).trim().toLowerCase()) : [], typeAt = head.indexOf('type');
-      const list = Store.list('contacts'); let added = 0, updated = 0;
+      const recs = [];
       col.body.forEach(r => {
         const name = col.get(r, 'name'); if (!name) return;
         const gstin = col.get(r, 'gstin').toUpperCase(), state = col.get(r, 'state');
-        const f = { name, phone: col.get(r, 'phone'), email: col.get(r, 'email').toLowerCase(), gstin, address: col.get(r, 'address'), state: U.matchState(state, gstin) || state };
-        const ex = list.find(x => x.name.toLowerCase() === name.toLowerCase());
-        if (ex) { Object.assign(ex, f, { updatedAt: Date.now() }); updated++; }
-        else { list.push(Object.assign({ id: U.uid(), createdAt: Date.now(), type: typeAt >= 0 ? (/supp/i.test(r[typeAt] || '') ? 'Supplier' : 'Customer') : type, tds: false, tdsSection: '', tdsRate: 0 }, f)); added++; }
+        recs.push({ f: { name, phone: col.get(r, 'phone'), email: col.get(r, 'email').toLowerCase(), gstin, address: col.get(r, 'address'), state: U.matchState(state, gstin) || state }, type: typeAt >= 0 ? (/supp/i.test(r[typeAt] || '') ? 'Supplier' : 'Customer') : type });
       });
-      if (!added && !updated) { UI.toast('No contacts found in file. Use the template format.', 4000); return; }
-      Store.saveList('contacts', list);
-      UI.toast(added + ' contacts added, ' + updated + ' updated', 4000); Contacts.open({ type });
+      if (!recs.length) { UI.alert('Upload Contacts', 'No contacts found in the file. The columns are Name, Phone, Email, GSTIN, Address, State (download the template).'); return; }
+      const list = Store.list('contacts'), known = recs.filter(x => list.some(c => c.name.toLowerCase() === x.f.name.toLowerCase())).length;
+      const bg = UI.modal({ title: 'Upload Contacts', focus: false, body: '<p>' + recs.length + ' contact' + (recs.length === 1 ? '' : 's') + ' in the file: <b>' + (recs.length - known) + '</b> new, <b>' + known + '</b> already in the books (by name).</p>' + UI.modeField('Contacts'),
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Upload', cls: 'green', onClick: (bg) => {
+          const mode = UI.modeOf(bg), r = { inserted: 0, updated: 0, unchanged: 0, skipped: 0, lines: [] };
+          recs.forEach(x => {
+            const ex = list.find(c => c.name.toLowerCase() === x.f.name.toLowerCase());
+            if (!ex) { list.push(Object.assign({ id: U.uid(), createdAt: Date.now(), type: x.type, tds: false, tdsSection: '', tdsRate: 0 }, x.f)); r.inserted++; return; }
+            if (mode === 'insert') { r.skipped++; r.lines.push(x.f.name + ': already here, left as it is'); return; }
+            // Only a row that brings something different counts as an update
+            if (Object.keys(x.f).every(k => String(ex[k] || '') === String(x.f[k] || ''))) { r.unchanged++; return; }
+            Object.assign(ex, x.f, { updatedAt: Date.now() }); r.updated++;
+          });
+          Store.saveList('contacts', list);
+          UI.importResult('Contacts uploaded', r, () => Contacts.open({ type }));
+        } }] });
+      return bg;
     },
     // Create or edit a customer / supplier, including the TDS to deduct or expect on their bills
     edit(c, onSaved) {
@@ -617,15 +629,34 @@
     }
     $$('[data-d]', root).forEach(b => b.onclick = () => confirmDelete([b.dataset.d]));
     $('#stTpl').onclick = () => { UI.download('BlitzBook_Stock_Template.csv', 'Item,HSN,Qty,UQC,Rate,GST%\nWooden Chair,9401,10,NOS,1500,18\nDining Table,9403,2,NOS,12000,18\n', 'text/csv'); UI.toast('Template downloaded'); };
-    // Columns: Item, HSN, Qty, UQC, Rate, GST%. Rows become one opening-stock document dated today, and each
-    // item joins the item master so it can be invoiced straight away.
+    // Columns: Item, HSN, Qty, UQC, Rate, GST%. New items become one opening-stock document dated today. An item
+    // uploaded earlier is brought to the file's quantity and rate (upsert) or left alone (insert only). Every item
+    // joins the item master so it can be invoiced straight away.
     $('#stUp').onclick = () => UI.pickSheet((sheet) => {
       const col = columns(sheet, 'item', ['item', 'hsn', 'qty', 'uqc', 'rate', 'gst']);
       const items = col.body.map(r => ({ name: U.nameCase(col.get(r, 'item')), hsn: col.get(r, 'hsn'), qty: num(col.get(r, 'qty')), uqc: col.get(r, 'uqc').toUpperCase() || 'NOS', rate: num(col.get(r, 'rate')), gst: col.get(r, 'gst').replace('%', '') || '18', stock: true })).filter(it => it.name && it.qty > 0);
-      if (!items.length) { UI.toast('No stock rows found. Use the template format: Item, HSN, Qty, UQC, Rate, GST%', 5000); return; }
-      Store.add('purchases', purchaseTotals({ kind: 'STK', no: nextNo('STK'), date: U.today(), supplier: 'Stock upload', supplierGstin: '', paidBy: 'Credit', rcm: false, inclusive: false, tdsRate: 0, tdsSection: '', items, notes: '' }));
-      items.forEach(it => Biz.upsertMaster(it.name, Object.assign({ gst: it.gst, hidden: false }, it.hsn ? { hsn: it.hsn } : {})));
-      UI.toast(items.length + ' stock items added', 4000); App.go('stock');
+      if (!items.length) { UI.alert('Upload Stock', 'No stock rows found. The columns are Item, HSN, Qty, UQC, Rate, GST% (download the template).'); return; }
+      // The uploaded line an item already has, in the latest stock-upload document that carries it
+      const docs = Store.list('purchases'), key = (s) => String(s || '').trim().toLowerCase();
+      const lineOf = (name) => { for (let n = docs.length - 1; n >= 0; n--) { const p = docs[n]; if (p.kind !== 'STK') continue; const it = p.items.find(x => key(x.name) === key(name)); if (it) return { p, it }; } return null; };
+      const known = items.filter(it => lineOf(it.name)).length;
+      UI.modal({ title: 'Upload Stock', focus: false, body: '<p>' + items.length + ' item' + (items.length === 1 ? '' : 's') + ' in the file: <b>' + (items.length - known) + '</b> new, <b>' + known + '</b> uploaded earlier.</p>' + UI.modeField('Stock items') +
+        '<div class="hint">Upsert sets an item uploaded earlier to the quantity and rate in the file (it does not add to it). Stock bought on purchase bills is never changed by an upload.</div>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Upload', cls: 'green', onClick: (bg) => {
+          const mode = UI.modeOf(bg), r = { inserted: 0, updated: 0, unchanged: 0, skipped: 0, lines: [] }, fresh = [], touched = new Set();
+          items.forEach(it => {
+            const was = lineOf(it.name);
+            if (!was) { fresh.push(it); r.inserted++; return; }
+            if (mode === 'insert') { r.skipped++; r.lines.push(it.name + ': uploaded earlier, left as it is'); return; }
+            const same = num(was.it.qty) === it.qty && num(was.it.rate) === it.rate && String(was.it.gst) === String(it.gst) && (!it.hsn || was.it.hsn === it.hsn) && was.it.uqc === it.uqc;
+            if (same) { r.unchanged++; return; }
+            Object.assign(was.it, { qty: it.qty, rate: it.rate, gst: it.gst, uqc: it.uqc }, it.hsn ? { hsn: it.hsn } : {}); touched.add(was.p); r.updated++;
+          });
+          touched.forEach(p => Store.update('purchases', purchaseTotals(p)));
+          if (fresh.length) Store.add('purchases', purchaseTotals({ kind: 'STK', no: nextNo('STK'), date: U.today(), supplier: 'Stock upload', supplierGstin: '', paidBy: 'Credit', rcm: false, inclusive: false, tdsRate: 0, tdsSection: '', items: fresh, notes: '' }));
+          items.forEach(it => Biz.upsertMaster(it.name, Object.assign({ gst: it.gst, hidden: false }, it.hsn ? { hsn: it.hsn } : {})));
+          UI.importResult('Stock uploaded', r, () => App.go('stock'));
+        } }] });
     });
   };
 

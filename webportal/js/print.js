@@ -37,6 +37,13 @@
   }
   const POWERED = '<div class="pw">Powered by BlitzBook</div>';
   function partyLines(p) { return String(p.name || '').split('\n').concat(String(p.address || '').split('\n')).map(s => s.trim()).filter(Boolean); }
+  // The terms & conditions block of an invoice that asked for them (one numbered line per term)
+  function termsBlock(inv, cls) {
+    if (inv.kind !== 'invoice' || !inv.termsOn || !String(inv.terms || '').trim()) return '';
+    const lines = String(inv.terms).split('\n').map(s => s.trim()).filter(Boolean);
+    return '<div class="' + cls + '"><div class="th">Terms &amp; Conditions</div><ol>' + lines.map(l => '<li>' + esc(l.replace(/^\d+[.)]\s*/, '')) + '</li>').join('') + '</ol></div>';
+  }
+  function dueDate(inv) { return inv.kind === 'invoice' && inv.dueDate ? inv.dueDate : ''; }
 
   // HSN-wise groups: key hsn|rate -> {hsn, rate, taxable}
   function hsnGroups(inv) {
@@ -101,7 +108,7 @@
       '<div class="head"><div class="seller"><div class="sname">' + esc(company.name) + '</div><div class="addr">' + nl2br(company.address) + '</div>' +
       '<div><b>' + gstLine + '</b></div><div><b>Phone: ' + esc(company.phone) + ' | Email: ' + esc(company.email) + '</b></div></div>' +
       '<div class="meta"><div><b>' + noLabel(inv) + ':</b><b>' + esc(inv.no) + '</b></div><div><b>Date:</b><b>' + esc(inv.date) + '</b></div>' +
-      (inv.kind === 'invoice' ? '<div><b>Payment:</b><span>' + esc(inv.payment) + '</span></div>' + (noGst ? '' : '<div><b>Reverse Charge:</b><span>' + (inv.rcm ? 'Yes' : 'No') + '</span></div>') : '') + '</div></div>' +
+      (inv.kind === 'invoice' ? '<div><b>Payment:</b><span>' + esc(inv.payment) + '</span></div>' + (dueDate(inv) ? '<div><b>Due Date:</b><b>' + esc(dueDate(inv)) + '</b></div>' : '') + (noGst ? '' : '<div><b>Reverse Charge:</b><span>' + (inv.rcm ? 'Yes' : 'No') + '</span></div>') : '') + '</div></div>' +
       '<table class="grid parties"><tr><th>BILL TO</th><th>SHIP TO</th><th>OTHER DETAILS</th></tr><tr><td>' + party(inv.buyer) + '</td><td>' + party(inv.consignee.name ? inv.consignee : inv.buyer) + '</td><td>' +
       other.map(o => '<div><b>' + o[0] + '</b> ' + esc(o[1]) + '</div>').join('') + '</td></tr></table></div>' +
       '<table class="grid items"><thead><tr>' + cols.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table>' +
@@ -111,6 +118,7 @@
         (inv.rcm ? '<div class="note">Tax payable under reverse charge by the recipient (Sec 9(3)/9(4) CGST Act). GST shown above is not included in the total.</div>' : '') +
         (inv.kind === 'quotation' ? '<div class="note">This quotation is valid for 30 days from the date above unless stated otherwise.</div>' : '')) +
       '<div class="foot"><div class="bank"><div class="bt">BANK DETAILS</div>' + bank.map(b => '<div><span>' + b[0] + '</span><span>:</span><span>' + esc(b[1]) + '</span></div>').join('') + '</div>' + totals + '</div>' +
+      termsBlock(inv, 'terms') +
       '<div class="sign"><div>For ' + esc(company.name) + '</div>' + (company.signature ? '<img src="' + company.signature + '" alt="">' : '<div class="sp"></div>') + '<div>Authorised Signatory</div></div>' +
       (company.signature ? '' : '<div class="cg">Computer-generated document. No signature required.</div>') +
       '</div></div>';
@@ -136,7 +144,7 @@
     const sellerState = U.stateByCode((company.gstin || '').slice(0, 2)) || '';
     const cells = [
       [inv.kind === 'challan' ? 'Challan No.' : inv.kind === 'quotation' ? 'Quotation No.' : 'Invoice No.', inv.no, 'Dated', inv.date],
-      ['Delivery Note', inv.other.deliveryNote, 'Mode/Terms of Payment', inv.kind === 'invoice' ? inv.payment : ''],
+      ['Delivery Note', inv.other.deliveryNote, 'Mode/Terms of Payment', inv.kind === 'invoice' ? inv.payment + (dueDate(inv) ? ', due ' + dueDate(inv) : '') : ''],
       ['Reference No. & Date', inv.other.reference, 'Other References', titleCase(inv.other.info)],
       ["Buyer's Order No.", inv.other.orderNo, 'Dated', inv.other.orderDate],
       ['Dispatched through', titleCase(inv.other.transporter), 'Destination', titleCase(inv.other.destination)],
@@ -189,7 +197,7 @@
         (inv.rcm ? '<div class="row"><b>Tax payable under reverse charge by the recipient (Sec 9(3)/9(4) CGST Act). GST shown above is not included in the total.</b></div>' : '') +
         (noGst ? '<div class="row"><b>Declaration: ' + (company.gstType === 'Composition' ? 'Composition taxable person, not eligible to collect tax on supplies.' : 'Supplier not registered under GST. No GST charged on this invoice.') + '</b></div>' : '') +
         (inv.kind === 'quotation' ? '<div class="row">This quotation is valid for 30 days from the date above unless stated otherwise.</div>' : '')) +
-      hsn +
+      hsn + termsBlock(inv, 'row terms') +
       '<div class="foot"><div class="bank"><b>Company\'s Bank Details</b>' + bank.map(b => '<div><span>' + b[0] + '</span><span>:</span><b>' + esc(b[1]) + '</b></div>').join('') + '</div>' +
       '<div class="decl"><div class="dh">Declaration</div><b>for ' + esc(company.name) + '</b><div class="dt">We declare that this ' + (inv.kind === 'invoice' ? 'invoice' : 'document') + ' shows the actual price of the goods described and that all particulars are true and correct.</div>' +
       (company.signature ? '<img src="' + company.signature + '" alt="">' : '') + '<div class="as">Authorised Signatory</div></div></div>' +
@@ -205,7 +213,13 @@
     table { border-collapse: collapse; width: 100%; }
     thead { display: table-header-group; } tfoot { display: table-footer-group; }
     /* A row, a party box or a closing block is never cut in two by a page break; long item lists break between rows */
-    .grid tr, .parties, .sect, .words, .note, .foot, .sign, .cg, .pw, .classic .head, .classic .row, .classic .hsn, .classic .foot, .std .small { break-inside: avoid; page-break-inside: avoid; }
+    .grid tr, .parties, .sect, .words, .note, .foot, .sign, .cg, .pw, .terms, .classic .head, .classic .row, .classic .hsn, .classic .foot, .std .small { break-inside: avoid; page-break-inside: avoid; }
+    /* Terms & conditions, when the invoice asks for them */
+    .terms .th { font-weight: bold; } .terms ol { margin: 2px 0 0 14pt; padding: 0; font-size: 8pt; line-height: 1.3; }
+    .std .terms { margin-top: 8px; border: 1px solid #000; padding: 4px 8px; font-size: 8.5pt; } .std .terms .th { text-decoration: underline; font-size: 9pt; }
+    .classic .row.terms .th { font-size: 9pt; }
+    /* Classic, last page: the space left in the frame goes into the item area so the totals and the foot sit at the bottom */
+    .classic .items tr.fill td { border-top: 0; border-bottom: 0; padding: 0; }
     .grid thead { break-after: avoid; page-break-after: avoid; }
     .grid th, .grid td { border: 1px solid #000; padding: 3px 4px; vertical-align: top; }
     .grid th { background: #e0e0e0; font-weight: bold; text-align: center; font-size: 9pt; }
@@ -347,6 +361,19 @@
       }
     }
     pages[pages.length - 1].el.classList.add('last');
+    /* Classic: the frame runs to the foot of every page, so whatever room the last page has left would show as a
+       blank box under the bank details and the signature. Instead an empty row is slipped in above the totals
+       and made as tall as the page allows (found by halving), so the column lines run on down to the totals and
+       the foot sits at the bottom of the frame, as on a Tally invoice. */
+    if (classic) {
+      var L = pages[pages.length - 1], fr = el('tr', 'fill'), nCols = thead.querySelectorAll('th').length;
+      for (var c = 0; c < nCols; c++) fr.appendChild(el('td'));
+      L.tbody.insertBefore(fr, L.tbody.querySelector('tr.tot'));
+      var lo = 0, hi = L.body.clientHeight || 1200;
+      for (var k = 0; k < 12; k++) { var h = Math.floor((lo + hi) / 2); fr.style.height = h + 'px'; if (over(L)) hi = h; else lo = h; }
+      fr.style.height = lo + 'px';
+      if (lo < 2 || over(L)) L.tbody.removeChild(fr);
+    }
     pages.forEach(function (pg, i) { [].forEach.call(pg.el.querySelectorAll('.pno'), function (e) { e.textContent = 'Page ' + (i + 1) + ' of ' + pages.length; }); });
     flow.parentNode.removeChild(flow);
     document.body.classList.add('paged');
@@ -447,14 +474,27 @@
       '<table class="sheet"><thead><tr><td><div class="mt"></div></td></tr></thead><tbody><tr><td>' + body + '</td></tr></tbody><tfoot><tr><td><div class="mb"></div></td></tr></tfoot></table></body></html>';
   }
 
+  /* What the browser prints as the page title when its own header is switched on (and what a PDF viewer shows as
+     the document title): the document number and date, e.g. "Invoice 0001 - 03/10/2026", read from the
+     document's data attributes, never the portal's own title line. */
+  function printLabel(src) {
+    const un = (s) => String(s || '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const at = (n) => { const m = new RegExp(' data-' + n + '="([^"]*)"').exec(src); return m ? un(m[1]) : ''; };
+    const no = at('no'), date = at('date'), label = at('nolabel').replace(/\s*#$/, '');
+    if (no) return (label ? label + ' ' : '') + no + ' - ' + date;
+    if (at('title')) return titleCase(at('title')) + (date ? ' - ' + date : '');
+    const t = /<title>([^<]*)<\/title>/.exec(src); return t ? un(t[1]) : 'Document';
+  }
   // Sends a finished document to the browser's print dialog (inside the iOS app: to the app, which shares it as a PDF)
   function show(src) {
     if (global.Native && Native.ios) { const m = /<title>([^<]*)<\/title>/.exec(src); if (Native.post('print', { title: m ? m[1] : 'Document', html: src })) return; }
     let f = document.getElementById('printFrame');
     if (!f) { f = document.createElement('iframe'); f.id = 'printFrame'; f.title = 'Print'; f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'; document.body.appendChild(f); }
     f.onload = () => {
-      // Fonts and images must be in before the preview is built, or the first print comes out with the fallback font
-      const w = f.contentWindow, go = () => { try { w.focus(); w.print(); } catch (e) { const t = window.open('', '_blank'); t.document.write(src); t.document.close(); t.print(); } };
+      // Fonts and images must be in before the preview is built, or the first print comes out with the fallback font.
+      // While the print dialog is up the portal's title is the document number and date (the browser's header line).
+      const w = f.contentWindow, was = document.title, label = printLabel(src);
+      const go = () => { document.title = label; try { w.focus(); w.print(); } catch (e) { const t = window.open('', '_blank'); t.document.write(src); t.document.close(); t.print(); } document.title = was; };
       if (w.document.fonts && w.document.fonts.ready) w.document.fonts.ready.then(go, go); else go();
     };
     f.srcdoc = src;

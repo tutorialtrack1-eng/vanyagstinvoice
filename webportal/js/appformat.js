@@ -44,9 +44,14 @@
         // Under reverse charge nothing is collected, so the app's sales register records no GST
         taxable_value: num(t.taxable), cgst: rcm ? 0 : num(t.cgst), sgst: rcm ? 0 : num(t.sgst), igst: rcm ? 0 : num(t.igst),
         grand_total: num(t.grand), rounded_total: num(t.rounded), amount_words: s(t.words), rcm: b01(rcm),
+        // Payment due date and the terms & conditions printed on this invoice (blank when not included)
+        due_date: s(i.dueDate), terms: i.termsOn ? s(i.terms) : '',
         items: (i.items || []).map((it, n) => ({ sl_no: n + 1, particulars: s(it.desc), hsn: s(it.hsn), gst_rate: s(it.gst), qty: num(it.qty), uqc: s(it.uqc) || 'NOS', rate: num(it.rate), amount: num(it.taxable),
           sub_serial_no: s(it.subSerial), sub_description: s(it.subDesc), sub_other_info: s(it.subInfo) })) };
     },
+    // A delivery challan is an invoice-shaped document of its own: challan_no is its number, invoice_no the invoice
+    // it was turned into (blank while it is open)
+    challan(d) { const r = row.invoice(d); r.challan_no = r.invoice_no; r.invoice_no = s(d.invoiceNo); return r; },
     expense(e) {
       const gst = num(e.gst), sp = e.cgst == null ? split(gst, isInter(e.vendorGstin)) : [num(e.cgst), num(e.sgst), num(e.igst)];
       return { date: s(e.date), category: s(e.category), description: s(e.description), amount: num(e.amount), payment_mode: s(e.paidBy) || 'Cash',
@@ -67,7 +72,7 @@
       return clean({ date: s(j.date), narration: s(j.narration), kind: kind || null, doc_no: kind ? s(j.no) : null, party: kind ? s(j.party) : null, ref_no: kind ? s(j.ref) : null, mode: kind ? s(j.mode) : null, bank_ref: kind ? s(j.bankRef) : null,
         lines: (j.lines || []).map(l => ({ account: s(l.account), side: l.side === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) });
     },
-    sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort(), inv_quota: num(x.inv_quota), inv_used: num(x.inv_used) }; }
+    sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort(), inv_quota: num(x.inv_quota), inv_used: num(x.inv_used), yearly_until: num(x.yearly_until) }; }
   };
 
   // ------------------------------------------------------------ app row -> portal document (old = the record already here, if any)
@@ -104,11 +109,19 @@
         [cgst, sgst, igst] = split(round2(gst), !intra).map(round2);
       }
       const grand = num(r.grand_total), rounded = num(r.rounded_total) || Math.round(grand);
-      return Object.assign({}, old, { kind: 'invoice', no: s(r.invoice_no).trim(), date: s(r.date), payment: s(r.payment_mode) || 'Cash', rcm,
+      // A row from a device that does not know the due date or the terms (the app) leaves what was here
+      const dueDate = r.due_date === undefined && old ? s(old.dueDate) : s(r.due_date);
+      const terms = r.terms === undefined && old ? { terms: s(old.terms), termsOn: !!old.termsOn } : { terms: s(r.terms), termsOn: !!s(r.terms) };
+      return Object.assign({}, old, { kind: 'invoice', no: s(r.invoice_no).trim(), date: s(r.date), payment: s(r.payment_mode) || 'Cash', rcm, dueDate, terms: terms.terms, termsOn: terms.termsOn,
         buyer: party('buyer'), sameShip: num(r.same_as_billing) === 1, consignee: party('consignee'),
         other: { destination: s(r.destination), vehicleType: s(r.vehicle), vehicleNo: s(r.vehicle_number), transporter: s(r.transporter), deliveryNote: s(r.delivery_challan),
           orderNo: s(r.order_no), orderDate: s(r.order_date), reference: s(r.ref_no), info: s(r.additional_info) },
         items, totals: { intra, taxable: num(r.taxable_value), cgst, sgst, igst, grand, rounded, words: s(r.amount_words) || U.toIndianWords(rounded) } });
+    },
+    challan(r, old) {
+      const d = doc.invoice(Object.assign({}, r, { invoice_no: r.challan_no }), old);
+      d.kind = 'challan'; d.invoiceNo = s(r.invoice_no).trim();
+      return d;
     },
     expense(r, old) {
       const gst = num(r.gst), amount = num(r.amount);
@@ -143,13 +156,14 @@
     { name: 'item', col: 'items', prefix: 'item:', key: (d) => lower(d.name) },
     { name: 'account', col: 'accounts', prefix: 'acct:', key: (d) => lower(d.name) },
     { name: 'invoice', col: 'invoices', prefix: 'inv:', key: (d) => d.kind === 'invoice' ? s(d.no).trim() : '' },
+    { name: 'challan', col: 'challans', prefix: 'dc:', key: (d) => s(d.no).trim() },
     { name: 'contact', col: 'contacts', prefix: 'contact:', key: (d) => s(d.id), byId: true },
     { name: 'expense', col: 'expenses', prefix: 'exp:', key: (d) => s(d.id), byId: true },
     { name: 'purchase', col: 'purchases', prefix: 'pur:', key: (d) => s(d.id), byId: true },
     { name: 'note', col: 'notes', prefix: 'note:', key: (d) => s(d.id), byId: true },
     { name: 'journal', col: 'journal', prefix: 'jrn:', key: (d) => s(d.id), byId: true }
   ];
-  function subState() { return { registered_at: Store.get('registered_at', 0), valid_until: Store.get('valid_until', 0), used_codes: Store.get('used_codes', []), inv_quota: Store.get('inv_quota', 0), inv_used: Store.get('inv_used', 0) }; }
+  function subState() { return { registered_at: Store.get('registered_at', 0), valid_until: Store.get('valid_until', 0), used_codes: Store.get('used_codes', []), inv_quota: Store.get('inv_quota', 0), inv_used: Store.get('inv_used', 0), yearly_until: Store.get('yearly_until', 0) }; }
 
   // Every record of the signed-in user as {key: app row}
   function snapshot() {
@@ -178,6 +192,8 @@
         const starts = [a.registered_at, b.registered_at].filter(v => v > 0);
         if (starts.length) Store.set('registered_at', Math.min.apply(null, starts));
         Store.set('valid_until', Math.max(a.valid_until, b.valid_until));
+        // A yearly plan activated in the app shows up here as a validity stretched by a year or more
+        Store.set('yearly_until', Math.max(a.yearly_until, b.yearly_until, b.valid_until - Math.max(a.valid_until, Date.now()) >= 360 * 24 * 3600 * 1000 ? b.valid_until : 0));
         Store.set('used_codes', Array.from(new Set(a.used_codes.concat(b.used_codes))));
         Store.set('inv_quota', Math.max(num(a.inv_quota), num(b.inv_quota)));
         Store.set('inv_used', Math.max(num(a.inv_used), num(b.inv_used)));
@@ -201,10 +217,10 @@
   function k_eq(kind, d, id) { return kind.key(d) === id; }
 
   // ------------------------------------------------------------ backup files in the app's table layout
-  const TABLES = ['company_master', 'items_master', 'contacts', 'history', 'invoices', 'invoice_items', 'expenses', 'purchases', 'purchase_items', 'journal', 'journal_vouchers', 'journal_lines', 'ledger_accounts', 'notes'];
+  const TABLES = ['company_master', 'items_master', 'contacts', 'history', 'invoices', 'invoice_items', 'challans', 'challan_items', 'expenses', 'purchases', 'purchase_items', 'journal', 'journal_vouchers', 'journal_lines', 'ledger_accounts', 'notes'];
 
   function exportTables() {
-    const t = { company_master: [], items_master: [], contacts: [], history: [], invoices: [], invoice_items: [], expenses: [], purchases: [], purchase_items: [], journal_vouchers: [], journal_lines: [], ledger_accounts: [], notes: [] };
+    const t = { company_master: [], items_master: [], contacts: [], history: [], invoices: [], invoice_items: [], challans: [], challan_items: [], expenses: [], purchases: [], purchase_items: [], journal_vouchers: [], journal_lines: [], ledger_accounts: [], notes: [] };
     const co = Store.company(), c = row.company(co), sig = c.signature; delete c.signature;
     if (s(co.name).trim()) t.company_master.push(Object.assign({ id: 1 }, c));
     const add = (table, r, extra) => { const o = Object.assign({ id: t[table].length + 1 }, extra, r); t[table].push(o); return o.id; };
@@ -212,6 +228,7 @@
     Store.list('items').forEach(d => { if (s(d.name).trim()) add('items_master', row.item(d)); });
     Store.list('contacts').forEach(d => add('contacts', row.contact(d), { sync_id: s(d.id) }));
     Store.list('invoices').forEach(d => { if (d.kind === 'invoice' && s(d.no).trim()) children('invoices', row.invoice(d), 'items', 'invoice_items', 'invoice_id'); });
+    Store.list('challans').forEach(d => { if (s(d.no).trim()) children('challans', row.challan(d), 'items', 'challan_items', 'challan_id'); });
     Store.list('expenses').forEach(d => add('expenses', row.expense(d), { sync_id: s(d.id) }));
     Store.list('purchases').forEach(d => children('purchases', row.purchase(d), 'items', 'purchase_items', 'purchase_id', { sync_id: s(d.id) }));
     Store.list('journal').forEach(d => children('journal_vouchers', row.journal(d), 'lines', 'journal_lines', 'voucher_id', { sync_id: s(d.id) }));
@@ -244,6 +261,8 @@
     put('contacts', 'contacts', r => s(r.name).trim() ? mk('contact', r, s(r.sync_id)) : null);
     const invItems = group('invoice_items', 'invoice_id');
     put('invoices', 'invoices', r => s(r.invoice_no).trim() ? mk('invoice', Object.assign({}, r, { items: invItems.get(s(r.id)) || [] })) : null);
+    const dcItems = group('challan_items', 'challan_id');
+    put('challans', 'challans', r => s(r.challan_no).trim() ? mk('challan', Object.assign({}, r, { items: dcItems.get(s(r.id)) || [] })) : null);
     put('expenses', 'expenses', r => mk('expense', r, s(r.sync_id)));
     const purItems = group('purchase_items', 'purchase_id');
     put('purchases', 'purchases', r => mk('purchase', Object.assign({}, r, { items: purItems.get(s(r.id)) || [] }), s(r.sync_id)));

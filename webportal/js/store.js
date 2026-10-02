@@ -5,7 +5,7 @@
 (function (global) {
   'use strict';
   const PREFIX = 'blitzbook.';
-  const COLLECTIONS = ['contacts', 'items', 'invoices', 'purchases', 'expenses', 'journal', 'notes', 'accounts'];
+  const COLLECTIONS = ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts'];
 
   function read(key, fallback) {
     try { const v = localStorage.getItem(PREFIX + key); return v == null ? fallback : JSON.parse(v); } catch (e) { return fallback; }
@@ -51,7 +51,10 @@
       return Object.assign({
         name: '', gstin: '', address: '', phone: '', email: '', gstType: 'Regular', activity: 'General',
         bankName: '', bankAccountNo: '', bankIfsc: '', bankBranch: '', bankHolder: '',
-        invoiceFormat: U.DEFAULT_INVOICE_FORMAT, signature: '', logo: '', pdfLayout: 0, paper: 'A4', terms: ''
+        invoiceFormat: U.DEFAULT_INVOICE_FORMAT, signature: '', logo: '', pdfLayout: 0, paper: 'A4',
+        // Terms & conditions printed at the foot of an invoice (when the invoice says so), and the credit period
+        // that sets a Credit invoice's payment due date
+        terms: '', termsOn: true, creditDays: 30
       }, this.get('company', {}));
     },
     saveCompany(c) { return this.set('company', c); },

@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1E1B4B">
   <title>BlitzBook - Billing &amp; Accounts, made simple</title>
+  <!-- Dark or light before the first paint: the choice made with the top-bar button, else the system setting (see Theme in js/app.js) -->
+  <script>try { document.documentElement.setAttribute('data-theme', localStorage.getItem('blitzbook.theme') || (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')); } catch (e) { /* storage blocked */ }</script>
   <!-- Installable as an app: Android / desktop Chrome offer "Install", iPhone / iPad use Safari > Share > Add to Home Screen -->
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -35,6 +37,7 @@
   <script src="js/ledger.js"></script>
   <script src="js/money.js"></script>
   <script src="js/reports.js"></script>
+  <script src="js/gst.js"></script>
   <script>
     App.start();
     // The offline shell (sw.js) needs http(s); opened as a file the portal simply runs without it

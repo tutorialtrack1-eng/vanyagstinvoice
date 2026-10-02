@@ -90,6 +90,23 @@
       i.onchange = () => { const f = i.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => onText(r.result, f); if (asDataUrl) r.readAsDataURL(f); else r.readAsText(f); };
       i.click();
     },
+    /* Every upload offers the same choice for rows that are already in the books: Upsert (new rows are added and
+       the ones already here are brought up to date) or Insert only (new rows are added, the ones already here
+       are left as they are). The choice is remembered for the next upload. */
+    modeField(what, mode) {
+      mode = mode || Store.get('upload_mode', 'upsert');
+      return '<div class="field"><label>' + esc(what) + ' already in the books</label><div class="modes">' +
+        '<label class="check"><input type="radio" name="impMode" value="upsert"' + (mode !== 'insert' ? ' checked' : '') + '> <span><b>Upsert</b> - add the new ' + esc(what) + ' and update the ones already here with the values in the file</span></label>' +
+        '<label class="check"><input type="radio" name="impMode" value="insert"' + (mode === 'insert' ? ' checked' : '') + '> <span><b>Insert only</b> - add the new ' + esc(what) + ', leave the ones already here as they are</span></label></div></div>';
+    },
+    modeOf(bg) { const r = $('input[name=impMode]:checked', bg); const m = r ? r.value : 'upsert'; Store.set('upload_mode', m, true); return m; },
+    // What an upload did: how many rows were inserted, updated, left unchanged (already identical) or skipped
+    importResult(title, r, onClose) {
+      const stat = (k, v, cls) => '<div class="istat ' + (cls || '') + '"><div class="v">' + v + '</div><div class="k">' + k + '</div></div>';
+      const body = '<div class="istats">' + stat('Inserted', r.inserted || 0, 'ok') + stat('Updated', r.updated || 0, 'warn') + (r.unchanged != null ? stat('Unchanged', r.unchanged) : '') + (r.skipped != null ? stat('Skipped', r.skipped, 'bad') : '') + '</div>' +
+        (r.note ? '<p class="hint">' + esc(r.note) + '</p>' : '') + (r.lines && r.lines.length ? '<ul class="hint" style="margin:0 0 6px 18px;padding:0">' + r.lines.slice(0, 12).map(l => '<li>' + esc(l) + '</li>').join('') + (r.lines.length > 12 ? '<li>and ' + (r.lines.length - 12) + ' more</li>' : '') + '</ul>' : '');
+      return UI.modal({ title, body, buttons: [{ label: 'OK', onClick: onClose }] });
+    },
     // A CSV or Excel .xlsx file as rows of cells, like the app's uploads
     pickSheet(onRows) {
       const i = document.createElement('input'); i.type = 'file'; i.accept = '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -135,7 +152,10 @@
     payout: '<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h8"/><path d="M3 9h17a1 1 0 0 1 1 1v3"/><path d="M14 18h7M18 15l3 3-3 3"/>',
     ledger: '<path d="M5 3h14a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M8 8h8M8 12h8M8 16h5"/><path d="M12 3v18"/>',
     android: '<path d="M5 15a7 7 0 0 1 14 0v4H5z"/><path d="M8 9.5 6.5 7M16 9.5 17.5 7"/><path d="M9.5 13h.01M14.5 13h.01"/><path d="M8 19v2.5M16 19v2.5M3 12v4M21 12v4"/>',
-    apple: '<path d="M15.5 6.5c-1.6 0-2.3.9-3.5.9s-2.1-.9-3.5-.9C6.3 6.5 4 8.6 4 12.4c0 3.4 2.6 8.1 4.6 8.1 1.1 0 1.7-.8 3.4-.8s2.1.8 3.4.8c2 0 4.1-4 4.6-5.8-2.2-.8-3-3-3-3.5 0-1.7 1-2.9 2.5-3.6-1-1.2-2.4-1.1-4-1.1z"/><path d="M12.5 6c0-1.9 1.4-3.6 3.3-3.8.2 2-1.5 3.8-3.3 3.8z"/>'
+    apple: '<path d="M15.5 6.5c-1.6 0-2.3.9-3.5.9s-2.1-.9-3.5-.9C6.3 6.5 4 8.6 4 12.4c0 3.4 2.6 8.1 4.6 8.1 1.1 0 1.7-.8 3.4-.8s2.1.8 3.4.8c2 0 4.1-4 4.6-5.8-2.2-.8-3-3-3-3.5 0-1.7 1-2.9 2.5-3.6-1-1.2-2.4-1.1-4-1.1z"/><path d="M12.5 6c0-1.9 1.4-3.6 3.3-3.8.2 2-1.5 3.8-3.3 3.8z"/>',
+    file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
+    moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
   };
   function icon(name) { return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
 
@@ -205,12 +225,14 @@
     { key: 'money', t: 'Receipts & Payments', ic: 'bank' },
     { key: 'stock', t: 'Stock in Hand', ic: 'box' },
     { key: 'backup', t: 'Export / Import', ic: 'download' },
+    // GST returns are shown to everyone; the screen itself opens on a yearly plan or longer (gst.js)
+    { key: 'gst', t: 'GST', ic: 'file' },
     { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true }
   ];
   // Routes that open a dialog over the current screen: they never become the active link or the screen to redraw
   const DIALOGS = ['company', 'subscription', 'sync'];
   // What an account on an invoice pack gets: invoicing only (Sub.isLite)
-  const LITE_NAV = ['dashboard', 'salesReport', 'backup', 'subscription'];
+  const LITE_NAV = ['dashboard', 'salesReport', 'backup', 'gst', 'subscription'];
   const LITE_TILES = [
     { key: 'invoice', t: 'New Invoice', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
     { key: 'sales', t: 'Sales', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
@@ -269,10 +291,13 @@
         '<div class="bar-right">' + (Native.ios ? '' : '<span class="dlgroup" id="dlApp"><button class="navlink dl" id="dlAndroid" title="Download the BlitzBook Android app (APK)">' + icon('android') + '<span>Android App</span></button>' +
           '<button class="navlink dl" id="dlIos" title="BlitzBook on iPhone / iPad">' + icon('apple') + '<span>iOS App</span></button></span>') +
         '<button class="cochip" id="barCo" title="Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
+        '<button class="navlink theme" id="themeBtn" title="Dark / light mode"></button>' +
         '<button class="navlink logout" id="logoutBtn" title="Logout">' + icon('logout') + '<span>Logout</span></button></div></header>' +
         '<main class="main" id="view"></main>';
       $('#homeBtn').onclick = () => this.go('dashboard');
       if ($('#dlAndroid')) { $('#dlAndroid').onclick = () => GetApp.android(); $('#dlIos').onclick = () => GetApp.ios(); }
+      $('#themeBtn').onclick = () => Theme.toggle();
+      Theme.apply();
       $('#barCo').onclick = () => this.go('company');
       $('#logoutBtn').onclick = () => UI.confirm('Logout', 'Do you want to logout?', () => this.logout(), 'Logout');
       $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
@@ -378,6 +403,27 @@
     lite() { return Sub.isLite(); }
   };
 
+  // ------------------------------------------------------------ dark / light mode
+  // The choice is kept in this browser (not per account). Until a choice is made the system setting decides;
+  // index.html applies the same rule before the first paint so the page never flashes the other colour.
+  const Theme = {
+    KEY: 'blitzbook.theme',
+    chosen() { try { return localStorage.getItem(this.KEY) || ''; } catch (e) { return ''; } },
+    current() { return this.chosen() || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); },
+    isDark() { return this.current() === 'dark'; },
+    apply() {
+      document.documentElement.setAttribute('data-theme', this.current());
+      const meta = $('meta[name=theme-color]'); if (meta) meta.content = this.isDark() ? '#0B1020' : '#1E1B4B';
+      $$('#themeBtn, .theme-fab').forEach(b => { b.innerHTML = icon(this.isDark() ? 'sun' : 'moon') + '<span>' + (this.isDark() ? 'Light mode' : 'Dark mode') + '</span>'; b.title = this.isDark() ? 'Switch to light mode' : 'Switch to dark mode'; });
+    },
+    toggle() {
+      const next = this.isDark() ? 'light' : 'dark';
+      try { localStorage.setItem(this.KEY, next); } catch (e) { /* kept for this page only */ }
+      this.apply(); UI.toast(next === 'dark' ? 'Dark mode on' : 'Light mode on', 1500);
+    }
+  };
+  if (window.matchMedia) { try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!Theme.chosen()) Theme.apply(); }); } catch (e) { /* older browser */ } }
+
   // ------------------------------------------------------------ get the app
   // Two buttons in the top bar. Android: the APK served next to the portal. iPhone / iPad: the App Store app when
   // published, otherwise the portal installed from Safari (Add to Home Screen), which runs full screen with the
@@ -408,7 +454,9 @@
       $('#root').innerHTML = '<div class="auth"><section class="auth-art"><span class="orb o1"></span><span class="orb o2"></span><div class="brandline">' + BRAND + '</div>' +
         '<h1>Billing is<br><em>beautifully simple.</em></h1><p>Raise invoices in seconds, keep every purchase and expense in order, and see where your business stands.</p>' +
         '<ul class="feats">' + FEATURES.map(f => '<li><span class="fi">' + icon(f[0]) + '</span>' + esc(f[1]) + '</li>').join('') + '</ul></section>' +
-        '<section class="auth-pane"><div class="box">' + inner + '</div></section></div>';
+        '<section class="auth-pane"><div class="box">' + inner + '</div></section><button class="theme-fab" id="themeFab" title="Dark / light mode"></button></div>';
+      $('#themeFab').onclick = () => Theme.toggle();
+      Theme.apply();
     },
     // The account as this browser knows it, created or brought up to date from the server's answer
     keep(su, pwHash, u) {
@@ -654,13 +702,18 @@
         '<div class="field">' + '<label>IFSC Code</label>' + UI.input('cIfsc', (c.bankIfsc || '').toUpperCase(), { placeholder: 'e.g. UTIB0001234', attrs: ' maxlength="11" style="text-transform:uppercase"' }) + '<div class="hint" id="cIfscMsg">Bank and branch fill in automatically from the IFSC</div></div>' +
         UI.field('Bank Name', UI.input('cBank', c.bankName, { placeholder: 'Filled automatically from IFSC' })) + UI.field('Branch Name', UI.input('cBranch', c.bankBranch, { placeholder: 'Filled automatically from IFSC' })) +
         '<div class="field span"><label>Authorised Signature</label><div class="hint" id="cSigMsg"></div><div class="btnrow" style="margin:4px 0"><img id="cSigImg" src="' + (c.signature || '') + '" alt="" style="max-height:48px;max-width:160px;' + (c.signature ? '' : 'display:none') + '"><button class="btn sm outline" id="cSigAdd">Attach Signature</button><button class="btn sm red" id="cSigDel" ' + (c.signature ? '' : 'disabled') + '>Remove</button></div></div>' +
+        '<div class="field span"><label>Invoice Terms &amp; Payment</label></div>' +
+        UI.field('Terms & Conditions', '<textarea id="cTerms" placeholder="e.g. Goods once sold will not be taken back.&#10;Interest @ 18% p.a. is charged on overdue bills.&#10;Subject to local jurisdiction.">' + esc(c.terms) + '</textarea>', { span: true, hint: 'One term per line. Each invoice has a tick "Include terms & conditions" that prints these at the foot of the PDF.' }) +
+        UI.field('Credit Period (days)', UI.input('cCredit', c.creditDays, { type: 'number', attrs: ' min="0" max="365" step="1"' }), { hint: 'A Credit invoice gets a payment due date this many days after its date; the due date prints on the PDF' }) +
+        '<div class="field">' + UI.check('cTermsOn', 'Include terms & conditions on new invoices', c.termsOn !== false) + '</div>' +
         '<div class="field span subleft"><label>Activation</label><div class="' + (Sub.isActive() ? 'green' : 'red') + ' bold" id="cSubLeft">' + esc(Sub.statusText()) + (Sub.isActive() ? '   ·   ' + Sub.daysLeft() + ' day' + (Sub.daysLeft() === 1 ? '' : 's') + ' remaining' : '') + '</div><div class="hint">Activation codes are entered under Subscription in the top bar.</div></div>' +
         '</div>';
       let signature = c.signature;
       const bg = UI.modal({ title: 'Company Master Profile', body, wide: true, cancelable: !firstTime, buttons: [{ label: firstTime ? 'Later' : 'Cancel', cls: 'outline' }, { label: 'Save Profile', cls: 'green', onClick: (bg) => {
         const v = (id) => UI.val(id, bg).trim();
         const o = Object.assign({}, c, { name: v('cName'), gstin: v('cGstin').toUpperCase(), gstType: v('cType'), activity: v('cAct') || 'General', invoiceFormat: v('cFmt').includes('#') ? v('cFmt') : U.DEFAULT_INVOICE_FORMAT, address: v('cAddr').toUpperCase(), phone: v('cPhone'), email: v('cEmail').toLowerCase(),
-          bankAccountNo: v('cAcc'), bankHolder: v('cHolder').toUpperCase(), bankIfsc: v('cIfsc').toUpperCase(), bankName: v('cBank'), bankBranch: v('cBranch'), signature });
+          bankAccountNo: v('cAcc'), bankHolder: v('cHolder').toUpperCase(), bankIfsc: v('cIfsc').toUpperCase(), bankName: v('cBank'), bankBranch: v('cBranch'), signature,
+          terms: UI.val('cTerms', bg).replace(/\r/g, '').split('\n').map(s => s.trim()).filter(Boolean).join('\n'), creditDays: Math.max(0, Math.min(365, Math.round(U.num(v('cCredit'))))), termsOn: UI.val('cTermsOn', bg) });
         if (!UI.mark('cName', !o.name, bg)) { UI.toast('Company Name is required'); return false; }
         if (!UI.mark('cAddr', !o.address, bg)) { UI.toast('Address is required'); return false; }
         if (!UI.mark('cPhone', !/^[6-9][0-9]{9}$/.test(o.phone), bg)) { UI.toast('Enter correct phone number'); return false; }
@@ -852,5 +905,5 @@
   };
   App.routes.sync = () => SyncUI.dialog();
 
-  global.App = App; global.UI = UI; global.$ = $; global.$$ = $$; global.Company = Company; global.Subscription = Subscription; global.GetApp = GetApp; global.icon = icon;
+  global.App = App; global.UI = UI; global.$ = $; global.$$ = $$; global.Company = Company; global.Subscription = Subscription; global.GetApp = GetApp; global.icon = icon; global.Theme = Theme;
 })(window);

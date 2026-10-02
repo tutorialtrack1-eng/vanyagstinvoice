@@ -189,35 +189,54 @@
         const key = (d) => lower(d).replace(/[\d\W]+/g, ' ').trim();
         const learnt = new Map(); vouchers().forEach(v => { if (v.narration && v.party) learnt.set(key(v.narration), v.party); });
         const names = Books.accounts().filter(a => a.nature === Books.N.CUSTOMER || a.nature === Books.N.SUPPLIER).map(a => a.name).sort((a, b) => b.length - a.length);
+        // A line recorded earlier: with Upsert the voucher is brought up to date (party, against), with Insert only it is skipped
+        const was = new Map(); vouchers().forEach(v => { if (v.narration) was.set(stmtKey(v.date, v.vtype === 'receipt' ? amountOf(v) : -amountOf(v), v.narration), v); });
+        let mode = Store.get('upload_mode', 'upsert');
         txns.forEach(t => {
-          t.dup = existing.has(t.key);
-          t.party = learnt.get(key(t.desc)) || names.find(n => n.length >= 3 && lower(t.desc).includes(lower(n))) || '';
-          t.on = !t.dup;
+          t.dup = existing.has(t.key); t.old = was.get(t.key) || null;
+          t.party = (t.old && t.old.party) || learnt.get(key(t.desc)) || names.find(n => n.length >= 3 && lower(t.desc).includes(lower(n))) || '';
+          if (t.old && t.old.ref && !t.against) t.against = t.old.ref;
+          t.on = !t.dup || mode === 'upsert';
           t.kind = t.inAmt ? 'receipt' : 'payment';
         });
         const dups = txns.filter(t => t.dup).length;
-        const rowHtml = (t, i) => '<tr data-i="' + i + '"' + (t.dup ? ' style="opacity:.55"' : '') + '><td class="inc"><input type="checkbox" data-k="on"' + (t.on ? ' checked' : '') + '></td><td class="hsn"><input value="' + esc(t.date) + '" disabled></td>' +
-          '<td class="desc"><input value="' + esc(t.desc) + '" disabled title="' + esc(t.desc) + '">' + (t.dup ? '<div class="subline">Already recorded</div>' : '') + '</td><td class="rate"><input class="num" value="' + (t.inAmt ? U.indianNumber(t.inAmt) : '') + '" disabled></td><td class="rate"><input class="num" value="' + (t.outAmt ? U.indianNumber(t.outAmt) : '') + '" disabled></td>' +
+        const dupNote = () => dups ? dups + ' line' + (dups > 1 ? 's were' : ' was') + ' recorded earlier and ' + (mode === 'upsert' ? 'will be updated' : (dups > 1 ? 'are' : 'is') + ' unticked') + '. ' : '';
+        const rowHtml = (t, i) => '<tr data-i="' + i + '"' + (t.dup && !t.on ? ' style="opacity:.55"' : '') + '><td class="inc"><input type="checkbox" data-k="on"' + (t.on ? ' checked' : '') + '></td><td class="hsn"><input value="' + esc(t.date) + '" disabled></td>' +
+          '<td class="desc"><input value="' + esc(t.desc) + '" disabled title="' + esc(t.desc) + '">' + (t.dup ? '<div class="subline">' + (mode === 'upsert' ? 'Recorded earlier: will be updated' : 'Already recorded') + '</div>' : '') + '</td><td class="rate"><input class="num" value="' + (t.inAmt ? U.indianNumber(t.inAmt) : '') + '" disabled></td><td class="rate"><input class="num" value="' + (t.outAmt ? U.indianNumber(t.outAmt) : '') + '" disabled></td>' +
           '<td class="desc"><select data-k="party">' + accountOptions(t.kind, t.party) + '</select></td><td class="hsn"><input data-k="against" value="' + esc(t.against) + '" placeholder="Invoice / bill no"></td></tr>';
         const bg = UI.modal({ title: 'Bank Statement: ' + txns.length + ' transactions', wide: true, focus: false,
-          body: '<div class="hint">Money in becomes a receipt, money out a payment. Choose the customer, supplier or account for each line; lines left on "— choose —" are skipped. ' + (dups ? dups + ' line' + (dups > 1 ? 's were' : ' was') + ' recorded earlier and ' + (dups > 1 ? 'are' : 'is') + ' unticked. ' : '') + 'Tick "Select all" to include every line.</div>' +
+          body: '<div class="hint" id="bkNote">Money in becomes a receipt, money out a payment. Choose the customer, supplier or account for each line; lines left on "— choose —" are skipped. ' + dupNote() + 'Tick "Select all" to include every line.</div>' +
+            (dups ? UI.modeField('Statement lines') : '') +
             '<div class="btnrow"><label class="check"><input type="checkbox" id="bkAll"' + (txns.every(t => t.on) ? ' checked' : '') + '> Select all</label><span class="hint bold" id="bkSum" style="margin-left:auto"></span></div>' +
             '<div class="tablewrap"><table class="items bank"><thead><tr><th class="inc"></th><th class="hsn">Date</th><th>Description</th><th class="rate">In</th><th class="rate">Out</th><th>Party / Account</th><th class="hsn">Against</th></tr></thead><tbody id="bkRows">' + txns.map(rowHtml).join('') + '</tbody></table></div>',
           buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Record', cls: 'green', onClick: () => {
+            if (dups) mode = UI.modeOf(bg);
             const todo = txns.filter(t => t.on && t.party && t.party !== NEW);
             if (!todo.length) { UI.toast('Tick the lines and choose a party or account for each'); return false; }
-            const list = Store.list('journal'); let n = 0;
+            const r = { inserted: 0, updated: 0, unchanged: 0, skipped: 0, lines: [] };
             todo.forEach(t => {
-              const amt = U.round2(t.inAmt || t.outAmt), v = { id: U.uid(), createdAt: Date.now(), vtype: t.kind, no: nextNo(t.kind), date: t.date, party: t.party, mode: 'Bank Transfer', ref: t.against, bankRef: t.ref || '', narration: t.desc, lines: lines(t.kind, t.party, 'Bank Transfer', amt) };
-              list.push(v); n++;
+              const amt = U.round2(t.inAmt || t.outAmt);
+              if (t.old) {
+                if (mode !== 'upsert') { r.skipped++; r.lines.push(t.date + ' ' + t.desc.slice(0, 40) + ': recorded earlier, left as it is'); return; }
+                if (t.old.party === t.party && (t.old.ref || '') === (t.against || '')) { r.unchanged++; return; }
+                Object.assign(t.old, { party: t.party, ref: t.against, lines: lines(t.old.vtype, t.party, t.old.mode || 'Bank Transfer', amt) }); Store.update('journal', t.old); r.updated++; return;
+              }
+              const v = { id: U.uid(), createdAt: Date.now(), vtype: t.kind, no: nextNo(t.kind), date: t.date, party: t.party, mode: 'Bank Transfer', ref: t.against, bankRef: t.ref || '', narration: t.desc, lines: lines(t.kind, t.party, 'Bank Transfer', amt) };
               // nextNo reads the store, so the number series is kept in step as the batch grows
-              Store.saveList('journal', list);
+              Store.add('journal', v); r.inserted++;
             });
-            const skipped = txns.filter(t => t.on).length - n;
-            UI.toast(n + ' transaction' + (n === 1 ? '' : 's') + ' recorded' + (skipped ? ', ' + skipped + ' skipped (no party chosen)' : ''), 5000);
-            if (onDone) onDone();
+            const noParty = txns.filter(t => t.on).length - todo.length;
+            if (noParty) { r.skipped += noParty; r.lines.push(noParty + ' ticked line' + (noParty === 1 ? '' : 's') + ' without a party or account'); }
+            UI.importResult('Bank statement recorded', r, () => { if (onDone) onDone(); });
           } }] });
         const sum = () => { const on = txns.filter(t => t.on); $('#bkSum', bg).textContent = on.length + ' selected: in ' + money(on.reduce((s, t) => s + t.inAmt, 0)) + ', out ' + money(on.reduce((s, t) => s + t.outAmt, 0)); };
+        // Upsert ticks the lines recorded earlier (they will be updated); insert only unticks them
+        $$('input[name=impMode]', bg).forEach(rd => rd.addEventListener('change', () => {
+          mode = UI.modeOf(bg);
+          txns.forEach((t, i) => { if (!t.dup) return; t.on = mode === 'upsert'; const tr = $('#bkRows tr[data-i="' + i + '"]', bg); $('[data-k=on]', tr).checked = t.on; tr.style.opacity = t.on ? '' : '.55'; $('.subline', tr).textContent = mode === 'upsert' ? 'Recorded earlier: will be updated' : 'Already recorded'; });
+          $('#bkNote', bg).textContent = 'Money in becomes a receipt, money out a payment. Choose the customer, supplier or account for each line; lines left on "— choose —" are skipped. ' + dupNote() + 'Tick "Select all" to include every line.';
+          $('#bkAll', bg).checked = txns.every(t => t.on); sum();
+        }));
         const wire = () => $$('#bkRows tr', bg).forEach(tr => {
           const t = txns[+tr.dataset.i];
           $('[data-k=on]', tr).addEventListener('change', e => { t.on = e.target.checked; sum(); });

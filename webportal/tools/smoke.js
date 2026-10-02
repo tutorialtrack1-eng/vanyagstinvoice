@@ -67,7 +67,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   // a saved invoice is read-only, and a used-up pack refuses the next one
   await page.evaluate(() => { Store.set('registered_at', Date.now() - 40 * 86400000); Store.set('valid_until', 0); Store.set('inv_quota', 2); Store.set('inv_used', 0); App.checkSubscription(); App.go('dashboard'); });
   await page.waitForSelector('#stPack');
-  check('invoice pack: only the invoicing features are offered', await page.evaluate(() => Sub.isLite() && Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales Report,Export / Import,Subscription' && Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customer,Supplier,Sales Report' && document.querySelector('#stPack').textContent === '2 of 2'), await page.evaluate(() => [Sub.statusText(), Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join()]));
+  check('invoice pack: only the invoicing features are offered', await page.evaluate(() => Sub.isLite() && Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales Report,Export / Import,GST,Subscription' && Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customer,Supplier,Sales Report' && document.querySelector('#stPack').textContent === '2 of 2'), await page.evaluate(() => [Sub.statusText(), Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join()]));
   await page.screenshot({ path: OUT + '/01b-pack-dashboard.png', fullPage: true });
   const packSave = async (n) => { await page.evaluate(() => App.go('invoice')); await page.waitForSelector('#rows'); await page.fill('#bName', 'Pack Buyer ' + n); await page.fill(row(0) + '[data-k=desc]', 'Thing ' + n); await page.fill(row(0) + '[data-k=qty]', '1'); await page.fill(row(0) + '[data-k=rate]', '100'); await page.click('#iSave'); await page.waitForSelector('.toast'); return toast(page); };
   await packSave(1);
@@ -219,7 +219,8 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   const longInv = await page.evaluate(() => { const i = JSON.parse(JSON.stringify(Store.list('invoices')[0])); i.items = Array.from({ length: 45 }, (_, n) => Object.assign({}, i.items[0], { sl: n + 1, desc: 'Item ' + (n + 1) })); Biz.computeTotals(i); return [Print.html(i, Store.company(), 0, 'A4'), Print.html(i, Store.company(), 1, 'A4')]; });
   for (const [n, h] of longInv.entries()) {
     await pp.setViewportSize({ width: 820, height: 1200 }); await pp.setContent(h, { waitUntil: 'load' });
-    const pg = await pp.evaluate(() => ({ pages: document.querySelectorAll('.page').length, over: Array.from(document.querySelectorAll('.page .pbody')).some(b => b.scrollHeight > b.clientHeight + 1), pno: Array.from(document.querySelectorAll('.pfoot .pno')).map(e => e.textContent).join(), cont: document.querySelectorAll('.page div.cont').length, strip: (document.querySelector('.contbar') || { textContent: '' }).textContent, rows: Array.from(document.querySelectorAll('.page')).map(p => p.querySelectorAll('table.items tbody tr:not(.tot)').length) }));
+    const pg = await pp.evaluate(() => ({ pages: document.querySelectorAll('.page').length, over: Array.from(document.querySelectorAll('.page .pbody')).some(b => b.scrollHeight > b.clientHeight + 1), pno: Array.from(document.querySelectorAll('.pfoot .pno')).map(e => e.textContent).join(), cont: document.querySelectorAll('.page div.cont').length, strip: (document.querySelector('.contbar') || { textContent: '' }).textContent, rows: Array.from(document.querySelectorAll('.page')).map(p => p.querySelectorAll('table.items tbody tr:not(.tot):not(.fill)').length), fill: !!document.querySelector('.page.last tr.fill') }));
+    if (n) check('classic layout: the last page fills the room above the totals so the foot sits at the bottom of the frame', pg.fill, pg);
     check((n ? 'classic' : 'standard') + ' layout: 45 items run over two numbered pages with the continued strip', pg.pages === 2 && !pg.over && pg.pno === 'Page 1 of 2,Page 2 of 2' && pg.cont === 1 && pg.strip.includes('TAX INVOICE (Continued)') && pg.strip.includes('OFFSI27-00001') && pg.rows[0] + pg.rows[1] === 45, pg);
     if (n) await pp.screenshot({ path: OUT + '/05e-print-classic-pages.png', fullPage: true });
   }
@@ -239,14 +240,29 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.evaluate(() => App.go('contacts', { type: 'Customer' }));
   const csv = path.join(process.env.BLITZBOOK_DATA, 'contacts.csv');
   fs.writeFileSync(csv, 'Name,Phone,Email,GSTIN,Address,State\nRamesh Traders,9876543210,ramesh@gmail.com,,100 Feet Road Vijayawada,Andhra Pradesh\n"Suresh, Sons",9123456789,,,MG Road Hyderabad,Telangana\n');
+  // Every upload previews the file with the Upsert / Insert only choice, then reports inserted / updated / unchanged / skipped
+  const uploadResult = async () => { await page.waitForSelector('.istats'); const r = {}; for (const el of await page.$$('.istat')) { const t = (await el.textContent()).trim(); r[t.replace(/^\d+/, '').trim()] = +/^\d+/.exec(t)[0]; } await page.click('.modal .mf .btn'); return r; };
   let [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#cCsv')]); await chooser.setFiles(csv);
-  await page.waitForFunction(() => Store.list('contacts').some(c => c.name === 'Suresh, Sons'));
-  check('contacts upload', await page.evaluate(() => Store.list('contacts').find(c => c.name === 'Ramesh Traders').state) === 'Andhra Pradesh (37)');
+  await page.waitForSelector('input[name=impMode]');
+  check('contacts preview counts the new and the known names', (await page.textContent('.modal .mb')).includes('2 new') && (await page.textContent('.modal .mb')).includes('0 already'), await page.textContent('.modal .mb'));
+  await page.click('.modal .mf .btn.green');
+  let res = await uploadResult();
+  check('contacts upload: 2 inserted', res.Inserted === 2 && res.Updated === 0 && await page.evaluate(() => Store.list('contacts').find(c => c.name === 'Ramesh Traders').state === 'Andhra Pradesh (37)' && Store.list('contacts').some(c => c.name === 'Suresh, Sons')), res);
+  // the same file again: upsert finds nothing to change, insert only skips both; a changed phone counts as an update
+  fs.writeFileSync(csv, 'Name,Phone,Email,GSTIN,Address,State\nRamesh Traders,9876500000,ramesh@gmail.com,,100 Feet Road Vijayawada,Andhra Pradesh\n"Suresh, Sons",9123456789,,,MG Road Hyderabad,Telangana\n');
+  [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#cCsv')]); await chooser.setFiles(csv);
+  await page.waitForSelector('input[name=impMode]'); await page.click('.modal .mf .btn.green'); res = await uploadResult();
+  check('contacts upsert: 1 updated, 1 unchanged', res.Inserted === 0 && res.Updated === 1 && res.Unchanged === 1 && await page.evaluate(() => Store.list('contacts').find(c => c.name === 'Ramesh Traders').phone === '9876500000'), res);
+  [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#cCsv')]); await chooser.setFiles(csv);
+  await page.waitForSelector('input[name=impMode]'); await page.check('input[name=impMode][value=insert]'); await page.click('.modal .mf .btn.green'); res = await uploadResult();
+  check('contacts insert only: both skipped', res.Inserted === 0 && res.Updated === 0 && res.Skipped === 2, res);
   const stockCsv = path.join(process.env.BLITZBOOK_DATA, 'stock.csv');
   fs.writeFileSync(stockCsv, 'Item,HSN,Qty,UQC,Rate,GST%\nWooden Chair,9401,10,NOS,1500,18\ndining table,9403,2,NOS,12000,18\n');
   await page.evaluate(() => App.go('stock'));
   [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#stUp')]); await chooser.setFiles(stockCsv);
-  await page.waitForFunction(() => Store.list('purchases').some(p => p.kind === 'STK'));
+  await page.waitForSelector('input[name=impMode]'); await page.check('input[name=impMode][value=upsert]'); await page.click('.modal .mf .btn.green'); res = await uploadResult();
+  check('stock upload: 2 inserted', res.Inserted === 2 && await page.evaluate(() => Store.list('purchases').some(p => p.kind === 'STK')), res);
+  await page.waitForSelector('table.list');
   const stock = (await page.textContent('table.list')).replace(/\s+/g, ' ');
   check('stock in hand: bought less sold, at the last rate', stock.includes('Air Fryer 4.5L - Black (See Through) (NOS)10551,800.00₹ 9,000.00') && stock.includes('Dining Table') && stock.includes('Wooden Chair'), stock.slice(0, 260));
   // stock items can be deleted one at a time or in bulk, with or without the item master entry
@@ -307,14 +323,17 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   const picked = await page.evaluate(() => Array.from(document.querySelectorAll('#bkRows [data-k=party]')).map(s => s.value));
   check('statement lines matched to parties by name', picked[0] === 'The Chef Store - Banjara Hills' && picked[1] === 'Solara Appliances' && picked[2] === '', picked);
   check('statement summary', (await page.textContent('#bkSum')).includes('3 selected') && (await page.textContent('.modal .mh')).includes('3 transactions'), await page.textContent('#bkSum'));
-  await page.click('.modal .mf .btn.green'); await page.waitForSelector('.toast');
-  check('two lines recorded, the unmatched one skipped', (await toast(page)).includes('2 transactions recorded') && (await toast(page)).includes('1 skipped'), await toast(page));
+  await page.click('.modal .mf .btn.green'); res = await uploadResult();
+  check('two lines recorded, the unmatched one skipped', res.Inserted === 2 && res.Skipped === 1, res);
   const vouchers = await page.evaluate(() => Store.list('journal').filter(j => j.vtype).map(v => [v.vtype, v.no, v.party, v.lines[0].amount, v.date]));
   check('receipt and payment from the statement', vouchers.some(v => v[0] === 'receipt' && v[1] === 'RCT-0002' && v[2] === 'The Chef Store - Banjara Hills' && v[3] === 5000 && v[4] === '02/10/2026') && vouchers.some(v => v[0] === 'payment' && v[1] === 'PMT-0001' && v[2] === 'Solara Appliances' && v[3] === 20880 && v[4] === '03/10/2026'), vouchers);
   [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#mBank')]); await chooser.setFiles(bank);
   await page.waitForSelector('#bkRows tr');
-  check('re-upload spots the lines recorded earlier', (await page.textContent('.modal .mb')).includes('2 lines were recorded earlier') && (await page.textContent('#bkSum')).includes('1 selected'), await page.textContent('#bkSum'));
-  await page.click('.modal .mf .btn.outline');
+  check('re-upload spots the lines recorded earlier; upsert keeps them ticked', (await page.textContent('.modal .mb')).includes('2 lines were recorded earlier and will be updated') && (await page.textContent('#bkSum')).includes('3 selected'), await page.textContent('#bkSum'));
+  await page.check('input[name=impMode][value=insert]');
+  check('insert only unticks them', (await page.textContent('#bkSum')).includes('1 selected') && (await page.textContent('.modal .mb')).includes('are unticked'), await page.textContent('#bkSum'));
+  await page.check('input[name=impMode][value=upsert]'); await page.click('.modal .mf .btn.green'); res = await uploadResult();
+  check('upsert of a statement: nothing changed, the unmatched line skipped, no duplicate vouchers', res.Inserted === 0 && res.Updated === 0 && res.Unchanged === 2 && res.Skipped === 1 && await page.evaluate(() => Store.list('journal').filter(j => j.vtype).length === 3), res);
   const settled = await page.evaluate(() => [Books.partyBalance('Solara Appliances'), Books.balanceSheet(null).receivables, Books.balanceSheet(null).parties]);
   check('supplier payable settled by the payment', Math.abs(settled[0]) < 0.01 && settled[1] === 32114 - 1180 - 10000 - 5000, settled);
   // party ledger: the supplier's bill and the payment against it, running balance back to nil
