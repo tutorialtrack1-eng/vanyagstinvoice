@@ -236,7 +236,6 @@ public class MainActivity extends Activity implements Sync.Listener {
     private boolean loadingInvoice = false;
     // Keeps these books and the web portal the same (Sync.java); runs while the app is on screen
     private Sync sync;
-    private TextView syncStatusTv;
     private boolean onDashboard, companyPromptPending;
 
     private String sellerNameStr = "";
@@ -458,7 +457,6 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     @Override public void onSyncStatus() {
-        if (syncStatusTv != null) syncStatusTv.setText("Sync: " + sync.statusText());
         if (companyPromptPending && !sync.isBusy()) {
             companyPromptPending = false;
             if (sellerNameStr.isEmpty() && !isFinishing()) showCompanyMasterDialog();
@@ -2254,8 +2252,8 @@ public class MainActivity extends Activity implements Sync.Listener {
         head.addView(sideCompanyTv);
         side.addView(head);
 
-        // Small colour-coded icon tiles, three per row: profile, reports, backup and subscription. The sync line
-        // under them only reports the state: the Supabase project is built in, there is nothing for the user to set.
+        // Small colour-coded icon tiles, three per row: profile, reports, backup and subscription. Sync has no
+        // entry here: the Supabase project is built in and runs on its own.
         DashboardTile[] menu = {
                 new DashboardTile("Company Profile", R.drawable.ic_business, 0xFF5E35B1, 0xFFEDE7F6, v -> { drawer.closeDrawers(); showCompanyMasterDialog(); }),
                 new DashboardTile("Sales Report", R.drawable.ic_reports, 0xFF1E88E5, 0xFFE3F2FD, v -> { drawer.closeDrawers(); showSalesReport(); }),
@@ -2271,10 +2269,6 @@ public class MainActivity extends Activity implements Sync.Listener {
         menuBox.setOrientation(LinearLayout.VERTICAL);
         menuBox.setPadding(dp(8), dp(10), dp(8), dp(4));
         menuBox.addView(tileGrid(menu, 3, 10.5f, 10));
-        syncStatusTv = new TextView(this);
-        syncStatusTv.setTextSize(11.5f); syncStatusTv.setTextColor(0xFF607D8B); syncStatusTv.setPadding(dp(8), dp(10), dp(8), dp(4));
-        syncStatusTv.setText(Sync.enabled(this) ? "Sync: Waiting" : "Sync: This phone only");
-        menuBox.addView(syncStatusTv);
         menuScroll.addView(menuBox);
         side.addView(menuScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 

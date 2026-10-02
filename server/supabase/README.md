@@ -64,7 +64,7 @@ key. The key is meant to be public: row-level security, not the key, protects th
 - Portal: put the URL in `DEFAULT_SERVER_URL` and the key in `SUPABASE_ANON_KEY` at the top of
   `webportal/js/sync.js` before publishing (users have no sync screen; Export / Import shows the state).
 - App: put them in `SUPABASE_URL` / `SUPABASE_KEY` at the top of `Supabase.java` and the URL in
-  `Sync.SERVER_URL` before building (the app has no sync screen for users; the side menu shows the state).
+  `Sync.SERVER_URL` before building (the app has no sync screen for users).
 
 Export / Import (portal) and the Sync line (app) then say **Synced**. Registering, logging in, Forgot /
 Reset Password, the free 30 days and the activation codes all go through Supabase from then on; the Node
