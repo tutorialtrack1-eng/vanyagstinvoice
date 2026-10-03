@@ -337,6 +337,23 @@ final class Supabase {
         return out[0] instanceof JSONArray ? (JSONArray) out[0] : new JSONArray(String.valueOf(out[0]));
     }
 
+    // ---------------------------------------------------------------- AI access: API keys for the MCP server (mcp.sql)
+
+    /** The account's API keys, newest first: [{id, name, prefix, scope, created_at, last_used_at}]. */
+    static JSONArray apiKeys(Context c, long userId) throws Exception {
+        Object[] out = new Object[1];
+        withToken(c, userId, token -> { out[0] = http(c, "GET", "/rest/v1/api_keys?select=id,name,prefix,scope,created_at,last_used_at&order=created_at.desc", null, token, null); return new JSONObject(); });
+        return out[0] instanceof JSONArray ? (JSONArray) out[0] : new JSONArray();
+    }
+    /** Makes a key: {id, key, name, scope, prefix}, the only time the key itself is answered; {error} at the limit. scope is "read" or "write". */
+    static JSONObject createApiKey(Context c, long userId, String name, String scope) throws Exception {
+        return withToken(c, userId, token -> asObject(http(c, "POST", "/rest/v1/rpc/create_api_key", json("name_in", name, "scope_in", scope), token, null)));
+    }
+    /** Revokes a key: its row is deleted, whatever was using it stops working. */
+    static void revokeApiKey(Context c, long userId, String id) throws Exception {
+        withToken(c, userId, token -> { http(c, "DELETE", "/rest/v1/api_keys?id=eq." + id, null, token, null); return new JSONObject(); });
+    }
+
     private static int[] redeemWith(Context c, String code, String token) throws Exception {
         Object r;
         try { r = http(c, "POST", "/rest/v1/rpc/redeem_code_v2", json("code_in", code), token, null); }

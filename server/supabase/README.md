@@ -128,7 +128,7 @@ received and when it was collected.
 (Claude and any other MCP client) can work with an account's books: list and read invoices, purchases, expenses,
 notes, receipts and payments, contacts and items, add up sales, show what customers owe, and with a read-write key
 save invoices, contacts and items. Each account makes its own **API keys** in the portal (**AI Access** in the top
-bar): a key belongs to that account, is *read only* or *read & write*, is shown once and can be revoked there.
+bar) or in the app (**AI Access** in the side menu): a key belongs to that account, is *read only* or *read & write*, is shown once and can be revoked there.
 `mcp.sql` holds the table (`api_keys`, only the SHA-256 of a key is kept) and the `create_api_key` function.
 
 Set it up once:

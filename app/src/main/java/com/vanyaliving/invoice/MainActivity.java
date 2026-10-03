@@ -2631,6 +2631,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Company Profile", R.drawable.ic_business, 0xFF5E35B1, 0xFFEDE7F6, v -> { drawer.closeDrawers(); showCompanyMasterDialog(); }),
                 new DashboardTile("Sales Report", R.drawable.ic_reports, 0xFF1E88E5, 0xFFE3F2FD, v -> { drawer.closeDrawers(); showSalesReport(); }),
                 new DashboardTile("Export / Import", R.drawable.ic_backup, 0xFF546E7A, 0xFFECEFF1, v -> { drawer.closeDrawers(); showBackupDialog(); }),
+                new DashboardTile("AI Access", R.drawable.ic_ai, 0xFF3949AB, 0xFFE8EAF6, v -> { drawer.closeDrawers(); showAiAccessDialog(); }),
                 new DashboardTile("Subscription", R.drawable.ic_key, 0xFF00897B, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
         };
         DashboardTile[] fullMenu = {
@@ -2640,6 +2641,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Balance Sheet", R.drawable.ic_expense, 0xFFFB8C00, 0xFFFFF3E0, v -> { drawer.closeDrawers(); showBalanceSheet(); }),
                 new DashboardTile("Stock in Hand", R.drawable.ic_stock, 0xFF00ACC1, 0xFFE0F7FA, v -> { drawer.closeDrawers(); showStockDialog(); }),
                 new DashboardTile("Export / Import", R.drawable.ic_backup, 0xFF546E7A, 0xFFECEFF1, v -> { drawer.closeDrawers(); showBackupDialog(); }),
+                new DashboardTile("AI Access", R.drawable.ic_ai, 0xFF3949AB, 0xFFE8EAF6, v -> { drawer.closeDrawers(); showAiAccessDialog(); }),
                 new DashboardTile("Subscription", R.drawable.ic_key, 0xFF00897B, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
         };
         ScrollView menuScroll = new ScrollView(this);
@@ -3118,6 +3120,172 @@ public class MainActivity extends Activity implements Sync.Listener {
                 .setNegativeButton("Import Backup", (d, w) -> confirmImport())
                 .setNeutralButton("Cancel", null)
                 .show();
+    }
+
+    // ---- AI access: API keys for BlitzBook's MCP server (server/supabase/functions/mcp), as in the portal ----
+    // An AI assistant (Claude and other MCP clients) works with these books through that server with a key made
+    // here. A key is shown once, when it is made; Supabase keeps only its hash. A read-only key looks; a read &
+    // write key can also save invoices, contacts and items. Revoking a key deletes it.
+
+    private String mcpUrl() { return Sync.serverUrl(this).replaceAll("/+$", "") + "/functions/v1/mcp"; }
+
+    private void copyText(String what, String text) {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(android.content.ClipData.newPlainText(what, text));
+        Toast.makeText(this, what + " copied", Toast.LENGTH_SHORT).show();
+    }
+
+    // "2026-10-03T15:41:02.123+00:00" from Supabase as 03/10/2026 21:11 on this phone
+    private String keyTime(String iso) {
+        try {
+            SimpleDateFormat in = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US);
+            in.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            return new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.US).format(in.parse(iso.substring(0, 19)));
+        } catch (Exception e) { return ""; }
+    }
+
+    private TextView aiNote(String text) {
+        TextView t = new TextView(this);
+        t.setText(text); t.setTextSize(13f); t.setPadding(0, dp(6), 0, dp(6));
+        return t;
+    }
+
+    // Drawer entry: the server address, the account's keys with Revoke, and New API Key
+    private void showAiAccessDialog() {
+        if (!Supabase.enabled(this)) {
+            new AlertDialog.Builder(this).setTitle("AI Access").setMessage("AI access works on books kept in your BlitzBook account, and this app is not connected to it.").setPositiveButton("OK", null).show();
+            return;
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        box.addView(aiNote("Let an AI assistant such as Claude work with your books: ask it for this month's sales, who still owes you money or what a customer bought, or have it make an invoice for you. It connects to BlitzBook's MCP server with an API key you make here."));
+        TextView url = aiNote(mcpUrl());
+        url.setTextIsSelectable(true); url.setTypeface(Typeface.MONOSPACE); url.setTextSize(12f);
+        box.addView(field("MCP server address", url));
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        box.addView(field("API keys", list));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(box);
+        AlertDialog dlg = new AlertDialog.Builder(this).setTitle("AI Access").setView(scroll)
+                .setPositiveButton("New API Key", null).setNeutralButton("Copy Address", null).setNegativeButton("Close", null).create();
+        Runnable[] load = new Runnable[1];
+        load[0] = () -> {
+            list.removeAllViews();
+            list.addView(aiNote("Loading..."));
+            new Thread(() -> {
+                JSONArray keys = null; String error = null;
+                try { keys = Supabase.apiKeys(this, userId); }
+                catch (Sync.SyncException e) { error = e.status == 404 ? "AI access is not set up on the server yet." : e.status == 0 ? "No connection. The keys are listed when the phone is online." : "The keys could not be loaded: " + e.getMessage(); }
+                catch (Exception e) { error = "The keys could not be loaded: " + e.getMessage(); }
+                final JSONArray got = keys; final String failed = error;
+                runOnUiThread(() -> {
+                    if (isFinishing() || !dlg.isShowing()) return;
+                    list.removeAllViews();
+                    Button make = dlg.getButton(AlertDialog.BUTTON_POSITIVE);
+                    if (make != null) make.setEnabled(failed == null);
+                    if (failed != null) { list.addView(aiNote(failed)); return; }
+                    if (got.length() == 0) { list.addView(aiNote("No API keys yet. Make one to connect an assistant.")); return; }
+                    for (int i = 0; i < got.length(); i++) {
+                        JSONObject k = got.optJSONObject(i);
+                        if (k == null) continue;
+                        String id = k.optString("id"), name = k.optString("name"), prefix = k.optString("prefix");
+                        String used = k.isNull("last_used_at") ? "never used" : "last used " + keyTime(k.optString("last_used_at"));
+                        LinearLayout row = new LinearLayout(this);
+                        row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(0, dp(6), 0, dp(6));
+                        TextView t = new TextView(this);
+                        t.setTextSize(13f);
+                        t.setText(name + "\n" + prefix + "...  ·  " + ("write".equals(k.optString("scope")) ? "Read & write" : "Read only") + "\nMade " + keyTime(k.optString("created_at")) + ", " + used);
+                        row.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+                        Button revoke = smallButton("Revoke", RED, 12.5f);
+                        revoke.setPadding(dp(12), dp(8), dp(12), dp(8));
+                        revoke.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Revoke API Key")
+                                .setMessage("Revoke \"" + name + "\" (" + prefix + "...)? Any assistant using this key loses access to your books at once.")
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Revoke", (d, w) -> new Thread(() -> {
+                                    String msg = "Key revoked";
+                                    try { Supabase.revokeApiKey(this, userId, id); } catch (Exception e) { msg = "The key could not be revoked: " + e.getMessage(); }
+                                    final String say = msg;
+                                    runOnUiThread(() -> { if (isFinishing()) return; Toast.makeText(this, say, Toast.LENGTH_LONG).show(); if (dlg.isShowing()) load[0].run(); });
+                                }).start()).show());
+                        row.addView(revoke);
+                        list.addView(row);
+                    }
+                    list.addView(aiNote("A key is shown only once, when it is made. Revoke a key you no longer use, or one that may have been seen by someone else."));
+                });
+            }).start();
+        };
+        dlg.setOnShowListener(d -> {
+            dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> copyText("Address", mcpUrl()));
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> showNewApiKeyDialog(load[0]));
+            load[0].run();
+        });
+        dlg.show();
+    }
+
+    private void showNewApiKeyDialog(Runnable onMade) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        EditText name = edit("e.g. Claude on my phone", false);
+        name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(60)});
+        box.addView(field("Name", name));
+        Spinner scope = spinner(new String[]{"Read only - look at the books", "Read & write - also save invoices, contacts and items"});
+        box.addView(field("Access", scope));
+        box.addView(aiNote("Choose read only unless the assistant has to enter things for you. An invoice saved by an assistant counts like any other invoice."));
+        AlertDialog dlg = new AlertDialog.Builder(this).setTitle("New API Key").setView(box).setNegativeButton("Cancel", null).setPositiveButton("Make Key", null).create();
+        dlg.setOnShowListener(d -> {
+            Button make = dlg.getButton(AlertDialog.BUTTON_POSITIVE);
+            make.setOnClickListener(v -> {
+                make.setEnabled(false);
+                String nm = name.getText().toString().trim(), sc = scope.getSelectedItemPosition() == 1 ? "write" : "read";
+                new Thread(() -> {
+                    JSONObject r = null; String error = null;
+                    try { r = Supabase.createApiKey(this, userId, nm, sc); if (r.optString("key").isEmpty()) error = r.optString("error", "The key could not be made"); }
+                    catch (Sync.SyncException e) { error = e.status == 404 ? "AI access is not set up on the server yet" : e.status == 0 ? "No connection" : e.getMessage(); }
+                    catch (Exception e) { error = "The key could not be made: " + e.getMessage(); }
+                    final JSONObject made = r; final String failed = error;
+                    runOnUiThread(() -> {
+                        if (isFinishing()) return;
+                        if (failed != null) { make.setEnabled(true); Toast.makeText(this, failed, Toast.LENGTH_LONG).show(); return; }
+                        dlg.dismiss();
+                        showApiKeyDialog(made);
+                        onMade.run();
+                    });
+                }).start();
+            });
+        });
+        dlg.show();
+    }
+
+    // The one time the key itself is on screen, with what to paste into the assistant
+    private void showApiKeyDialog(JSONObject k) {
+        String key = k.optString("key"), withKey = mcpUrl() + "?key=" + key;
+        boolean write = "write".equals(k.optString("scope"));
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        box.addView(aiNote("Copy the key now. It is not shown again; if it is lost, revoke it and make a new one. Anyone who has it can " + (write ? "read and add to" : "read") + " your books, so treat it like a password."));
+        TextView keyTv = aiNote(key);
+        keyTv.setTextIsSelectable(true); keyTv.setTypeface(Typeface.MONOSPACE); keyTv.setTextSize(12f);
+        box.addView(field("API key (" + (write ? "read & write" : "read only") + ")", keyTv));
+        Button copyKey = smallButton("Copy key", GREEN, 13f);
+        copyKey.setPadding(dp(14), dp(10), dp(14), dp(10));
+        copyKey.setOnClickListener(v -> copyText("Key", key));
+        box.addView(copyKey, new LinearLayout.LayoutParams(-1, -2));
+        TextView urlTv = aiNote(withKey);
+        urlTv.setTextIsSelectable(true); urlTv.setTypeface(Typeface.MONOSPACE); urlTv.setTextSize(12f);
+        box.addView(field("Address with the key", urlTv));
+        Button copyUrl = smallButton("Copy address with key", 0xFF3949AB, 13f);
+        copyUrl.setPadding(dp(14), dp(10), dp(14), dp(10));
+        copyUrl.setOnClickListener(v -> copyText("Address with key", withKey));
+        box.addView(copyUrl, new LinearLayout.LayoutParams(-1, -2));
+        box.addView(aiNote("In your AI app add a custom connector (MCP server) and paste the address with the key as its URL; no login is needed. An app that takes headers instead: the server address with the header \"Authorization: Bearer <key>\"."));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(box);
+        new AlertDialog.Builder(this).setTitle("API Key: " + k.optString("name")).setView(scroll).setCancelable(false).setPositiveButton("I have copied the key", null).show();
     }
 
     private void confirmImport() {
