@@ -122,6 +122,45 @@ Set it up once:
 `Table Editor → payments` lists every order made and whether it was paid; `grants` what each account
 received and when it was collected.
 
+## 7. AI access (MCP server and API keys)
+
+`functions/mcp/index.ts` is a Supabase Edge Function that speaks the Model Context Protocol, so an AI assistant
+(Claude and any other MCP client) can work with an account's books: list and read invoices, purchases, expenses,
+notes, receipts and payments, contacts and items, add up sales, show what customers owe, and with a read-write key
+save invoices, contacts and items. Each account makes its own **API keys** in the portal (**AI Access** in the top
+bar): a key belongs to that account, is *read only* or *read & write*, is shown once and can be revoked there.
+`mcp.sql` holds the table (`api_keys`, only the SHA-256 of a key is kept) and the `create_api_key` function.
+
+Set it up once:
+
+1. Run `mcp.sql` in the SQL Editor.
+2. Deploy the function (same CLI and access token as for Cashfree; it needs no secrets):
+
+   ```
+   npx supabase functions deploy mcp --workdir server --project-ref cufdskrmhdenppoxfhnk
+   ```
+
+The server is then at `https://cufdskrmhdenppoxfhnk.supabase.co/functions/v1/mcp`. A client sends its key as
+`Authorization: Bearer bbk_...`; one that can only be given an address uses `...?key=bbk_...`. In Claude Code:
+
+```
+claude mcp add --transport http blitzbook https://cufdskrmhdenppoxfhnk.supabase.co/functions/v1/mcp --header "Authorization: Bearer bbk_..."
+```
+
+What it does and does not do:
+
+- A key only ever reaches its own account's rows of `books`. The function uses the service role, so that rule lives
+  in the function (every query carries the key's `user_id`), not in row-level security.
+- An account whose trial, plan and invoice pack have run out is refused, as in the app; `get_company` still answers.
+- `create_invoice` takes the next number of the company's series, works out CGST / SGST or IGST from the customer's
+  state the way the portal does, and inserts the row: a number taken by another device in the same moment is never
+  overwritten, the next one is used. On an invoice pack it uses one invoice of the pack. Saved invoices cannot be
+  changed or deleted through MCP; purchases, expenses, notes and vouchers are read-only there.
+- What is saved arrives in the app and the portal on their next sync, like a record from any other device.
+- `Table Editor → api_keys` shows every key (prefix, scope, last used) and whose it is; deleting a row revokes it.
+- `node server/supabase/mcp-test.js` runs the function against a stand-in for the database and reads what it saved
+  back through the portal's `appformat.js` (Node 23.6 or newer). Run it after changing either.
+
 ## How it is used
 
 - Registration: the portal / app asks Supabase to email an OTP (`/auth/v1/otp`), verifies it

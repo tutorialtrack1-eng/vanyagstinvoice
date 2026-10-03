@@ -204,6 +204,8 @@ Days can be 30, 365, 730 or 1825. The identity must be what the user registered 
 
 - `node server/test.js` — sync protocol and data layout, no browser needed.
 - `node server/supabase/test.js` — the Supabase backend against a stand-in for the Supabase API.
+- `node server/supabase/mcp-test.js` — the MCP server (AI Access) against a stand-in for the database; what it saves is
+  read back through `js/appformat.js`.
 - `PLAYWRIGHT_CORE=/path/to/playwright-core node tools/po-challan.js` — purchase-order upload (upsert and
   insert only, result counts), delivery challans, their printing, sync records and backup, terms & conditions
   and the due date on the PDF, the GST lock and the GSTR-1 / GSTR-3B JSON, dark mode, in a portal opened as a file.

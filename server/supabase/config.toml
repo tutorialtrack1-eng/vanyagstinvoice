@@ -5,3 +5,7 @@ project_id = "cufdskrmhdenppoxfhnk"
 # The Cashfree webhook arrives without a user token; the function checks the user token itself where one is needed
 [functions.cashfree]
 verify_jwt = false
+
+# The MCP server is opened with a BlitzBook API key, not a user token; the function checks the key itself
+[functions.mcp]
+verify_jwt = false

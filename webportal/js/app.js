@@ -154,6 +154,7 @@
     android: '<path d="M5 15a7 7 0 0 1 14 0v4H5z"/><path d="M8 9.5 6.5 7M16 9.5 17.5 7"/><path d="M9.5 13h.01M14.5 13h.01"/><path d="M8 19v2.5M16 19v2.5M3 12v4M21 12v4"/>',
     apple: '<path d="M15.5 6.5c-1.6 0-2.3.9-3.5.9s-2.1-.9-3.5-.9C6.3 6.5 4 8.6 4 12.4c0 3.4 2.6 8.1 4.6 8.1 1.1 0 1.7-.8 3.4-.8s2.1.8 3.4.8c2 0 4.1-4 4.6-5.8-2.2-.8-3-3-3-3.5 0-1.7 1-2.9 2.5-3.6-1-1.2-2.4-1.1-4-1.1z"/><path d="M12.5 6c0-1.9 1.4-3.6 3.3-3.8.2 2-1.5 3.8-3.3 3.8z"/>',
     file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16.5 6.5l3 3M13.5 9.5l2 2"/>',
     moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
   };
@@ -227,12 +228,14 @@
     { key: 'backup', t: 'Export / Import', ic: 'download' },
     // GST returns are shown to everyone; the screen itself opens on a yearly plan or longer (gst.js)
     { key: 'gst', t: 'GST', ic: 'file' },
+    // API keys for the MCP server: an AI assistant working with these books (server/supabase/functions/mcp)
+    { key: 'ai', t: 'AI Access', ic: 'key' },
     { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true }
   ];
   // Routes that open a dialog over the current screen: they never become the active link or the screen to redraw
   const DIALOGS = ['company', 'subscription', 'sync'];
   // What an account on an invoice pack gets: invoicing only (Sub.isLite)
-  const LITE_NAV = ['dashboard', 'salesReport', 'backup', 'gst', 'subscription'];
+  const LITE_NAV = ['dashboard', 'salesReport', 'backup', 'gst', 'ai', 'subscription'];
   const LITE_TILES = [
     { key: 'invoice', t: 'New Invoice', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
     { key: 'sales', t: 'Sales', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
@@ -904,6 +907,72 @@
     }
   };
   App.routes.sync = () => SyncUI.dialog();
+
+  // ------------------------------------------------------------ AI access: API keys for the MCP server
+  /* An AI assistant (Claude and other MCP clients) reaches these books through the Supabase Edge Function
+     server/supabase/functions/mcp with an API key made here (server/supabase/mcp.sql). A key is shown once, when it
+     is made; Supabase keeps only its hash. A read-only key looks; a read & write key can also save invoices,
+     contacts and items. Revoking a key deletes it. */
+  const AiAccess = {
+    url() { return Sync.serverUrl().replace(/\/+$/, '') + '/functions/v1/mcp'; },
+    list() { return Sub.withToken((token) => Supabase.http('GET', '/rest/v1/api_keys?select=id,name,prefix,scope,created_at,last_used_at&order=created_at.desc', undefined, token)); },
+    make(name, scope) { return Sub.withToken((token) => Supabase.http('POST', '/rest/v1/rpc/create_api_key', { name_in: name, scope_in: scope }, token)); },
+    revoke(id) { return Sub.withToken((token) => Supabase.http('DELETE', '/rest/v1/api_keys?id=eq.' + encodeURIComponent(id), undefined, token)); },
+    when(t) { const d = new Date(t); return isNaN(d) ? '' : U.pad(d.getDate()) + '/' + U.pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + U.pad(d.getHours()) + ':' + U.pad(d.getMinutes()); },
+    copy(text, what) { try { navigator.clipboard.writeText(text).then(() => UI.toast(what + ' copied'), () => UI.toast('Select the text and copy it')); } catch (e) { UI.toast('Select the text and copy it'); } },
+    async screen() {
+      const here = () => App.current && App.current.route === 'ai' && !!$('#aiKeys');
+      const root = App.view(App.header('AI Access') +
+        '<div class="card white"><div class="hd">Connect an AI assistant</div><div class="bd"><p>Let an AI assistant such as Claude work with your books: ask it for this month\'s sales, who still owes you money or what a customer bought, or have it make an invoice for you. It connects to BlitzBook\'s MCP server with an API key you make here.</p>' +
+        UI.field('MCP server address', '<input id="aiUrl" readonly value="' + esc(this.url()) + '">', { hint: 'The same address for every key; the key decides whose books are opened and what may be done with them.' }) +
+        '<div class="btnrow"><button class="btn outline" id="aiCopyUrl">Copy address</button><button class="btn green" id="aiNew">' + icon('plus') + ' New API key</button></div></div></div>' +
+        '<div class="card white"><div class="hd">API keys</div><div class="bd" id="aiKeys"><div class="hint">Loading…</div></div></div>');
+      App.wireBack(root);
+      $('#aiCopyUrl').onclick = () => this.copy(this.url(), 'Address');
+      $('#aiNew').onclick = () => this.create();
+      if (!Sub.paymentsAvailable()) { $('#aiNew').disabled = true; $('#aiKeys').innerHTML = '<div class="empty">AI access works on books kept in your BlitzBook account. This browser is not signed in to the server right now (Export / Import shows whether the books are synced).</div>'; return; }
+      let keys;
+      try { keys = await this.list(); }
+      catch (e) { if (here()) { $('#aiNew').disabled = true; $('#aiKeys').innerHTML = '<div class="empty">' + esc(e.status === 404 ? 'AI access is not set up on the server yet.' : 'The keys could not be loaded: ' + (e.message || 'no connection') + '.') + '</div>'; } return; }
+      if (!here()) return;
+      keys = Array.isArray(keys) ? keys : [];
+      $('#aiKeys').innerHTML = keys.length ? '<table class="list"><thead><tr><th>Name</th><th>Key</th><th>Access</th><th>Made</th><th>Last used</th><th></th></tr></thead><tbody>' + keys.map(k =>
+        '<tr><td>' + esc(k.name) + '</td><td><code>' + esc(k.prefix) + '…</code></td><td><span class="pill ' + (k.scope === 'write' ? 'warn' : 'ok') + '" style="white-space:nowrap">' + (k.scope === 'write' ? 'Read &amp; write' : 'Read only') + '</span></td><td>' + esc(this.when(k.created_at)) + '</td><td>' + esc(k.last_used_at ? this.when(k.last_used_at) : 'Never') + '</td>' +
+        '<td class="actions"><button class="btn sm red" data-revoke="' + esc(k.id) + '">Revoke</button></td></tr>').join('') + '</tbody></table>' +
+        '<div class="hint">A key is shown only once, when it is made. Revoke a key you no longer use, or one that may have been seen by someone else: whatever was using it stops working at once.</div>'
+        : '<div class="empty">No API keys yet. Make one to connect an assistant.</div>';
+      $$('[data-revoke]', root).forEach(b => b.onclick = () => { const k = keys.find(x => x.id === b.dataset.revoke); UI.confirm('Revoke API Key', 'Revoke "' + k.name + '" (' + k.prefix + '…)? Any assistant using this key loses access to your books at once.', async () => {
+        try { await this.revoke(k.id); UI.toast('Key revoked'); } catch (e) { UI.toast(e.message || 'The key could not be revoked', 6000); }
+        if (App.current && App.current.route === 'ai') this.screen();
+      }, 'Revoke'); });
+    },
+    create() {
+      UI.modal({ title: 'New API Key',
+        body: UI.field('Name', UI.input('akName', '', { placeholder: 'e.g. Claude on my laptop', attrs: ' maxlength="60"' }), { hint: 'To tell your keys apart later.' }) +
+          UI.field('Access', UI.select('akScope', [['read', 'Read only - look at the books'], ['write', 'Read & write - also save invoices, contacts and items']], 'read'), { hint: 'Choose read only unless the assistant has to enter things for you. An invoice saved by an assistant counts like any other invoice.' }),
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Make key', cls: 'green', onClick: async (bg) => {
+          let r;
+          try { r = await this.make(UI.val('akName', bg).trim(), UI.val('akScope', bg)); }
+          catch (e) { UI.toast(e.status === 404 ? 'AI access is not set up on the server yet' : e.message || 'The key could not be made', 6000); return false; }
+          if (!r || !r.key) { UI.toast((r && r.error) || 'The key could not be made', 6000); return false; }
+          this.show(r);
+          return true;
+        } }] });
+    },
+    // The one time the key itself is on screen, with what to paste where
+    show(k) {
+      const url = this.url(), cmd = 'claude mcp add --transport http blitzbook ' + url + ' --header "Authorization: Bearer ' + k.key + '"';
+      const box = (id, text, rows) => '<textarea id="' + id + '" readonly rows="' + rows + '" style="min-height:0;font-family:monospace;font-size:12.5px;word-break:break-all">' + esc(text) + '</textarea>';
+      const bg = UI.modal({ title: 'API Key: ' + k.name, wide: true, cancelable: false, focus: false,
+        body: '<p><b>Copy the key now.</b> It is not shown again; if it is lost, revoke it and make a new one. Anyone who has it can ' + (k.scope === 'write' ? 'read and add to' : 'read') + ' your books, so treat it like a password.</p>' +
+          UI.field('API key (' + (k.scope === 'write' ? 'read & write' : 'read only') + ')', box('akKey', k.key, 2)) + '<div class="btnrow"><button class="btn sm" data-copy="akKey">Copy key</button></div>' +
+          UI.field('Claude Code: run this once in a terminal', box('akCmd', cmd, 4)) + '<div class="btnrow"><button class="btn sm outline" data-copy="akCmd">Copy command</button></div>' +
+          UI.field('Other assistants', box('akAny', url + '?key=' + k.key, 3), { hint: 'An MCP client that takes headers: the server address with the header "Authorization: Bearer <key>". One that only takes an address (a custom connector, for example): the address above, which carries the key.' }) + '<div class="btnrow"><button class="btn sm outline" data-copy="akAny">Copy address with key</button></div>',
+        buttons: [{ label: 'I have copied the key', cls: 'green', onClick: () => { if (App.current && App.current.route === 'ai') this.screen(); } }] });
+      $$('[data-copy]', bg).forEach(b => b.onclick = () => this.copy($('#' + b.dataset.copy, bg).value, b.textContent.replace(/^Copy /, '').replace(/^./, c => c.toUpperCase())));
+    }
+  };
+  App.routes.ai = () => AiAccess.screen();
 
   global.App = App; global.UI = UI; global.$ = $; global.$$ = $$; global.Company = Company; global.Subscription = Subscription; global.GetApp = GetApp; global.icon = icon; global.Theme = Theme;
 })(window);
