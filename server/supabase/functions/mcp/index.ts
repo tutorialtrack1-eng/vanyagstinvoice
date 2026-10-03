@@ -168,7 +168,8 @@ const invoiceFormat = (company: Row | null) => s(company?.invoice_format).includ
 // Trial, plan and invoice pack, as subscription.js reads them
 function subscription(sub: Row | null) {
   const now = Date.now(), paid = num(sub?.valid_until), until = paid > 0 ? paid : (num(sub?.registered_at) || now) + TRIAL_MILLIS;
-  const quota = Math.max(0, num(sub?.inv_quota)), used = Math.max(0, num(sub?.inv_used)), left = Math.max(0, quota - used);
+  // A pack's invoices are to be used by inv_until (0: no end date, a pack from before packs had one)
+  const quota = Math.max(0, num(sub?.inv_quota)), used = Math.max(0, num(sub?.inv_used)), packUntil = num(sub?.inv_until), left = packUntil > 0 && now >= packUntil ? 0 : Math.max(0, quota - used);
   const timeActive = now < until;
   return { timeActive, onTrial: paid <= 0, validUntil: new Date(until + 330 * 60000).toISOString().slice(0, 10), packLeft: left, packQuota: quota, packUsed: used, lite: !timeActive && left > 0, active: timeActive || left > 0 };
 }

@@ -67,7 +67,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   // a saved invoice is read-only, and a used-up pack refuses the next one
   await page.evaluate(() => { Store.set('registered_at', Date.now() - 40 * 86400000); Store.set('valid_until', 0); Store.set('inv_quota', 2); Store.set('inv_used', 0); App.checkSubscription(); App.go('dashboard'); });
   await page.waitForSelector('#stPack');
-  check('invoice pack: only the invoicing features are offered', await page.evaluate(() => Sub.isLite() && Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales Report,Export / Import,GST,Subscription' && Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customer,Supplier,Sales Report' && document.querySelector('#stPack').textContent === '2 of 2'), await page.evaluate(() => [Sub.statusText(), Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join()]));
+  check('invoice pack: only the invoicing features are offered', await page.evaluate(() => Sub.isLite() && Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales Report,Export / Import,GST,AI Access,Subscription' && Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customer,Supplier,Sales Report' && document.querySelector('#stPack').textContent === '2 of 2'), await page.evaluate(() => [Sub.statusText(), Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join()]));
   await page.screenshot({ path: OUT + '/01b-pack-dashboard.png', fullPage: true });
   const packSave = async (n) => { await page.evaluate(() => App.go('invoice')); await page.waitForSelector('#rows'); await page.fill('#bName', 'Pack Buyer ' + n); await page.fill(row(0) + '[data-k=desc]', 'Thing ' + n); await page.fill(row(0) + '[data-k=qty]', '1'); await page.fill(row(0) + '[data-k=rate]', '100'); await page.click('#iSave'); await page.waitForSelector('.toast'); return toast(page); };
   await packSave(1);
@@ -79,7 +79,20 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await packSave(2);
   const refused = await packSave(3);
   check('a used-up pack refuses the next invoice and opens the subscription', refused.includes('used up') && (await page.evaluate(() => Store.list('invoices').length)) === 2 && (await page.$('#subDlg')) !== null, refused);
-  check('subscription dialog lists the invoice packs among the plans', await page.evaluate(() => Sub.PLANS.map(p => p.name).join()) === 'Monthly plan,Yearly plan,2 years plan,5 years plan,20 invoices pack,50 invoices pack');
+  check('subscription dialog lists the invoice packs among the plans', await page.evaluate(() => Sub.PLANS.map(p => p.name).join()) === 'Monthly plan,Yearly plan,2 years plan,5 years plan,15 invoices pack,40 invoices pack' && await page.evaluate(() => Sub.planLabel(4) + '|' + Sub.planLabel(5)) === '15 invoices pack  (15 invoices, valid 3 months)  -  Rs 99|40 invoices pack  (40 invoices, valid 6 months)  -  Rs 199');
+  // A pack has a date: buying one sets it, and invoices not used by then lapse; a new pack does not bring them back
+  check('a pack bought now is valid for its months, and lapses after them', await page.evaluate(() => {
+    const keep = ['inv_quota', 'inv_used', 'inv_until'].map(k => Store.get(k, 0)), day = 86400000, out = [];
+    Store.set('inv_quota', 0, true); Store.set('inv_used', 0, true); Store.set('inv_until', 0, true);
+    Sub.applyPlan({ days: 0, invoices: 15, packDays: 90 });
+    out.push(Sub.invoicesLeft(), Math.round((Sub.packUntil() - Date.now()) / day), /^Invoice pack: 15 of 15 invoices left, valid till \d\d\/\d\d\/\d{4}$/.test(Sub.statusText()));
+    Store.set('inv_used', 5, true); Store.set('inv_until', Date.now() - day, true);
+    out.push(Sub.invoicesLeft(), Sub.isActive(), /^Invoice pack expired on .* \(10 invoices unused\)$/.test(Sub.statusText()));
+    Sub.applyPlan({ days: 0, invoices: 40, pack_days: 180 });
+    out.push(Sub.invoicesLeft(), Math.round((Sub.packUntil() - Date.now()) / day), AppFormat.row.sub({ inv_until: 7 }).inv_until);
+    ['inv_quota', 'inv_used', 'inv_until'].forEach((k, i) => Store.set(k, keep[i], true));
+    return out.join();
+  }) === '15,90,true,0,false,true,40,180,7');
   await page.click('#subDlg .mf .btn.outline');
 
   await page.context().close();

@@ -470,7 +470,7 @@ final class Sync {
                         touched.add(k);
                     }
                     // What the server has; a merged result differs from it and is sent in the next round
-                    if (remoteSub != null) { base.put("sub", hash(subDoc(remoteSub.optLong("registered_at", 0), remoteSub.optLong("valid_until", 0), codes(remoteSub.optJSONArray("used_codes")), remoteSub.optInt("inv_quota", 0), remoteSub.optInt("inv_used", 0)))); touched.add("sub"); }
+                    if (remoteSub != null) { base.put("sub", hash(subDoc(remoteSub.optLong("registered_at", 0), remoteSub.optLong("valid_until", 0), codes(remoteSub.optJSONArray("used_codes")), remoteSub.optInt("inv_quota", 0), remoteSub.optInt("inv_used", 0), remoteSub.optLong("inv_until", 0)))); touched.add("sub"); }
                 }
                 for (String k : touched) {
                     String h = base.get(k);
@@ -596,11 +596,11 @@ final class Sync {
 
     private JSONObject subDoc() throws JSONException {
         return subDoc(prefs.getLong("registered_at_" + userId, 0), prefs.getLong("valid_until_" + userId, 0), prefs.getStringSet("used_codes_" + userId, new HashSet<>()),
-                prefs.getInt("inv_quota_" + userId, 0), prefs.getInt("inv_used_" + userId, 0));
+                prefs.getInt("inv_quota_" + userId, 0), prefs.getInt("inv_used_" + userId, 0), prefs.getLong("inv_until_" + userId, 0));
     }
 
-    private static JSONObject subDoc(long registeredAt, long validUntil, Set<String> codes, int invQuota, int invUsed) throws JSONException {
-        return new JSONObject().put("registered_at", registeredAt).put("valid_until", validUntil).put("used_codes", new JSONArray(new TreeSet<>(codes))).put("inv_quota", invQuota).put("inv_used", invUsed);
+    private static JSONObject subDoc(long registeredAt, long validUntil, Set<String> codes, int invQuota, int invUsed, long invUntil) throws JSONException {
+        return new JSONObject().put("registered_at", registeredAt).put("valid_until", validUntil).put("used_codes", new JSONArray(new TreeSet<>(codes))).put("inv_quota", invQuota).put("inv_used", invUsed).put("inv_until", invUntil);
     }
 
     private static Set<String> codes(JSONArray a) {
@@ -656,7 +656,8 @@ final class Sync {
         prefs.edit().putLong("registered_at_" + userId, start)
                 .putLong("valid_until_" + userId, Math.max(prefs.getLong("valid_until_" + userId, 0), d.optLong("valid_until", 0)))
                 .putStringSet("used_codes_" + userId, used)
-                // invoice pack counters: bought and used are the highest seen on any device
+                // invoice pack: bought, used and the date the pack is valid till are the highest seen on any device
+                .putLong("inv_until_" + userId, Math.max(prefs.getLong("inv_until_" + userId, 0), d.optLong("inv_until", 0)))
                 .putInt("inv_quota_" + userId, Math.max(prefs.getInt("inv_quota_" + userId, 0), d.optInt("inv_quota", 0)))
                 .putInt("inv_used_" + userId, Math.max(prefs.getInt("inv_used_" + userId, 0), d.optInt("inv_used", 0))).apply();
     }

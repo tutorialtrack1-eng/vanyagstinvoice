@@ -2,27 +2,29 @@
    a 30-day trial from first login, then an activation code. Two kinds of code:
      - a plan for a number of days (monthly, yearly, 2 years, 5 years): every feature, the days are added after the
        current validity ends;
-     - a pack of invoices (20 or 50): no end date, every saved invoice, credit note or debit note uses one of them,
-       and only the invoicing features are offered (an "invoice pack" account; see isLite). A saved invoice or note
-       cannot be changed or deleted on a pack, so a pack cannot be reused by editing.
+     - a pack of invoices (15 to use within 3 months, or 40 within 6): every saved invoice, credit note or debit
+       note uses one of them, and only the invoicing features are offered (an "invoice pack" account; see isLite).
+       Invoices not used by the pack's date lapse. A saved invoice or note cannot be changed or deleted on a pack,
+       so a pack cannot be reused by editing.
    Codes handed out live in Supabase (server/supabase/activation.sql); codes made with tools/LicenceKeyGen.java (tied
    to the login, time plans only) work too. With sync on, the trial start, the validity, the pack counters and the
    codes already used are shared with the app: one subscription per account, whichever device it is used on. */
 (function (global) {
   'use strict';
   const TRIAL_MILLIS = 30 * 24 * 60 * 60 * 1000;
-  // The packs on sale (same list in Subscription.java). days or invoices is 0 depending on the kind.
+  // The packs on sale (same list in Subscription.java). days or invoices is 0 depending on the kind; packDays is
+  // how long an invoice pack's invoices can be used.
   const PLANS = [
     { name: 'Monthly plan', days: 30, invoices: 0, price: 299 },
     { name: 'Yearly plan', days: 365, invoices: 0, price: 2499 },
     { name: '2 years plan', days: 730, invoices: 0, price: 3999 },
     { name: '5 years plan', days: 1825, invoices: 0, price: 7999 },
-    { name: '20 invoices pack', days: 0, invoices: 20, price: 99 },
-    { name: '50 invoices pack', days: 0, invoices: 50, price: 199 }
+    { name: '15 invoices pack', days: 0, invoices: 15, packDays: 90, price: 99 },
+    { name: '40 invoices pack', days: 0, invoices: 40, packDays: 180, price: 199 }
   ];
   const PLAN_NAMES = PLANS.map(p => p.name), PLAN_DAYS = PLANS.map(p => p.days), PLAN_PRICES = PLANS.map(p => p.price), PLAN_INVOICES = PLANS.map(p => p.invoices);
   // The plan names the payment function knows (server/supabase/functions/cashfree), in the same order
-  const PLAN_KEYS = ['monthly', 'yearly', '2years', '5years', 'inv20', 'inv50'];
+  const PLAN_KEYS = ['monthly', 'yearly', '2years', '5years', 'inv15', 'inv40'];
   const SECRET = 'VANYA-INVOICE-BOOK-2026';
   const VENDOR_UPI_ID = 'blitzbook@upi';
   const VENDOR_NAME = 'BlitzBook';
@@ -40,11 +42,15 @@
   }
   function normalize(code) { return String(code || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(); }
   const n0 = (v) => Math.max(0, parseInt(v, 10) || 0);
+  const dmy = (ms) => { const d = new Date(ms); return U.pad(d.getDate()) + '/' + U.pad(d.getMonth() + 1) + '/' + d.getFullYear(); };
 
   const Sub = {
     TRIAL_MILLIS, PLANS, PLAN_NAMES, PLAN_DAYS, PLAN_PRICES, PLAN_INVOICES, VENDOR_UPI_ID, VENDOR_NAME, VENDOR_PHONE, ACTIVATION_SERVER_URL,
     TRIAL_LABEL: '30-day',
-    planLabel(i) { const p = PLANS[i]; return p.name + '  (' + (p.invoices ? p.invoices + ' invoices' : p.days + ' days') + ')  -  Rs ' + p.price; },
+    planLabel(i) { const p = PLANS[i]; return p.name + '  (' + this.planWhat(p) + ')  -  Rs ' + p.price; },
+    // "3 months" for 90 days; what a plan gives: "365 days" or "15 invoices, valid 3 months"
+    packValidity(days) { days = n0(days); return !days ? 'no end date' : days % 30 === 0 ? (days / 30) + (days === 30 ? ' month' : ' months') : days + ' days'; },
+    planWhat(p) { return p.invoices ? p.invoices + ' invoices, ' + (p.packDays ? 'valid ' + this.packValidity(p.packDays) : 'no end date') : p.days + ' days'; },
     // "Yearly plan" for 365 days, "20 invoices pack" for 20 invoices; "N days" / "N invoices" for a code outside the packs
     planName(days, invoices) { const p = PLANS.find(x => invoices ? x.invoices === invoices : x.days === days); return p ? p.name : invoices ? invoices + ' invoices' : days + ' days'; },
     upiUri(phone, plan, amount) {
@@ -73,7 +79,10 @@
     // ---- invoice packs
     invoiceQuota() { return n0(Store.get('inv_quota', 0)); },
     invoicesUsed() { return n0(Store.get('inv_used', 0)); },
-    invoicesLeft() { return Math.max(0, this.invoiceQuota() - this.invoicesUsed()); },
+    // The date the pack's invoices can be used until (0: no end date, a pack bought before packs had one)
+    packUntil() { return n0(Store.get('inv_until', 0)); },
+    packExpired() { const u = this.packUntil(); return u > 0 && Date.now() >= u; },
+    invoicesLeft() { return this.packExpired() ? 0 : Math.max(0, this.invoiceQuota() - this.invoicesUsed()); },
     // An account living on an invoice pack: no running time plan or trial, invoices left in the pack
     isLite() { return !this.isTimeActive() && this.invoicesLeft() > 0; },
     // Whether one more invoice / note may be saved; on a time plan or the trial always
@@ -91,22 +100,23 @@
     isYearly() { const now = Date.now(), paid = this.subscriptionUntil(); return this.yearlyUntil() > now || (paid > now && paid - now > 300 * DAY); },
     noteYearly(days, until) { if (n0(days) >= 360 && until > this.yearlyUntil()) Store.set('yearly_until', until); },
     // "Activated till 31/10/2026 (29 days left)", "Subscription valid till 31/03/2027 (180 days)",
-    // "Invoice pack: 17 of 20 invoices left" or "Activation expired on ..." / "Invoice pack used up"
+    // "Invoice pack: 12 of 15 invoices left, valid till 01/01/2027" or "Activation expired on ..." / "Invoice pack used up"
     statusText() {
       const end = this.expiresAt(), left = end - Date.now();
       const d = new Date(end), date = U.pad(d.getDate()) + '/' + U.pad(d.getMonth() + 1) + '/' + d.getFullYear();
       if (left > 0) {
         const days = Math.floor((left + DAY - 1) / DAY);
-        const pack = this.invoiceQuota() > 0 ? '; invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' left for later' : '';
+        const pack = this.invoiceQuota() > 0 && !this.packExpired() ? '; invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' left for later' + (this.packUntil() ? ', valid till ' + dmy(this.packUntil()) : '') : '';
         if (this.isOnTrial()) return 'Activated till ' + date + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' left)' + pack;
         return 'Subscription valid till ' + date + ' (' + days + ' days)' + pack;
       }
-      if (this.invoicesLeft() > 0) return 'Invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' invoices left';
+      if (this.invoicesLeft() > 0) return 'Invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' invoices left' + (this.packUntil() ? ', valid till ' + dmy(this.packUntil()) : '');
+      if (this.packExpired() && this.invoiceQuota() > this.invoicesUsed()) return 'Invoice pack expired on ' + dmy(this.packUntil()) + ' (' + (this.invoiceQuota() - this.invoicesUsed()) + ' invoices unused)';
       if (this.invoiceQuota() > 0) return 'Invoice pack used up (' + this.invoiceQuota() + ' invoices); activation expired on ' + date;
       return 'Activation expired on ' + date;
     },
 
-    // A code issued in Supabase (one use, any account): {days, invoices}; -1 unknown, -2 used, -3 not reachable.
+    // A code issued in Supabase (one use, any account): {days, invoices, packDays}; -1 unknown, -2 used, -3 not reachable.
     // redeem_code_v2 knows both kinds; a project that only has the older redeem_code answers the days.
     async redeemOnline(code) {
       if (!global.Sync || !Sync.isSupabase || !Sync.isSupabase() || !Sync.user) return -3;
@@ -123,7 +133,7 @@
         if (!r || typeof r !== 'object') return -3;
         if (r.error != null) return r.error === -3 ? -3 : r.error;
         const days = n0(r.days), invoices = n0(r.invoices);
-        return days > 0 || invoices > 0 ? { days, invoices } : -1;
+        return days > 0 || invoices > 0 ? { days, invoices, packDays: n0(r.pack_days) } : -1;
       } catch (e) { return -3; }
     },
     // Returns {days, invoices} on success; -1 wrong code, -2 already used, -3 when the code could not be checked
@@ -146,10 +156,18 @@
       this.applyPlan(plan);
       return plan;
     },
-    // What a code or a payment gives: a plan's days follow whatever is still running, a pack's invoices join the balance
+    // What a code or a payment gives: a plan's days follow whatever is still running, a pack's invoices join the
+    // balance and the pack's date moves out to its validity from today. Invoices of a pack already past its date are
+    // gone: they do not come back with the new pack.
     applyPlan(plan) {
       if (n0(plan.days) > 0) { const until = Math.max(Date.now(), this.expiresAt()) + n0(plan.days) * DAY; Store.set('valid_until', until); this.noteYearly(plan.days, until); }
-      if (n0(plan.invoices) > 0) Store.set('inv_quota', this.invoiceQuota() + n0(plan.invoices));
+      if (n0(plan.invoices) > 0) {
+        const lapsed = this.packExpired(), packDays = n0(plan.packDays != null ? plan.packDays : plan.pack_days);
+        if (lapsed) Store.set('inv_used', Math.max(this.invoicesUsed(), this.invoiceQuota()));
+        Store.set('inv_quota', this.invoiceQuota() + n0(plan.invoices));
+        // A pack without a validity of its own (bought before packs had one) after a lapsed pack: ten years
+        if (packDays > 0 || lapsed) Store.set('inv_until', Math.max(this.packUntil(), Date.now() + (packDays || 3650) * DAY));
+      }
     },
 
     // ---- payments through Cashfree, by way of the Supabase Edge Function server/supabase/functions/cashfree.

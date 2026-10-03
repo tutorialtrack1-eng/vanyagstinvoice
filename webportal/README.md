@@ -187,8 +187,9 @@ offer the APK and these iPhone / iPad steps. The native iPhone / iPad app (a she
 ## Activation codes
 
 The plans are a monthly plan (30 days), a yearly plan (365), a 2 years plan (730), a 5 years plan (1825), and
-invoice packs of 20 and 50 invoices. A time plan opens every feature. An invoice pack has no end date; every
-saved invoice, credit note or debit note uses one invoice, the portal then shows only invoicing (New Invoice,
+invoice packs of 15 invoices (valid 3 months) and 40 invoices (valid 6 months). A time plan opens every feature.
+On an invoice pack every saved invoice, credit note or debit note uses one invoice, invoices not used by the pack's
+date lapse, the portal then shows only invoicing (New Invoice,
 Sales, Credit Notes, Debit Notes, Customer, Supplier, Sales Report), and a saved invoice or note is read-only
 (`Sub.isLite`). Codes handed to customers are issued in Supabase and work once on any account:
 `server/supabase/activation.sql` loads ten of each (listed in `server/supabase/activation-codes.txt`). A code tied to one login can also be

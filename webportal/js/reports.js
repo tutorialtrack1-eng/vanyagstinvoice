@@ -126,6 +126,10 @@
     return root;
   }
 
+  // Ratios under the statements: "1.85 : 1" and "23.4%", n/a when there is nothing to divide by
+  const ratio = (a, b) => b > 0.005 ? (a / b).toFixed(2) + ' : 1' : 'n/a';
+  const pct = (a, b) => b > 0.005 ? (a / b * 100).toFixed(1) + '%' : 'n/a';
+
   App.routes.pnl = function (p) {
     const r = p.range || periodRange(3), pl = Books.profitLoss(r.a, r.b), L = [];
     L.push(['INCOME', '', 2]);
@@ -141,6 +145,12 @@
     pl.expensesByCategory.forEach((v, k) => L.push([k, money(v), 0]));
     L.push(['Total Expenses', money(pl.expenses), 1]);
     L.push([pl.netProfit >= 0 ? 'NET PROFIT' : 'NET LOSS', money(Math.abs(pl.netProfit)), 1]);
+    const netSales = pl.sales - pl.salesReturns;
+    L.push(['RATIOS (on sales less credit notes)', '', 2]);
+    L.push(['Gross profit margin', pct(pl.grossProfit, netSales), 0]);
+    L.push(['Net profit margin', pct(pl.netProfit, netSales), 0]);
+    L.push(['Cost of goods to sales', pct(pl.purchasesValue - pl.purchaseReturns, netSales), 0]);
+    L.push(['Expenses to sales', pct(pl.expenses, netSales), 0]);
     if (Biz.chargesGst()) {
       L.push(['GST (not part of profit)', '', 2]);
       L.push(['Output CGST', money(pl.outCgst), 0]); L.push(['Output SGST', money(pl.outSgst), 0]); L.push(['Output IGST', money(pl.outIgst), 0]);
@@ -179,6 +189,15 @@
     if (bs.tdsPayable !== 0) L.push(['TDS payable (deducted from suppliers)', money(bs.tdsPayable), 0]);
     L.push([bs.capital >= 0 ? "Owner's capital (accumulated profit)" : "Owner's capital (accumulated loss)", money(bs.capital), 0]);
     L.push(['Total Liabilities & Capital', money(bs.totalLiabilities + bs.capital), 1]);
+    // Current assets: cash, bank, receivables, stock and a net GST credit; current liabilities: payables, net GST
+    // payable, reverse-charge GST and TDS. Other named accounts (fixed assets, loans) are left out of both.
+    const netGst = bs.outCgst + bs.outSgst + bs.outIgst - bs.inCgst - bs.inSgst - bs.inIgst;
+    const curAssets = bs.cash + bs.bank + bs.receivables + bs.stockValue + Math.max(0, -netGst), curLiab = bs.payables + Math.max(0, netGst) + bs.rcmPayable + bs.tdsPayable;
+    L.push(['RATIOS', '', 2]);
+    L.push(['Current ratio (current assets : current liabilities)', ratio(curAssets, curLiab), 0]);
+    L.push(['Quick ratio (current assets without stock)', ratio(curAssets - bs.stockValue, curLiab), 0]);
+    L.push(['Working capital (current assets less current liabilities)', money(curAssets - curLiab), 0]);
+    L.push(["Debt to equity (liabilities : owner's capital)", ratio(bs.totalLiabilities, bs.capital), 0]);
     statement('Balance Sheet', 'As at ' + asAt + '\nFrom invoices, purchases, expenses and journal entries; stock at last purchase rate.', L, 'Balance_Sheet',
       '<div class="inline"><label class="muted small" for="bsDate">as at</label>' + UI.input('bsDate', U.toIso(asAt), { type: 'date', attrs: ' style="width:170px;min-height:36px"' }) + '</div>');
     $('#bsDate').onchange = e => { if (e.target.value) App.go('balance', { asAt: U.fromIso(e.target.value) }); };

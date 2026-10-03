@@ -27,14 +27,17 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // The packs on sale: the same list as subscription.js / Subscription.java; the price here is what is charged
-const PLANS: Record<string, { name: string; days: number; invoices: number; price: number }> = {
+const PLANS: Record<string, { name: string; days: number; invoices: number; packDays?: number; price: number }> = {
   monthly: { name: "Monthly plan", days: 30, invoices: 0, price: 299 },
   yearly: { name: "Yearly plan", days: 365, invoices: 0, price: 2499 },
   "2years": { name: "2 years plan", days: 730, invoices: 0, price: 3999 },
   "5years": { name: "5 years plan", days: 1825, invoices: 0, price: 7999 },
-  inv20: { name: "20 invoices pack", days: 0, invoices: 20, price: 99 },
-  inv50: { name: "50 invoices pack", days: 0, invoices: 50, price: 199 },
+  // An invoice pack's invoices are to be used within packDays of buying it
+  inv15: { name: "15 invoices pack", days: 0, invoices: 15, packDays: 90, price: 99 },
+  inv40: { name: "40 invoices pack", days: 0, invoices: 40, packDays: 180, price: 199 },
 };
+// Packs sold by app versions up to 1.5 and portals not yet reloaded
+const RETIRED = ["inv20", "inv50"];
 
 const env = (k: string, d = "") => Deno.env.get(k) ?? d;
 const PRODUCTION = env("CASHFREE_ENV", "sandbox") === "production";
@@ -63,7 +66,7 @@ async function grant(orderId: string, raw: unknown) {
   if (!p) return false;
   if (p.status !== "paid") await db.from("payments").update({ status: "paid", paid_at: new Date().toISOString(), raw }).eq("link_id", orderId);
   const { data: g } = await db.from("grants").select("id").eq("link_id", orderId).maybeSingle();
-  if (!g) await db.from("grants").insert({ user_id: p.user_id, link_id: orderId, days: p.days, invoices: p.invoices, note: p.plan + " paid through Cashfree" });
+  if (!g) await db.from("grants").insert({ user_id: p.user_id, link_id: orderId, days: p.days, invoices: p.invoices, pack_days: p.pack_days ?? 0, note: p.plan + " paid through Cashfree" });
   return true;
 }
 
@@ -72,6 +75,7 @@ async function createOrder(req: Request) {
   if (!user) return json({ error: "Sign in first" }, 401);
   const { plan } = await req.json().catch(() => ({}));
   const P = PLANS[plan];
+  if (RETIRED.includes(plan)) return json({ error: "The invoice packs have changed. Update BlitzBook (or reload the portal) to see the packs on sale now." }, 400);
   if (!P) return json({ error: "Unknown plan" }, 400);
   const orderId = "bb_" + crypto.randomUUID().replace(/-/g, "").slice(0, 20);
   const meta = (user.user_metadata ?? {}) as Record<string, string>;
@@ -86,7 +90,7 @@ async function createOrder(req: Request) {
   const cf = await r.json().catch(() => ({}));
   if (!r.ok || !cf.payment_session_id) return json({ error: cf.message ?? "Cashfree did not accept the request", cashfree: cf }, 502);
   const linkUrl = payUrl(cf.payment_session_id, P.name, P.price);
-  await admin().from("payments").insert({ link_id: orderId, user_id: user.id, plan: P.name, days: P.days, invoices: P.invoices, amount: P.price, status: "created", link_url: linkUrl, raw: cf });
+  await admin().from("payments").insert({ link_id: orderId, user_id: user.id, plan: P.name, days: P.days, invoices: P.invoices, pack_days: P.packDays ?? 0, amount: P.price, status: "created", link_url: linkUrl, raw: cf });
   return json({ link_id: orderId, link_url: linkUrl, amount: P.price, plan: P.name });
 }
 

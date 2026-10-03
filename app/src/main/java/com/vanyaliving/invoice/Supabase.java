@@ -286,7 +286,7 @@ final class Supabase {
         return new JSONObject().put("epoch", epoch).put("rev", rev).put("changes", out);
     }
 
-    /** Redeems an activation code issued in Supabase for the signed-in account: {days, invoices} of the plan or pack,
+    /** Redeems an activation code issued in Supabase for the signed-in account: {days, invoices, pack days} of the plan or pack,
      *  or one value: -1 unknown code, -2 already used, -3 not reachable / not signed in. redeem_code_v2 knows both
      *  kinds; a project with only the older redeem_code answers the days. Signs in again when the token has expired. */
     static int[] redeem(Context c, long userId, String code) {
@@ -322,7 +322,7 @@ final class Supabase {
     private interface TokenCall { JSONObject run(String token) throws Exception; }
     private static JSONObject asObject(Object r) throws JSONException { return r instanceof JSONObject ? (JSONObject) r : new JSONObject(String.valueOf(r)); }
 
-    /** {link_id, link_url, amount, plan} for a plan key such as "monthly" or "inv20". */
+    /** {link_id, link_url, amount, plan} for a plan key such as "monthly" or "inv15". */
     static JSONObject createPaymentLink(Context c, long userId, String planKey) throws Exception {
         return withToken(c, userId, token -> asObject(http(c, "POST", "/functions/v1/cashfree?action=link", json("plan", planKey), token, null)));
     }
@@ -330,7 +330,7 @@ final class Supabase {
     static JSONObject paymentStatus(Context c, long userId, String linkId) throws Exception {
         return withToken(c, userId, token -> asObject(http(c, "POST", "/functions/v1/cashfree?action=status", json("link_id", linkId), token, null)));
     }
-    /** Grants from payments not yet applied on any device: [{days, invoices, note}]. */
+    /** Grants from payments not yet applied on any device: [{days, invoices, pack_days, note}]. */
     static JSONArray claimGrants(Context c, long userId) throws Exception {
         Object[] out = new Object[1];
         withToken(c, userId, token -> { out[0] = http(c, "POST", "/rest/v1/rpc/claim_grants", new JSONObject(), token, null); return new JSONObject(); });
@@ -365,7 +365,7 @@ final class Supabase {
         JSONObject o = r instanceof JSONObject ? (JSONObject) r : new JSONObject(String.valueOf(r));
         if (o.has("error")) return new int[]{o.optInt("error", -3)};
         int days = Math.max(0, o.optInt("days", 0)), invoices = Math.max(0, o.optInt("invoices", 0));
-        return days > 0 || invoices > 0 ? new int[]{days, invoices} : new int[]{-1};
+        return days > 0 || invoices > 0 ? new int[]{days, invoices, Math.max(0, o.optInt("pack_days", 0))} : new int[]{-1};
     }
 
     private static String freshToken(Context c, long userId) {

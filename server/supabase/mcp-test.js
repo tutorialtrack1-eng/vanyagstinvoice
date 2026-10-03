@@ -201,6 +201,12 @@ const canon = (v) => Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v &
   sub.d = { registered_at: Date.now() - 90 * 86400000, valid_until: Date.now() - 86400000, used_codes: [], inv_quota: 20, inv_used: 19, yearly_until: 0 };
   r = await tool(writeKey, 'create_invoice', { items: [{ name: 'Air Fryer', qty: 1 }] });
   check('on an invoice pack an invoice uses one of the pack', r.saved && r.invoice_pack.left === 0 && sub !== books.find(b => b.user_id === U1 && b.k === 'sub') && books.find(b => b.user_id === U1 && b.k === 'sub').d.inv_used === 20 && books.find(b => b.user_id === U1 && b.k === 'sub').d.inv_quota === 20, r);
+  sub.d = books.find(b => b.user_id === U1 && b.k === 'sub').d;
+  books.find(b => b.user_id === U1 && b.k === 'sub').d = Object.assign({}, sub.d, { inv_quota: 40, inv_until: Date.now() + 86400000 });
+  check('a pack inside its validity still works', (await tool(readKey, 'get_company')).subscription.kind === 'invoice pack' && (await tool(readKey, 'list_items')).total > 0);
+  books.find(b => b.user_id === U1 && b.k === 'sub').d = Object.assign({}, sub.d, { inv_quota: 40, inv_until: Date.now() - 86400000 });
+  check('a pack past its date has lapsed', (await tool(readKey, 'get_company')).subscription.kind === 'expired' && /run out/.test((await tool(writeKey, 'create_invoice', { items: [{ name: 'Air Fryer', qty: 1 }] })).error));
+  books.find(b => b.user_id === U1 && b.k === 'sub').d = sub.d;
   const n = books.length;
   check('a used-up account is refused, reading and saving', /run out/.test((await tool(writeKey, 'create_invoice', { items: [{ name: 'Air Fryer', qty: 1 }] })).error) && /run out/.test((await tool(readKey, 'list_invoices')).error) && books.length === n);
   check('but can still see where it stands', (await tool(readKey, 'get_company')).subscription.kind === 'expired');

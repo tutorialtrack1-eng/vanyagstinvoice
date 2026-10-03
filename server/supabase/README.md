@@ -75,9 +75,9 @@ sync server is not needed.
 Run `activation.sql` in the SQL Editor the same way (run it again after every update of the file: it only adds
 what is missing). It creates `public.activation_codes`, the `redeem_code` and `redeem_code_v2` functions, and
 loads 60 codes (also listed in `activation-codes.txt`): ten each of the monthly plan (30 days), the yearly plan
-(365), the 2 years plan (730), the 5 years plan (1825), the 20 invoices pack and the 50 invoices pack. A time
-plan opens every feature; an invoice pack has no end date, every saved invoice, credit note or debit note uses
-one of its invoices, only the invoicing features are offered on it, and a saved invoice or note cannot be
+(365), the 2 years plan (730), the 5 years plan (1825), the 15 invoices pack (valid 3 months) and the 40 invoices
+pack (valid 6 months). A time plan opens every feature; on an invoice pack every saved invoice, credit note or debit
+note uses one of its invoices, invoices not used by the pack's date lapse, only the invoicing features are offered on it, and a saved invoice or note cannot be
 changed or deleted. A code works once, on any account, and its days are added to the end of the current validity (trial or plan); a lapsed account starts from the day the code is entered. **The codes only work once
 this SQL has been run in the project**: until then the app and the portal answer "Invalid activation code".
 To issue more, insert rows the same way (16 letters / digits, uppercase, no dashes). **Table Editor →

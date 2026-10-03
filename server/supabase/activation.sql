@@ -13,8 +13,10 @@ create table if not exists public.activation_codes (
 alter table public.activation_codes enable row level security;
 
 -- Codes come in two kinds: a plan for a number of days, or a pack of invoices (credit and debit notes count
--- too) with no end date. invoices is 0 for a time plan, days is 0 for an invoice pack.
+-- too) to be used within pack_days of entering the code. invoices and pack_days are 0 for a time plan, days is 0
+-- for an invoice pack.
 alter table public.activation_codes add column if not exists invoices int not null default 0;
+alter table public.activation_codes add column if not exists pack_days int not null default 0;
 
 -- Returns the plan length in days; -1 unknown code, -2 already used, -3 not signed in. Older clients: an invoice
 -- pack answers 0 here, which they treat as an unknown code, so they do not swallow a pack they cannot count.
@@ -34,7 +36,7 @@ begin
 end $$;
 grant execute on function public.redeem_code(text) to authenticated;
 
--- The same for clients that know both kinds: {"days": 30, "invoices": 0} or {"days": 0, "invoices": 20};
+-- The same for clients that know both kinds: {"days": 30, "invoices": 0, "pack_days": 0} or {"days": 0, "invoices": 15, "pack_days": 90};
 -- {"error": -1} unknown code, {"error": -2} already used, {"error": -3} not signed in
 create or replace function public.redeem_code_v2(code_in text) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -47,14 +49,14 @@ begin
   if not found then return jsonb_build_object('error', -1); end if;
   if c.used_by is not null then return jsonb_build_object('error', -2); end if;
   update public.activation_codes set used_by = auth.uid(), used_at = now() where code = k;
-  return jsonb_build_object('days', c.days, 'invoices', c.invoices);
+  return jsonb_build_object('days', c.days, 'invoices', c.invoices, 'pack_days', c.pack_days);
 end $$;
 grant execute on function public.redeem_code_v2(text) to authenticated;
 
 -- The codes handed out (made 02/10/2026): ten of each plan. Hand one out per customer; it works once. Add more rows
 -- the same way (16 letters / digits, no dashes in the table; the app and the portal ignore dashes when a code is typed).
--- Plans: monthly 30 days, yearly 365, 2 years 730, 5 years 1825; packs of 20 and 50 invoices. Codes loaded by an earlier
--- version of this file stay valid.
+-- Plans: monthly 30 days, yearly 365, 2 years 730, 5 years 1825; packs of 15 invoices (3 months) and 40 invoices
+-- (6 months). Plan codes loaded by an earlier version of this file stay valid.
 insert into public.activation_codes (code, days, note) values
   ('LVH63LWVPB5FY42U',   30, 'Monthly plan - LVH6-3LWV-PB5F-Y42U'),
   ('P8MT3SD4TXQJ5PAK',   30, 'Monthly plan - P8MT-3SD4-TXQJ-5PAK'),
@@ -98,27 +100,30 @@ insert into public.activation_codes (code, days, note) values
   ('EVYBQC3XDLB8JTBA', 1825, '5 years plan - EVYB-QC3X-DLB8-JTBA')
 on conflict (code) do nothing;
 
--- Invoice packs (made 02/10/2026): ten of 20 invoices and ten of 50. A pack has no end date; every saved invoice,
--- credit note or debit note uses one of its invoices.
-insert into public.activation_codes (code, days, invoices, note) values
-  ('6Q28EPU7S2CU68MA', 0, 20, '20 invoices pack - 6Q28-EPU7-S2CU-68MA'),
-  ('7CPH6XGZ2YHMYQZ5', 0, 20, '20 invoices pack - 7CPH-6XGZ-2YHM-YQZ5'),
-  ('XEW8GXCRKZ9HMTWY', 0, 20, '20 invoices pack - XEW8-GXCR-KZ9H-MTWY'),
-  ('Z3L2LARM7MYPPN2E', 0, 20, '20 invoices pack - Z3L2-LARM-7MYP-PN2E'),
-  ('ZRWBG7DRHDJ27LJ9', 0, 20, '20 invoices pack - ZRWB-G7DR-HDJ2-7LJ9'),
-  ('5WGRKY9S2J4P8PKR', 0, 20, '20 invoices pack - 5WGR-KY9S-2J4P-8PKR'),
-  ('8R8MFVB2J38ANZSE', 0, 20, '20 invoices pack - 8R8M-FVB2-J38A-NZSE'),
-  ('FRWENKCRW44QLU4F', 0, 20, '20 invoices pack - FRWE-NKCR-W44Q-LU4F'),
-  ('P6CSJENTV56SPV86', 0, 20, '20 invoices pack - P6CS-JENT-V56S-PV86'),
-  ('AUKLQ4LY5RAPKVW8', 0, 20, '20 invoices pack - AUKL-Q4LY-5RAP-KVW8'),
-  ('S2LEAZ4ZE6VEAXAG', 0, 50, '50 invoices pack - S2LE-AZ4Z-E6VE-AXAG'),
-  ('LKQ5KZRJDVKM2ME6', 0, 50, '50 invoices pack - LKQ5-KZRJ-DVKM-2ME6'),
-  ('SWHPKWKHA5S6ZZ4W', 0, 50, '50 invoices pack - SWHP-KWKH-A5S6-ZZ4W'),
-  ('QGAN7SDSA853PJC4', 0, 50, '50 invoices pack - QGAN-7SDS-A853-PJC4'),
-  ('X4Q8TEFV4NUZBSR5', 0, 50, '50 invoices pack - X4Q8-TEFV-4NUZ-BSR5'),
-  ('WTP3MUV3XGGEJPTJ', 0, 50, '50 invoices pack - WTP3-MUV3-XGGE-JPTJ'),
-  ('QCJ7JWX5LJAF8HK3', 0, 50, '50 invoices pack - QCJ7-JWX5-LJAF-8HK3'),
-  ('C6MYQWD2PQBTNA88', 0, 50, '50 invoices pack - C6MY-QWD2-PQBT-NA88'),
-  ('TQR82Q6THAJM6DT3', 0, 50, '50 invoices pack - TQR8-2Q6T-HAJM-6DT3'),
-  ('SNHDZ832QSU24LP9', 0, 50, '50 invoices pack - SNHD-Z832-QSU2-4LP9')
+-- Invoice packs (made 03/10/2026): ten of 15 invoices, to be used within 3 months (90 days), and ten of 40 invoices,
+-- within 6 months (180 days). Every saved invoice, credit note or debit note uses one of the pack's invoices; what is
+-- not used by then lapses. The packs of 20 and 50 invoices are no longer sold: their unused codes are withdrawn
+-- (a pack already entered on an account stays as it is).
+delete from public.activation_codes where invoices in (20, 50) and used_by is null;
+insert into public.activation_codes (code, days, invoices, pack_days, note) values
+  ('Q2FT669XMBSSRA9W', 0, 15, 90, '15 invoices pack - Q2FT-669X-MBSS-RA9W'),
+  ('8P4CFUGJD34PT4JV', 0, 15, 90, '15 invoices pack - 8P4C-FUGJ-D34P-T4JV'),
+  ('KG9MGCEPNAN93UNJ', 0, 15, 90, '15 invoices pack - KG9M-GCEP-NAN9-3UNJ'),
+  ('C9ZY6XLFYYEJGAD9', 0, 15, 90, '15 invoices pack - C9ZY-6XLF-YYEJ-GAD9'),
+  ('CUPKQSHBQNEE6UH8', 0, 15, 90, '15 invoices pack - CUPK-QSHB-QNEE-6UH8'),
+  ('RWGQPTXWLRMFGABS', 0, 15, 90, '15 invoices pack - RWGQ-PTXW-LRMF-GABS'),
+  ('3T5TW54U9KPKQB4N', 0, 15, 90, '15 invoices pack - 3T5T-W54U-9KPK-QB4N'),
+  ('39XK3BF2TPNRDR3G', 0, 15, 90, '15 invoices pack - 39XK-3BF2-TPNR-DR3G'),
+  ('FYGBTCTE7N4TQBQL', 0, 15, 90, '15 invoices pack - FYGB-TCTE-7N4T-QBQL'),
+  ('JXYLSL9E9GNG9ZPS', 0, 15, 90, '15 invoices pack - JXYL-SL9E-9GNG-9ZPS'),
+  ('MES5QRZZ8J8DGNZS', 0, 40, 180, '40 invoices pack - MES5-QRZZ-8J8D-GNZS'),
+  ('P33LFWX6YFBRJ65W', 0, 40, 180, '40 invoices pack - P33L-FWX6-YFBR-J65W'),
+  ('94PT8YPKBPYQEHHE', 0, 40, 180, '40 invoices pack - 94PT-8YPK-BPYQ-EHHE'),
+  ('CYTF3GZS6F7UP97L', 0, 40, 180, '40 invoices pack - CYTF-3GZS-6F7U-P97L'),
+  ('57W4F8XSQGTT5K69', 0, 40, 180, '40 invoices pack - 57W4-F8XS-QGTT-5K69'),
+  ('JFX6GP8CU9E3GFXJ', 0, 40, 180, '40 invoices pack - JFX6-GP8C-U9E3-GFXJ'),
+  ('JUR6MSW2T3DVYQCV', 0, 40, 180, '40 invoices pack - JUR6-MSW2-T3DV-YQCV'),
+  ('VTHQPF7A3UZU6LL4', 0, 40, 180, '40 invoices pack - VTHQ-PF7A-3UZU-6LL4'),
+  ('U2CHC9BWKG3TXFJ7', 0, 40, 180, '40 invoices pack - U2CH-C9BW-KG3T-XFJ7'),
+  ('YQSNFAZ5VFEJNAMM', 0, 40, 180, '40 invoices pack - YQSN-FAZ5-VFEJ-NAMM')
 on conflict (code) do nothing;

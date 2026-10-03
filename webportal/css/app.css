@@ -445,6 +445,9 @@ table.list td.left { text-align: left; }
 :root[data-theme="dark"] .card > .hd { background: linear-gradient(90deg, #1B2142, #221B45 60%, #2A1B3A); color: var(--head-text); border-bottom-color: var(--line); }
 :root[data-theme="dark"] input:not([type]), :root[data-theme="dark"] input[type=text], :root[data-theme="dark"] input[type=number], :root[data-theme="dark"] input[type=date], :root[data-theme="dark"] input[type=password],
 :root[data-theme="dark"] input[type=email], :root[data-theme="dark"] input[type=tel], :root[data-theme="dark"] select, :root[data-theme="dark"] textarea { background: var(--field); color: var(--text); color-scheme: dark; }
+/* The lists that drop down from an invoice row (item names, GST rate, unit) stay white with dark text in dark mode */
+:root[data-theme="dark"] .items input[list], :root[data-theme="dark"] .items select { color-scheme: light; }
+:root[data-theme="dark"] .items select option { background: #FFFFFF; color: #0F172A; }
 :root[data-theme="dark"] input:disabled, :root[data-theme="dark"] select:disabled, :root[data-theme="dark"] textarea:disabled, :root[data-theme="dark"] input[readonly] { color: #94A3B8; }
 :root[data-theme="dark"] input.err { background: rgba(248,113,113,.12); }
 :root[data-theme="dark"] .step, :root[data-theme="dark"] .items .subbtn { background: var(--field); }

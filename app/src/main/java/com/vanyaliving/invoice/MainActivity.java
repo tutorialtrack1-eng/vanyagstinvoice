@@ -702,7 +702,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 StringBuilder what = new StringBuilder();
                 for (int i = 0; i < grants.length(); i++) {
                     JSONObject g = grants.getJSONObject(i);
-                    Subscription.applyGrant(this, userId, g.optInt("days", 0), g.optInt("invoices", 0));
+                    Subscription.applyGrant(this, userId, g.optInt("days", 0), g.optInt("invoices", 0), g.optInt("pack_days", 0));
                     if (what.length() > 0) what.append(", ");
                     what.append(g.optInt("days", 0) > 0 ? g.optInt("days", 0) + " days" : g.optInt("invoices", 0) + " invoices");
                 }
@@ -8125,6 +8125,10 @@ public class MainActivity extends Activity implements Sync.Listener {
         StatementLine(String label, String value, int style) { this.label = label; this.value = value; this.style = style; }
     }
 
+    // Ratios under the statements: "1.85 : 1" and "23.4%", n/a when there is nothing to divide by
+    private static String ratioText(double a, double b) { return b > 0.005 ? String.format(Locale.US, "%.2f : 1", a / b) : "n/a"; }
+    private static String pctText(double a, double b) { return b > 0.005 ? String.format(Locale.US, "%.1f%%", a / b * 100) : "n/a"; }
+
     private void showProfitAndLoss() { pickPeriod("Profit & Loss", this::showProfitAndLossReport); }
 
     private void showProfitAndLossReport(String from, String to) {
@@ -8144,6 +8148,11 @@ public class MainActivity extends Activity implements Sync.Listener {
         lines.add(new StatementLine("Total Expenses", money(pl.expenses()), 1));
         double net = pl.netProfit();
         lines.add(new StatementLine(net >= 0 ? "NET PROFIT" : "NET LOSS", money(Math.abs(net)), 1));
+        lines.add(new StatementLine("RATIOS (on sales less credit notes)", "", 2));
+        lines.add(new StatementLine("Gross profit margin", pctText(pl.grossProfit(), pl.netSales()), 0));
+        lines.add(new StatementLine("Net profit margin", pctText(net, pl.netSales()), 0));
+        lines.add(new StatementLine("Cost of goods to sales", pctText(pl.netPurchases(), pl.netSales()), 0));
+        lines.add(new StatementLine("Expenses to sales", pctText(pl.expenses(), pl.netSales()), 0));
         if (chargesGst()) {
             lines.add(new StatementLine("GST (not part of profit)", "", 2));
             lines.add(new StatementLine("Output CGST", money(pl.outCgst), 0));
@@ -8202,6 +8211,15 @@ public class MainActivity extends Activity implements Sync.Listener {
         double cap = bs.capital();
         lines.add(new StatementLine(cap >= 0 ? "Owner's capital (accumulated profit)" : "Owner's capital (accumulated loss)", money(cap), 0));
         lines.add(new StatementLine("Total Liabilities & Capital", money(bs.totalLiabilitiesBeforeCapital() + cap), 1));
+        // Current assets: cash, bank, receivables, stock and a net GST credit; current liabilities: payables, net GST
+        // payable, reverse-charge GST and TDS. Other named accounts (fixed assets, loans) are left out of both.
+        double netGst = bs.outCgst + bs.outSgst + bs.outIgst - bs.inCgst - bs.inSgst - bs.inIgst;
+        double curAssets = bs.cash + bs.bank + bs.receivables + bs.stockValue + Math.max(0, -netGst), curLiab = bs.payables + Math.max(0, netGst) + bs.rcmPayable + bs.tdsPayable;
+        lines.add(new StatementLine("RATIOS", "", 2));
+        lines.add(new StatementLine("Current ratio (current assets : current liabilities)", ratioText(curAssets, curLiab), 0));
+        lines.add(new StatementLine("Quick ratio (current assets without stock)", ratioText(curAssets - bs.stockValue, curLiab), 0));
+        lines.add(new StatementLine("Working capital (current assets less current liabilities)", money(curAssets - curLiab), 0));
+        lines.add(new StatementLine("Debt to equity (liabilities : owner's capital)", ratioText(bs.totalLiabilitiesBeforeCapital(), cap), 0));
         showStatement("Balance Sheet", "As at " + asAt + "\nFrom invoices, purchases, expenses and journal entries; stock at last purchase rate.", lines, "Balance_Sheet");
     }
 

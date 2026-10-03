@@ -665,7 +665,7 @@
       // The month's figures close the page
       '<div class="section-title">At a glance</div><div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
       stat('stCount', 'receipt', '#059669', '#34D399', 'Invoices', month.length, 'Raised this month') +
-      (Sub.isLite() ? stat('stPack', 'star', '#B45309', '#F59E0B', 'Invoices left', Sub.invoicesLeft() + ' of ' + Sub.invoiceQuota(), 'In your invoice pack · credit and debit notes count · tap to buy more', 'subscription')
+      (Sub.isLite() ? stat('stPack', 'star', '#B45309', '#F59E0B', 'Invoices left', Sub.invoicesLeft() + ' of ' + Sub.invoiceQuota(), (Sub.packUntil() ? 'Use by ' + U.pad(new Date(Sub.packUntil()).getDate()) + '/' + U.pad(new Date(Sub.packUntil()).getMonth() + 1) + '/' + new Date(Sub.packUntil()).getFullYear() : 'In your invoice pack') + ' · credit and debit notes count · tap to buy more', 'subscription')
         : stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging')) + '</div>');
     countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
     $$('[data-go]', root).forEach(el => el.onclick = () => {
@@ -823,8 +823,8 @@
     },
     payByUpi(plan) {
       const amount = plan.price, phone = App.identity(), email = App.user.email || '', uri = Sub.upiUri(phone, plan, amount);
-      const what = plan.invoices ? plan.invoices + ' invoices, no end date' : plan.days + ' days', tag = plan.invoices ? plan.invoices + 'inv' : plan.days + 'd';
-      UI.modal({ title: 'Pay Rs ' + amount + ' by UPI', body: '<p>Plan: <b>' + esc(plan.name) + '</b> (' + what + ') for <b>Rs ' + amount + '</b>.</p>' + (plan.invoices ? '<p class="hint">An invoice pack offers the invoicing features only; every saved invoice, credit note or debit note uses one invoice.</p>' : '') + '<p>Pay to <b>' + esc(Sub.VENDOR_UPI_ID) + '</b> (' + esc(Sub.VENDOR_NAME) + ') with the note <b>' + esc(Sub.VENDOR_NAME + ' ' + tag + ' ' + phone) + '</b>. On a phone the button below opens your UPI app (Google Pay, PhonePe, Paytm or your bank\'s app).</p>' +
+      const what = Sub.planWhat(plan), tag = plan.invoices ? plan.invoices + 'inv' : plan.days + 'd';
+      UI.modal({ title: 'Pay Rs ' + amount + ' by UPI', body: '<p>Plan: <b>' + esc(plan.name) + '</b> (' + what + ') for <b>Rs ' + amount + '</b>.</p>' + (plan.invoices ? '<p class="hint">An invoice pack offers the invoicing features only; every saved invoice, credit note or debit note uses one invoice, and invoices not used within ' + esc(Sub.packValidity(plan.packDays)) + ' lapse.</p>' : '') + '<p>Pay to <b>' + esc(Sub.VENDOR_UPI_ID) + '</b> (' + esc(Sub.VENDOR_NAME) + ') with the note <b>' + esc(Sub.VENDOR_NAME + ' ' + tag + ' ' + phone) + '</b>. On a phone the button below opens your UPI app (Google Pay, PhonePe, Paytm or your bank\'s app).</p>' +
         '<p><a class="btn blue" href="' + esc(uri) + '">Open UPI app</a></p>' + UI.field('Transaction Reference', UI.input('sRef', '', { placeholder: 'UPI transaction ID / UTR' })),
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'I have paid', cls: 'green', onClick: async (bg) => {
           const ref = UI.val('sRef', bg).trim();
