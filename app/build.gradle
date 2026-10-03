@@ -9,8 +9,8 @@ android {
         minSdk 29
         targetSdk 35
         // Bump both (and webportal/app-version.json) whenever a new APK is published: the app compares versionCode
-        versionCode 5
-        versionName '1.4'
+        versionCode 6
+        versionName '1.5'
     }
 }
 

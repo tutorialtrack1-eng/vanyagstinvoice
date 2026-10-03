@@ -1,6 +1,6 @@
 {
-  "versionCode": 5,
-  "versionName": "1.4",
+  "versionCode": 6,
+  "versionName": "1.5",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "Delivery challans, and a new invoice or challan is dated today."
+  "notes": "AI Access: connect Claude or another AI assistant to your books with an API key."
 }
