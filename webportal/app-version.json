@@ -1,6 +1,6 @@
 {
-  "versionCode": 6,
-  "versionName": "1.5",
+  "versionCode": 7,
+  "versionName": "1.6",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "AI Access: connect Claude or another AI assistant to your books with an API key."
+  "notes": "Invoice packs are now 15 invoices (3 months) and 40 invoices (6 months); ratios under Profit & Loss and Balance Sheet."
 }
