@@ -20,11 +20,15 @@
     { name: '2 years plan', days: 730, invoices: 0, price: 3999 },
     { name: '5 years plan', days: 1825, invoices: 0, price: 7999 },
     { name: '15 invoices pack', days: 0, invoices: 15, packDays: 90, price: 99 },
-    { name: '40 invoices pack', days: 0, invoices: 40, packDays: 180, price: 199 }
+    { name: '40 invoices pack', days: 0, invoices: 40, packDays: 180, price: 199 },
+    // Full access: accounts and HR & payroll together (hr.js); the days count like a time plan and set full_until
+    { name: 'Full access monthly', days: 30, invoices: 0, full: true, price: 599 },
+    { name: 'Full access yearly', days: 365, invoices: 0, full: true, price: 4999 },
+    { name: 'Full access 2 years', days: 730, invoices: 0, full: true, price: 7999 }
   ];
   const PLAN_NAMES = PLANS.map(p => p.name), PLAN_DAYS = PLANS.map(p => p.days), PLAN_PRICES = PLANS.map(p => p.price), PLAN_INVOICES = PLANS.map(p => p.invoices);
   // The plan names the payment function knows (server/supabase/functions/cashfree), in the same order
-  const PLAN_KEYS = ['monthly', 'yearly', '2years', '5years', 'inv15', 'inv40'];
+  const PLAN_KEYS = ['monthly', 'yearly', '2years', '5years', 'inv15', 'inv40', 'fullmonthly', 'fullyearly', 'full2years'];
   const SECRET = 'VANYA-INVOICE-BOOK-2026';
   const VENDOR_UPI_ID = 'blitzbook@upi';
   const VENDOR_NAME = 'BlitzBook';
@@ -50,7 +54,7 @@
     planLabel(i) { const p = PLANS[i]; return p.name + '  (' + this.planWhat(p) + ')  -  Rs ' + p.price; },
     // "3 months" for 90 days; what a plan gives: "365 days" or "15 invoices, valid 3 months"
     packValidity(days) { days = n0(days); return !days ? 'no end date' : days % 30 === 0 ? (days / 30) + (days === 30 ? ' month' : ' months') : days + ' days'; },
-    planWhat(p) { return p.invoices ? p.invoices + ' invoices, ' + (p.packDays ? 'valid ' + this.packValidity(p.packDays) : 'no end date') : p.days + ' days'; },
+    planWhat(p) { return p.invoices ? p.invoices + ' invoices, ' + (p.packDays ? 'valid ' + this.packValidity(p.packDays) : 'no end date') : p.days + ' days' + (p.full ? ', accounts + HR & payroll' : ''); },
     // "Yearly plan" for 365 days, "20 invoices pack" for 20 invoices; "N days" / "N invoices" for a code outside the packs
     planName(days, invoices) { const p = PLANS.find(x => invoices ? x.invoices === invoices : x.days === days); return p ? p.name : invoices ? invoices + ' invoices' : days + ' days'; },
     upiUri(phone, plan, amount) {
@@ -99,6 +103,11 @@
     yearlyUntil() { return n0(Store.get('yearly_until', 0)); },
     isYearly() { const now = Date.now(), paid = this.subscriptionUntil(); return this.yearlyUntil() > now || (paid > now && paid - now > 300 * DAY); },
     noteYearly(days, until) { if (n0(days) >= 360 && until > this.yearlyUntil()) Store.set('yearly_until', until); },
+    // ---- Full access plans: HR & payroll (hr.js) for accounts on one, and during the trial so it can be tried.
+    // full_until is set when such a plan is applied here or arrives by sync; members run on the owner's record.
+    fullUntil() { return n0(Store.get('full_until', 0)); },
+    isFull() { return this.fullUntil() > Date.now() || (this.isOnTrial() && this.isTimeActive()); },
+    noteFull(plan, until) { if ((plan.full === true || plan.full === 'true') && until > this.fullUntil()) Store.set('full_until', until); },
     // "Activated till 31/10/2026 (29 days left)", "Subscription valid till 31/03/2027 (180 days)",
     // "Invoice pack: 12 of 15 invoices left, valid till 01/01/2027" or "Activation expired on ..." / "Invoice pack used up"
     statusText() {
@@ -107,8 +116,9 @@
       if (left > 0) {
         const days = Math.floor((left + DAY - 1) / DAY);
         const pack = this.invoiceQuota() > 0 && !this.packExpired() ? '; invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' left for later' + (this.packUntil() ? ', valid till ' + dmy(this.packUntil()) : '') : '';
-        if (this.isOnTrial()) return 'Activated till ' + date + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' left)' + pack;
-        return 'Subscription valid till ' + date + ' (' + days + ' days)' + pack;
+        const full = this.fullUntil() > Date.now() ? '; Full access (HR & payroll) till ' + dmy(this.fullUntil()) : '';
+        if (this.isOnTrial()) return 'Activated till ' + date + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' left, with Full access to try)' + pack;
+        return 'Subscription valid till ' + date + ' (' + days + ' days)' + full + pack;
       }
       if (this.invoicesLeft() > 0) return 'Invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' invoices left' + (this.packUntil() ? ', valid till ' + dmy(this.packUntil()) : '');
       if (this.packExpired() && this.invoiceQuota() > this.invoicesUsed()) return 'Invoice pack expired on ' + dmy(this.packUntil()) + ' (' + (this.invoiceQuota() - this.invoicesUsed()) + ' invoices unused)';
@@ -160,7 +170,7 @@
     // balance and the pack's date moves out to its validity from today. Invoices of a pack already past its date are
     // gone: they do not come back with the new pack.
     applyPlan(plan) {
-      if (n0(plan.days) > 0) { const until = Math.max(Date.now(), this.expiresAt()) + n0(plan.days) * DAY; Store.set('valid_until', until); this.noteYearly(plan.days, until); }
+      if (n0(plan.days) > 0) { const until = Math.max(Date.now(), this.expiresAt()) + n0(plan.days) * DAY; Store.set('valid_until', until); this.noteYearly(plan.days, until); this.noteFull(plan, until); }
       if (n0(plan.invoices) > 0) {
         const lapsed = this.packExpired(), packDays = n0(plan.packDays != null ? plan.packDays : plan.pack_days);
         if (lapsed) Store.set('inv_used', Math.max(this.invoicesUsed(), this.invoiceQuota()));

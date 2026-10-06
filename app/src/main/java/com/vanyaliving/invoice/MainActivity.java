@@ -673,19 +673,19 @@ public class MainActivity extends Activity implements Sync.Listener {
         String[] labels = new String[Subscription.PLAN_DAYS.length];
         for (int i = 0; i < labels.length; i++) labels[i] = Subscription.planLabel(i);
         new AlertDialog.Builder(this).setTitle("Choose a Plan")
-                .setItems(labels, (d, w) -> startUpiPayment(Subscription.PLAN_DAYS[w], Subscription.PLAN_INVOICES[w], Subscription.PLAN_PRICES[w]))
+                .setItems(labels, (d, w) -> startUpiPayment(Subscription.PLAN_DAYS[w], Subscription.PLAN_INVOICES[w], Subscription.PLAN_FULL[w], Subscription.PLAN_PRICES[w]))
                 .setNegativeButton("Cancel", null).show();
     }
 
     // Pay through Cashfree when the payment function is there: the browser opens Cashfree's page (UPI, card, net
     // banking); on return the app asks for the outcome and collects what was bought. The UPI deep link with the
     // vendor's manual code is the fallback.
-    private void startUpiPayment(int days, int invoices, int amount) {
+    private void startUpiPayment(int days, int invoices, boolean full, int amount) {
         if (Supabase.enabled(this)) {
             Toast.makeText(this, "Opening the secure payment page...", Toast.LENGTH_SHORT).show();
             new Thread(() -> {
                 try {
-                    JSONObject r = Supabase.createPaymentLink(this, userId, Subscription.planKey(days, invoices));
+                    JSONObject r = Supabase.createPaymentLink(this, userId, Subscription.planKey(days, invoices, full));
                     String url = r.optString("link_url", ""), linkId = r.optString("link_id", "");
                     if (url.isEmpty()) throw new Exception(r.optString("error", "No payment link"));
                     Subscription.rememberLink(this, userId, linkId);
@@ -722,9 +722,9 @@ public class MainActivity extends Activity implements Sync.Listener {
                 StringBuilder what = new StringBuilder();
                 for (int i = 0; i < grants.length(); i++) {
                     JSONObject g = grants.getJSONObject(i);
-                    Subscription.applyGrant(this, userId, g.optInt("days", 0), g.optInt("invoices", 0), g.optInt("pack_days", 0));
+                    Subscription.applyGrant(this, userId, g.optInt("days", 0), g.optInt("invoices", 0), g.optInt("pack_days", 0), g.optBoolean("full", false));
                     if (what.length() > 0) what.append(", ");
-                    what.append(g.optInt("days", 0) > 0 ? g.optInt("days", 0) + " days" : g.optInt("invoices", 0) + " invoices");
+                    what.append(g.optInt("days", 0) > 0 ? g.optInt("days", 0) + " days" + (g.optBoolean("full", false) ? " of Full access" : "") : g.optInt("invoices", 0) + " invoices");
                 }
                 runOnUiThread(() -> {
                     if (isFinishing()) return;

@@ -62,6 +62,11 @@ const until = async (page, fn, ms) => { const t0 = Date.now(); while (Date.now()
 
   console.log('HR: employees, attendance, payroll');
   check('HR is in the top bar with its six screens', await page.evaluate(() => Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).join()).then(s => s.includes('Employees,Attendance,Timesheets,Reimbursements,Payroll,HR Settings')));
+  await page.evaluate(() => App.go('hrsettings')); await page.waitForSelector('.modal .mh');
+  check('on a plain yearly plan the HR screens show the Full access lock', (await page.textContent('.modal .mh')).includes('Full access subscription required'));
+  await page.click('.modal .mf .btn.outline');
+  await page.evaluate(() => { Store.set('full_until', Date.now() + 400 * 86400000); App.checkSubscription(); });
+  check('with a Full access plan the subscription text says so', await page.evaluate(() => Sub.isFull() && Sub.statusText().includes('Full access')));
   await page.evaluate(() => App.go('hrsettings')); await page.waitForSelector('#sSave');
   await page.selectOption('#sPt', 'Telangana'); await page.fill('#sHolDate', '2026-10-02'); await page.fill('#sHolName', 'Gandhi Jayanti'); await page.click('#sHolAdd'); await page.waitForSelector('[data-hd]');
   await page.click('#sSave'); await page.waitForSelector('.toast');

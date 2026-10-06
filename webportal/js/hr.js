@@ -1,7 +1,8 @@
 /* BlitzBook web portal - HR & payroll: employees (monthly salaried or hourly), attendance, weekly timesheets with
    manager approval, reimbursements, monthly payroll with the statutory deductions (PF, ESI, professional tax, TDS),
    payslips, offer letters, the PF / ESI / PT summaries for the challans, a bank advice, and the posting of a finalised
-   month into the books as a journal voucher. HR Settings hold the rates, the ceilings, the state for PT, working
+   month into the books as a journal voucher. The module comes with the Full access plans (subscription.js isFull;
+   the trial has it too). HR Settings hold the rates, the ceilings, the state for PT, working
    hours, the HRA rule and the holiday list. The records sync like the rest of the books ("emp:", "att:", "ts:",
    "rb:", "pay:", "hr"); the HR and Manager roles of a company (companies.js) open only these screens, and only a
    manager, an admin or the owner approves timesheets and reimbursements: the server (companies.sql) lets the HR
@@ -61,8 +62,28 @@
     attendance(empId, month) { return Store.list('attendance').find(a => a.empId === empId && a.month === month) || null; },
     timesheet(empId, week) { return Store.list('timesheets').find(t => t.empId === empId && t.week === week) || null; },
     payroll(month) { return Store.list('payroll').find(p => p.month === month) || null; },
-    // Who may approve timesheets and reimbursements: the owner, an admin or a manager (HR enters, a manager approves)
-    canApprove() { const r = Companies.role(); return r === 'owner' || r === 'admin' || r === 'manager'; },
+    /* Who may approve a timesheet or a claim of an employee: never the employee themselves (the login whose mobile or
+       email is on the employee record), otherwise the employee's reporting manager and the managers above them (any
+       login with HR access), or the roles above (owner, admin, manager). The owner is the top and is never held to
+       the self rule. The server (companies.sql, hr_relation) applies the same rule. */
+    myEmployee() { const u = App.user || {}, ph = String(u.phone || '').trim(), em = String(u.email || '').trim().toLowerCase(); if (!ph && !em) return null; return this.employees(true).find(e => (ph && String(e.phone || '').trim() === ph) || (em && String(e.email || '').trim().toLowerCase() === em)) || null; },
+    // 'self' | 'manager' (somewhere up the employee's reporting line) | ''
+    relation(emp) { const me = this.myEmployee(); if (!me || !emp) return ''; let cur = emp, i = 0; while (cur && i < 8) { if (cur.id === me.id) return i === 0 ? 'self' : 'manager'; cur = cur.managerId ? this.employee(cur.managerId) : null; i++; } return ''; },
+    canApprove(emp) {
+      const r = Companies.role(); if (r === 'owner') return true;
+      const rel = emp ? this.relation(emp) : '';
+      if (rel === 'self') return false;
+      return r === 'admin' || r === 'manager' || (rel === 'manager' && Companies.mayWrite('timesheets'));
+    },
+    // Any approval right at all (for the screens' hints): a role above, or a reporting manager of someone
+    approver() { const r = Companies.role(); return r === 'owner' || r === 'admin' || r === 'manager' || (!!this.myEmployee() && this.employees(true).some(e => this.relation(e) === 'manager')); },
+    // HR & payroll come with the Full access plans (and the trial); members use the owner's plan
+    allowed() { return Sub.isFull(); },
+    lock() {
+      UI.modal({ title: 'Full access subscription required', body: '<div class="gstlock"><div class="big">🔒</div><div><p>HR & payroll (employees, attendance, timesheets, reimbursements, payroll, payslips and offer letters) come with the Full access plans, which cover accounts and HR together. ' + esc(Sub.statusText()) + '.</p></div></div>',
+        buttons: [{ label: 'Close', cls: 'outline' }, { label: 'Buy Full access', cls: 'blue', onClick: () => { if (Store.cid) Companies.switcher(); else Subscription.plans(); } }] });
+      return false;
+    },
     hourly(emp) { return emp.payType === 'hourly'; },
     structure(emp) { return this.hourly(emp) ? 0 : num(emp.basic) + num(emp.da) + num(emp.hra) + num(emp.conveyance) + num(emp.special); },
     // HRA from basic: 50% in a metro city, 40% elsewhere (the income-tax exemption limits), unless typed
@@ -216,7 +237,7 @@
         UI.field('Date of joining', UI.dateInput('hDoj', e.doj), { req: true }) + UI.field('Date of leaving', UI.dateInput('hDol', e.dol), { hint: 'Blank while employed' }) +
         UI.field('Mobile', UI.input('hPhone', e.phone, { type: 'tel', attrs: ' maxlength="10"' })) + UI.field('Email', UI.input('hEmail', e.email, { type: 'email' })) +
         UI.field('Address', '<textarea id="hAddr">' + esc(e.address) + '</textarea>', { span: true }) +
-        UI.field('Reporting manager', UI.input('hMgr', e.manager, { placeholder: 'Name, for the offer letter' })) +
+        UI.field('Reporting manager', UI.select('hMgr', this.employees(true).filter(x => x.id !== e.id).map(x => [x.id, x.name + (x.designation ? ' · ' + x.designation : '')]), e.managerId || '', { blank: '— none —' }), { hint: 'Approves this employee\'s timesheets and claims (with the managers above); on the offer letter' }) +
         UI.field('PAN', UI.input('hPan', e.pan, { attrs: ' maxlength="10" style="text-transform:uppercase"' })) + UI.field('Aadhaar', UI.input('hAadhaar', e.aadhaar, { attrs: ' maxlength="12" inputmode="numeric"' })) +
         UI.field('UAN (PF)', UI.input('hUan', e.uan, { attrs: ' maxlength="12" inputmode="numeric"' })) + UI.field('ESI number', UI.input('hEsiNo', e.esiNo)) +
         '<div class="field span"><label>Pay</label></div>' +
@@ -233,7 +254,7 @@
         '<div class="field">' + UI.check('hActive', 'On the payroll (untick when the employee has left)', e.active !== false) + '</div></div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
           const g = (id) => String(UI.val(id, bg)).trim(), hourly = g('hPayType') === 'hourly';
-          const o = Object.assign(e, { code: g('hCode'), name: g('hName'), designation: g('hDesig'), department: g('hDept'), doj: UI.dateVal('hDoj', bg), dol: UI.dateVal('hDol', bg), phone: g('hPhone'), email: g('hEmail'), address: g('hAddr'), manager: g('hMgr'), pan: g('hPan').toUpperCase(), aadhaar: g('hAadhaar'), uan: g('hUan'), esiNo: g('hEsiNo'),
+          const o = Object.assign(e, { code: g('hCode'), name: g('hName'), designation: g('hDesig'), department: g('hDept'), doj: UI.dateVal('hDoj', bg), dol: UI.dateVal('hDol', bg), phone: g('hPhone'), email: g('hEmail'), address: g('hAddr'), managerId: g('hMgr'), manager: (this.employee(g('hMgr')) || {}).name || '', pan: g('hPan').toUpperCase(), aadhaar: g('hAadhaar'), uan: g('hUan'), esiNo: g('hEsiNo'),
             payType: hourly ? 'hourly' : 'monthly', hourlyRate: num(g('hRate')), metro: UI.val('hMetro', bg), basic: num(g('hBasic')), da: num(g('hDa')), hra: g('hHra') === '' ? this.hraOf(num(g('hBasic')), UI.val('hMetro', bg)) : num(g('hHra')), conveyance: num(g('hConv')), special: num(g('hSpecial')), tds: num(g('hTds')), pf: UI.val('hPf', bg), esi: UI.val('hEsi', bg), pt: UI.val('hPt', bg), leavesPerYear: num(g('hLeaves')), bankName: g('hBank'), bankAccount: g('hAcc'), bankIfsc: g('hIfsc').toUpperCase(), active: UI.val('hActive', bg) });
           if (!o.name) { UI.mark('hName', true, bg); UI.toast('Enter the name'); return false; }
           if (!o.doj) { UI.toast('Enter the date of joining'); return false; }
@@ -316,16 +337,16 @@
 
     // ------------------------------------------------------------ timesheets (weekly, hours a day, approved by a manager)
     screenTimesheets(p) {
-      const week = /^\d{4}-\d{2}-\d{2}$/.test(p.week || '') ? mondayOf(fromIso(p.week)) : mondayOf(new Date()), mon = fromIso(week), s = this.settings(), hol = this.holidayMap(), approve = this.canApprove();
+      const week = /^\d{4}-\d{2}-\d{2}$/.test(p.week || '') ? mondayOf(fromIso(p.week)) : mondayOf(new Date()), mon = fromIso(week), s = this.settings(), hol = this.holidayMap(), approve = this.approver();
       const days = Array.from({ length: 7 }, (_, i) => new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i));
       const emps = this.employees().sort((a, b) => (this.hourly(b) ? 1 : 0) - (this.hourly(a) ? 1 : 0));
       const monthOf = iso(mon).slice(0, 7), run = this.payroll(monthOf), locked = !!run && run.status === 'final';
       const root = App.view(App.header('Timesheets', '<div class="btnrow" style="margin:0"><button class="btn sm outline" id="tsPrev">‹</button>' + UI.input('tsWeek', week, { type: 'date', attrs: ' style="min-height:36px;width:170px"' }) + '<button class="btn sm outline" id="tsNext">›</button><button class="btn sm outline" id="tsCopy">Copy last week</button><button class="btn sm outline" id="tsPay">Payroll</button><button class="btn sm green" id="tsXls">Export Excel</button></div>') +
-        '<div class="hint" style="margin-bottom:10px">Week of ' + esc(dmy(days[0])) + ' to ' + esc(dmy(days[6])) + ': hours worked each day. Hours above ' + (num(s.weeklyHours) || 40) + ' in the week are overtime at ' + num(s.usOtMultiplier) + 'x for hourly employees; holidays of the list (H) are paid at ' + num(s.hoursPerDay) + ' hours. A manager, an admin or the owner ticks <b>Approved</b>; payroll notes the weeks still to be approved.' + (approve ? '' : ' <b>Your role enters hours; approval is for a manager.</b>') + (locked ? ' <b>The payroll of this month is finalised: the sheet is locked.</b>' : '') + '</div>' +
+        '<div class="hint" style="margin-bottom:10px">Week of ' + esc(dmy(days[0])) + ' to ' + esc(dmy(days[6])) + ': hours worked each day. Hours above ' + (num(s.weeklyHours) || 40) + ' in the week are overtime at ' + num(s.usOtMultiplier) + 'x for hourly employees; holidays of the list (H) are paid at ' + num(s.hoursPerDay) + ' hours. The employee\'s reporting manager (or a manager above them), an admin or the owner ticks <b>Approved</b>; nobody approves their own sheet. Payroll notes the weeks still to be approved.' + (approve ? '' : ' <b>Your login enters hours; approval is for the reporting manager.</b>') + (locked ? ' <b>The payroll of this month is finalised: the sheet is locked.</b>' : '') + '</div>' +
         (emps.length ? '<div class="tablewrap gs"><table class="list stmt tsgrid"><thead><tr><th>Employee</th>' + days.map((d, i) => '<th class="' + (hol.has(dmy(d)) || this.isOff(d) ? 'off' : '') + '">' + DAY_NAMES[i] + '<div class="small">' + pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + (hol.has(dmy(d)) ? ' H' : '') + '</div></th>').join('') + '<th class="num">Total</th><th class="num">OT</th><th>Approved</th></tr></thead><tbody>' +
           emps.map(e => { const t = this.timesheet(e.id, week) || { hours: {}, approved: false }, total = Object.values(t.hours || {}).reduce((x, h) => x + num(h), 0), ot = this.hourly(e) ? Math.max(0, total - (num(s.weeklyHours) || 40)) : 0;
             return '<tr data-emp="' + esc(e.id) + '"><td class="left"><b>' + esc(e.name) + '</b><div class="small muted">' + esc(e.code || '') + (this.hourly(e) ? ' · ' + money(num(e.hourlyRate)) + '/h' : ' · monthly') + '</div></td>' + days.map((d, i) => '<td class="num"><input type="number" min="0" max="24" step="0.5" class="tsh" data-i="' + i + '" value="' + (num(t.hours && t.hours[i]) || '') + '" style="width:62px;min-height:32px;text-align:right"' + (locked || t.approved ? ' disabled' : '') + '></td>').join('') +
-              '<td class="num"><b>' + total + '</b></td><td class="num">' + (ot || '') + '</td><td><label class="check" style="justify-content:center"><input type="checkbox" class="tsa"' + (t.approved ? ' checked' : '') + (approve && !locked ? '' : ' disabled') + '> ' + (t.approved ? '<span class="small muted">' + esc(t.approvedBy || '') + '</span>' : '') + '</label></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty">Add employees first.</div>'));
+              '<td class="num"><b>' + total + '</b></td><td class="num">' + (ot || '') + '</td><td><label class="check" style="justify-content:center"><input type="checkbox" class="tsa"' + (t.approved ? ' checked' : '') + (this.canApprove(e) && !locked ? '' : ' disabled') + (this.relation(e) === 'self' ? ' title="Your own timesheet is approved by your manager"' : '') + '> ' + (t.approved ? '<span class="small muted">' + esc(t.approvedBy || '') + '</span>' : '') + '</label></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty">Add employees first.</div>'));
       App.wireBack(root);
       const go = (d) => App.go('timesheets', { week: iso(d) });
       $('#tsWeek').onchange = e => { if (e.target.value) go(fromIso(e.target.value)); };
@@ -340,16 +361,16 @@
 
     // ------------------------------------------------------------ reimbursements (claims approved by a manager, paid with the payroll)
     screenReimbursements(p) {
-      const status = p.status || '', approve = this.canApprove(), emps = new Map(this.employees(true).map(e => [e.id, e]));
+      const status = p.status || '', approve = this.approver(), emps = new Map(this.employees(true).map(e => [e.id, e]));
       const all = Store.list('reimbursements').map(r => Object.assign({}, r, this.claimState(r))).sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || num(b.createdAt) - num(a.createdAt)), list = status ? all.filter(r => r.status === status) : all;
       const pill = (st) => st === 'paid' ? 'ok' : st === 'approved' ? '' : st === 'rejected' ? 'bad' : 'warn';
       const chip = (k, label) => '<button class="btn sm ' + (status === k ? '' : 'outline') + '" data-st="' + k + '">' + label + '</button>';
       const root = App.view(App.header('Reimbursements', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="rbAdd">+ Claim</button><button class="btn sm outline" id="rbPay">Payroll</button><button class="btn sm outline" id="rbXls">Export Excel</button></div>') +
         '<div class="btnrow">' + chip('', 'All') + chip('pending', 'Pending') + chip('approved', 'Approved') + chip('paid', 'Paid') + chip('rejected', 'Rejected') + '</div>' +
-        '<div class="hint" style="margin-bottom:10px">Expenses an employee paid for the company (travel, food, phone, medical ...). A manager, an admin or the owner approves a claim (the server holds HR to entering); approved claims are paid with the next payroll, on the payslip under Reimbursements and in the books as Staff Reimbursements, and show as paid once that month is finalised.</div>' +
+        '<div class="hint" style="margin-bottom:10px">Expenses an employee paid for the company (travel, food, phone, medical ...). The employee\'s reporting manager (or a manager above them), an admin or the owner approves a claim; nobody approves their own, and the server holds to the same rule. Approved claims are paid with the next payroll, on the payslip under Reimbursements and in the books as Staff Reimbursements, and show as paid once that month is finalised.</div>' +
         Ledger.listTable(['Date', 'Employee', 'Category', 'Description', '#Amount', 'Status', ''], list.map(r => { const e = emps.get(r.empId) || { name: '-' };
           return '<tr>' + Ledger.td('Date', esc(r.date)) + Ledger.td('Employee', '<b>' + esc(e.name) + '</b>') + Ledger.td('Category', esc(r.category)) + Ledger.td('Description', esc(r.description || '') + (r.bill ? '<div class="small muted">Bill ' + esc(r.bill) + '</div>' : '')) + Ledger.td('Amount', '<b>' + money(num(r.amount)) + '</b>', 'num') + Ledger.td('Status', '<span class="pill ' + pill(r.status) + '">' + esc(r.status[0].toUpperCase() + r.status.slice(1)) + '</span>' + (r.paidMonth ? '<div class="small muted">' + esc(monthLabel(r.paidMonth)) + '</div>' : r.approvedBy ? '<div class="small muted">' + esc(r.approvedBy) + '</div>' : '')) +
-            '<td class="actions">' + (r.status === 'pending' && approve ? '<button class="btn sm green" data-ok="' + esc(r.id) + '">Approve</button><button class="btn sm red" data-no="' + esc(r.id) + '">Reject</button>' : '') + (r.status === 'pending' || (approve && r.status !== 'paid') ? '<button class="btn sm outline" data-e="' + esc(r.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(r.id) + '">Delete</button>' : '') + '</td></tr>'; }), status ? 'No ' + status + ' claims.' : 'No reimbursement claims yet.'));
+            '<td class="actions">' + (r.status === 'pending' && this.canApprove(e.id ? e : null) ? '<button class="btn sm green" data-ok="' + esc(r.id) + '">Approve</button><button class="btn sm red" data-no="' + esc(r.id) + '">Reject</button>' : r.status === 'pending' && this.relation(e) === 'self' ? '<span class="small muted">Your manager approves</span>' : '') + (r.status === 'pending' || (approve && r.status !== 'paid') ? '<button class="btn sm outline" data-e="' + esc(r.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(r.id) + '">Delete</button>' : '') + '</td></tr>'; }), status ? 'No ' + status + ' claims.' : 'No reimbursement claims yet.'));
       App.wireBack(root);
       const back = () => this.screenReimbursements({ status });
       $$('[data-st]', root).forEach(b => b.onclick = () => this.screenReimbursements({ status: b.dataset.st }));
@@ -421,10 +442,12 @@
         if (r.ot) earn.push(['Overtime (' + r.otHours + ' h)', r.ot]); if (r.reimb) earn.push(['Reimbursements', r.reimb]);
         const ded = [['Provident fund', r.pfEmp], ['ESI', r.esiEmp], ['Professional tax', r.pt], ['Income tax (TDS)', r.tds]]; if (r.advance) ded.push(['Advance recovered', r.advance]); if (r.other) ded.push(['Other deductions', r.other]);
         const n = Math.max(earn.length, ded.length), line = (a, i) => a[i] ? '<td>' + esc(a[i][0]) + '</td><td class="r">' + U.indianNumber(a[i][1]) + '</td>' : '<td></td><td></td>';
-        const detail = (k, v) => '<tr><td style="width:28%"><b>' + k + '</b></td><td>' + esc(v || '-') + '</td></tr>';
-        return '<div class="doc std"><div class="part top">' + Print.head('PAYSLIP - ' + monthLabel(run.month).toUpperCase(), co, [['Month:', monthLabel(run.month), 1], ['Pay date:', dateOf(run.month, daysIn(run.month))]]) + '</div>' +
-          '<table class="grid parties"><tr><th style="text-align:left">EMPLOYEE</th><th style="text-align:left">DETAILS</th></tr><tr><td style="height:auto;width:50%;vertical-align:top"><table style="width:100%;border:0">' + detail('Name', r.name) + detail('Code', r.code) + detail('Designation', r.designation) + detail('Department', e.department) + detail('Joined', e.doj) + detail('PAN', r.pan) + '</table></td>' +
-          '<td style="height:auto;vertical-align:top"><table style="width:100%;border:0">' + detail(hourly ? 'Hours' : 'Paid days', hourly ? r.hours + ' h (overtime ' + r.otHours + ' h)' : r.paid + ' of ' + r.days + (r.lop ? ' (LOP ' + r.lop + ')' : '')) + detail('UAN', r.uan) + detail('ESI no', r.esiNo) + detail('Bank', (r.bank ? r.bank + ' ' : '') + (r.account || '')) + detail('IFSC', r.ifsc) + detail('Pay type', hourly ? 'Hourly, ' + money(r.rate) + '/h' : 'Monthly') + '</table></td></tr></table>' +
+        // Employee details: label / value pairs in three columns of one bordered block
+        const details = [['Employee', r.name], ['Employee code', r.code], ['Designation', r.designation], ['Department', e.department], ['Date of joining', e.doj], ['Pay type', hourly ? 'Hourly, ' + money(r.rate) + ' per hour' : 'Monthly salary'],
+          [hourly ? 'Hours paid' : 'Paid days', hourly ? r.hours + ' h (overtime ' + r.otHours + ' h)' : r.paid + ' of ' + r.days + (r.lop ? ', LOP ' + r.lop : '')], ['PAN', r.pan], ['UAN (PF)', r.uan], ['ESI number', r.esiNo], ['Bank', r.bank], ['Account / IFSC', [r.account, r.ifsc].filter(Boolean).join(' / ')]];
+        const cell = (d) => '<td class="k">' + esc(d[0]) + '</td><td class="v">' + esc(d[1] || '-') + '</td>';
+        const block = '<table class="grid emp"><tbody>' + Array.from({ length: Math.ceil(details.length / 3) }, (_, i) => '<tr>' + details.slice(i * 3, i * 3 + 3).map(cell).join('') + '</tr>').join('') + '</tbody></table>';
+        return '<div class="doc std payslip"><style>.payslip .emp { margin-top: 8px; } .payslip .emp td { font-size: 8.5pt; padding: 4px 5px; border-color: #999; } .payslip .emp td.k { color: #444; font-weight: bold; width: 12%; background: #f2f2f2; white-space: nowrap; } .payslip .emp td.v { width: 21%; } .payslip .items td { font-size: 9pt; padding: 4px 5px; } .payslip .items tr.b td { font-weight: bold; background: #f7f7f7; } .payslip .items tr.tot td { font-size: 10.5pt; }</style><div class="part top">' + Print.head('PAYSLIP - ' + monthLabel(run.month).toUpperCase(), co, [['Month:', monthLabel(run.month), 1], ['Pay date:', dateOf(run.month, daysIn(run.month))]]) + '</div>' + block +
           '<table class="grid items"><thead><tr><th style="width:32%">EARNINGS</th><th style="width:18%">AMOUNT (₹)</th><th style="width:32%">DEDUCTIONS</th><th style="width:18%">AMOUNT (₹)</th></tr></thead><tbody>' +
           Array.from({ length: n }, (_, i) => '<tr>' + line(earn, i) + line(ded, i) + '</tr>').join('') +
           '<tr class="b"><td>Total earnings</td><td class="r">' + U.indianNumber(r.gross + r.ot + r.reimb) + '</td><td>Total deductions</td><td class="r">' + U.indianNumber(r.deductions) + '</td></tr>' +
@@ -482,11 +505,13 @@
   };
   const kv = (k, v, cls) => '<div class="' + (cls || '') + '">' + k + '</div><div class="v ' + (cls || '') + '">' + v + '</div>';
 
-  App.routes.employees = () => HR.screenEmployees();
-  App.routes.attendance = (p) => HR.screenAttendance(p || {});
-  App.routes.timesheets = (p) => HR.screenTimesheets(p || {});
-  App.routes.reimbursements = (p) => HR.screenReimbursements(p || {});
-  App.routes.payroll = (p) => HR.screenPayroll(p || {});
-  App.routes.hrsettings = () => HR.screenSettings();
+  // Every HR screen is behind the Full access plan: without it the lock shows and the dashboard stays
+  const gated = (fn) => (p) => { if (!HR.allowed()) { if (!App.current || App.current.route === 'dashboard') App.routes.dashboard({}); HR.lock(); return; } fn(p); };
+  App.routes.employees = gated(() => HR.screenEmployees());
+  App.routes.attendance = gated((p) => HR.screenAttendance(p || {}));
+  App.routes.timesheets = gated((p) => HR.screenTimesheets(p || {}));
+  App.routes.reimbursements = gated((p) => HR.screenReimbursements(p || {}));
+  App.routes.payroll = gated((p) => HR.screenPayroll(p || {}));
+  App.routes.hrsettings = gated(() => HR.screenSettings());
   global.HR = HR;
 })(window);

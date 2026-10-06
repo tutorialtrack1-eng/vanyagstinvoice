@@ -76,7 +76,9 @@ Run `activation.sql` in the SQL Editor the same way (run it again after every up
 what is missing). It creates `public.activation_codes`, the `redeem_code` and `redeem_code_v2` functions, and
 loads 60 codes (also listed in `activation-codes.txt`): ten each of the monthly plan (30 days), the yearly plan
 (365), the 2 years plan (730), the 5 years plan (1825), the 15 invoices pack (valid 3 months) and the 40 invoices
-pack (valid 6 months). A time plan opens every feature; on an invoice pack every saved invoice, credit note or debit
+pack (valid 6 months). The Full access plans (accounts + HR & payroll: monthly Rs 599, yearly Rs 4999, 2 years
+Rs 7999) are sold through the Cashfree function only (`grants.full`); there are no codes for them. A time plan
+opens every accounting feature; on an invoice pack every saved invoice, credit note or debit
 note uses one of its invoices, invoices not used by the pack's date lapse, only the invoicing features are offered on it, and a saved invoice or note cannot be
 changed or deleted. A code works once, on any account, and its days are added to the end of the current validity (trial or plan); a lapsed account starts from the day the code is entered. **The codes only work once
 this SQL has been run in the project**: until then the app and the portal answer "Invalid activation code".
@@ -179,7 +181,9 @@ by `user_id`; the rules on `books` check the role per record:
   `rb:`, `pay:` and `hr` only, and read nothing else of the books but `company` and `sub` (`books_may_read`); hr may not
   save a timesheet (`ts:`) with `approved` true nor change or delete one that is approved, and may save a
   reimbursement claim (`rb:`) only with status pending (the update policy checks the old row and the new one), so
-  approving either is the manager's on the server too; "paid" is derived in the portal from the finalised payroll
+  approving either is for someone entitled to decide for that employee (`hr_relation`: never the employee whose
+  record carries the login's mobile or email; an admin, a manager, or the reporting manager and the managers above
+  through `managerId`, with HR access); "paid" is derived in the portal from the finalised payroll
   that lists the claim (`reimbIds` on the payroll row), never written to the claim; viewer: nothing. The subscription record
   `sub` is never written in another company: everybody there runs on the owner's subscription, which a member
   may read (`k = 'sub'` of the owner) while the header names one of the owner's companies.

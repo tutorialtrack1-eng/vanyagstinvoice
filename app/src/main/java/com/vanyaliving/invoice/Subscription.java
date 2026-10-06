@@ -42,15 +42,17 @@ final class Subscription {
     static final String TRIAL_LABEL = "30-day";
     // The packs on sale (same list in the portal's subscription.js): plans for a number of days, and invoice packs
     // (a number of invoices to be used within PLAN_PACK_DAYS; credit and debit notes count as invoices). days or invoices is 0.
-    static final String[] PLAN_NAMES = {"Monthly plan", "Yearly plan", "2 years plan", "5 years plan", "15 invoices pack", "40 invoices pack"};
-    static final int[] PLAN_DAYS = {30, 365, 730, 1825, 0, 0};
-    static final int[] PLAN_INVOICES = {0, 0, 0, 0, 15, 40};
-    static final int[] PLAN_PACK_DAYS = {0, 0, 0, 0, 90, 180};
-    static final int[] PLAN_PRICES = {299, 2499, 3999, 7999, 99, 199};
+    // The Full access plans add HR & payroll (web portal) to the accounts: a time plan that also sets full_until
+    static final String[] PLAN_NAMES = {"Monthly plan", "Yearly plan", "2 years plan", "5 years plan", "15 invoices pack", "40 invoices pack", "Full access monthly", "Full access yearly", "Full access 2 years"};
+    static final int[] PLAN_DAYS = {30, 365, 730, 1825, 0, 0, 30, 365, 730};
+    static final int[] PLAN_INVOICES = {0, 0, 0, 0, 15, 40, 0, 0, 0};
+    static final int[] PLAN_PACK_DAYS = {0, 0, 0, 0, 90, 180, 0, 0, 0};
+    static final boolean[] PLAN_FULL = {false, false, false, false, false, false, true, true, true};
+    static final int[] PLAN_PRICES = {299, 2499, 3999, 7999, 99, 199, 599, 4999, 7999};
     // The plan names the payment function knows (server/supabase/functions/cashfree), in the same order
-    static final String[] PLAN_KEYS = {"monthly", "yearly", "2years", "5years", "inv15", "inv40"};
-    static String planKey(int days, int invoices) {
-        for (int i = 0; i < PLAN_DAYS.length; i++) if (invoices > 0 ? PLAN_INVOICES[i] == invoices : PLAN_DAYS[i] == days && PLAN_INVOICES[i] == 0) return PLAN_KEYS[i];
+    static final String[] PLAN_KEYS = {"monthly", "yearly", "2years", "5years", "inv15", "inv40", "fullmonthly", "fullyearly", "full2years"};
+    static String planKey(int days, int invoices, boolean full) {
+        for (int i = 0; i < PLAN_DAYS.length; i++) if (invoices > 0 ? PLAN_INVOICES[i] == invoices : PLAN_DAYS[i] == days && PLAN_INVOICES[i] == 0 && PLAN_FULL[i] == full) return PLAN_KEYS[i];
         return "";
     }
     static final String SECRET = "VANYA-INVOICE-BOOK-2026";
@@ -67,7 +69,7 @@ final class Subscription {
     // manual flow (request reaches VENDOR_PHONE; the code is sent back by SMS / email).
     static final String ACTIVATION_SERVER_URL = "";
 
-    static String planLabel(int i) { return PLAN_NAMES[i] + "  (" + planWhat(PLAN_DAYS[i], PLAN_INVOICES[i]) + ")  -  Rs " + PLAN_PRICES[i]; }
+    static String planLabel(int i) { return PLAN_NAMES[i] + "  (" + planWhat(PLAN_DAYS[i], PLAN_INVOICES[i]) + (PLAN_FULL[i] ? ", accounts + HR & payroll" : "") + ")  -  Rs " + PLAN_PRICES[i]; }
 
     /** How long the pack of that many invoices is valid for, in days; 0 when it is not one of the packs on sale. */
     static int packDays(int invoices) { for (int i = 0; i < PLAN_INVOICES.length; i++) if (invoices > 0 && PLAN_INVOICES[i] == invoices) return PLAN_PACK_DAYS[i]; return 0; }
@@ -152,6 +154,11 @@ final class Subscription {
     static long yearlyUntil(Context c, long userId) { return prefs(c).getLong("yearly_until_" + userId, 0); }
     static boolean isYearly(Context c, long userId) { long now = System.currentTimeMillis(), paid = subscriptionUntil(c, userId); return yearlyUntil(c, userId) > now || (paid > now && paid - now > 300 * DAY_MILLIS); }
     static void noteYearly(SharedPreferences.Editor e, Context c, long userId, int days, long until) { if (days >= 360 && until > yearlyUntil(c, userId)) e.putLong("yearly_until_" + userId, until); }
+    // ---- Full access plans: HR & payroll in the web portal. full_until_<userId> is set when such a plan is bought here
+    // or arrives by sync; the portal reads it from the synced sub record.
+    static long fullUntil(Context c, long userId) { return prefs(c).getLong("full_until_" + userId, 0); }
+    static boolean isFull(Context c, long userId) { return fullUntil(c, userId) > System.currentTimeMillis() || (isOnTrial(c, userId) && isTimeActive(c, userId)); }
+    static void noteFull(SharedPreferences.Editor e, Context c, long userId, boolean full, long until) { if (full && until > fullUntil(c, userId)) e.putLong("full_until_" + userId, until); }
 
     /** Paid subscription end if there is one, otherwise the end of the trial. */
     static long expiresAt(Context c, long userId) {
@@ -181,7 +188,7 @@ final class Subscription {
     static void copy(Context c, long from, long to) {
         SharedPreferences p = prefs(c);
         p.edit().putLong("registered_at_" + to, p.getLong("registered_at_" + from, 0)).putLong("valid_until_" + to, p.getLong("valid_until_" + from, 0))
-                .putStringSet("used_codes_" + to, new HashSet<>(p.getStringSet("used_codes_" + from, new HashSet<>()))).putLong("yearly_until_" + to, p.getLong("yearly_until_" + from, 0))
+                .putStringSet("used_codes_" + to, new HashSet<>(p.getStringSet("used_codes_" + from, new HashSet<>()))).putLong("full_until_" + to, p.getLong("full_until_" + from, 0)).putLong("yearly_until_" + to, p.getLong("yearly_until_" + from, 0))
                 .putInt("inv_quota_" + to, p.getInt("inv_quota_" + from, 0)).putInt("inv_used_" + to, p.getInt("inv_used_" + from, 0)).putLong("inv_until_" + to, p.getLong("inv_until_" + from, 0)).apply();
     }
 
@@ -241,9 +248,9 @@ final class Subscription {
     private static void applyDays(Context c, long userId, String entered, int days) { applyPlan(c, userId, entered, days, 0, 0); }
 
     /** What a payment bought, applied like a code: a plan's days follow the current validity, a pack's invoices join the balance. */
-    static void applyGrant(Context c, long userId, int days, int invoices, int packDays) {
+    static void applyGrant(Context c, long userId, int days, int invoices, int packDays, boolean full) {
         SharedPreferences.Editor e = prefs(c).edit();
-        if (days > 0) { long until = Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS; e.putLong("valid_until_" + userId, until); noteYearly(e, c, userId, days, until); }
+        if (days > 0) { long until = Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS; e.putLong("valid_until_" + userId, until); noteYearly(e, c, userId, days, until); noteFull(e, c, userId, full, until); }
         if (invoices > 0) addPack(e, c, userId, invoices, packDays);
         e.apply();
     }

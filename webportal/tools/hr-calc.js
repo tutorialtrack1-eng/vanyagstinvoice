@@ -87,7 +87,25 @@ check('salaries and reimbursements reach the Profit & Loss as expenses', Math.ab
 check('the payables sit on the Balance Sheet', bs.liabilities.some(l => l[0] === 'Salary Payable' && Math.abs(l[1] - t.net) < 0.01), bs.liabilities);
 check('the records sync as HR rows', Object.keys(ctx.AppFormat.snapshot()).filter(k => /^(emp|att|ts|rb|pay):|^hr$/.test(k)).length === 4 + 1 + 1 + 2 + 1 + 1);
 const slip = HR.payslipHtml(run, run.rows[0]);
-check('the payslip has the employee details, earnings and deductions side by side, the words at the foot and no row count', slip.includes('EARNINGS') && slip.includes('DEDUCTIONS') && slip.includes('Net pay in words') && slip.includes('UAN') && slip.includes('Reimbursements') && !/\d+ rows?\./.test(slip));
+check('the payslip has the employee details block, earnings and deductions side by side, the words at the foot and no row count', slip.includes('class="grid emp"') && slip.includes('Employee code') && slip.includes('EARNINGS') && slip.includes('DEDUCTIONS') && slip.includes('Net pay in words') && slip.includes('UAN (PF)') && slip.includes('Reimbursements') && !/\d+ rows?\./.test(slip) && !slip.includes('parties'));
+console.log('who approves');
+const boss = Store.add('employees', { code: 'EMP030', name: 'Boss', doj: '01/04/2026', basic: 50000, email: 'boss@example.com', active: true });
+const lead = Store.add('employees', { code: 'EMP031', name: 'Lead', doj: '01/04/2026', basic: 30000, phone: '9000000001', managerId: boss.id, active: true });
+const junior = Store.add('employees', { code: 'EMP032', name: 'Junior', doj: '01/04/2026', basic: 20000, managerId: lead.id, active: true });
+ctx.Companies.role = () => 'hr';
+ctx.App.user = { id: 1, name: 'Lead', phone: '9000000001' };
+check('the login is matched to its employee record by mobile', HR.myEmployee() && HR.myEmployee().id === lead.id);
+check('a reporting manager (HR role) approves for their report, not for themselves or their boss', HR.canApprove(junior) && !HR.canApprove(lead) && !HR.canApprove(boss) && HR.relation(junior) === 'manager' && HR.relation(lead) === 'self');
+ctx.App.user = { id: 1, name: 'Boss', email: 'BOSS@example.com' };
+check('the manager\'s manager approves too (two levels up, matched by email)', HR.canApprove(junior) && HR.canApprove(lead) && !HR.canApprove(boss));
+ctx.Companies.role = () => 'admin';
+check('an admin approves for anyone but themselves', HR.canApprove(junior) && HR.canApprove(lead) && !HR.canApprove(boss));
+ctx.Companies.role = () => 'owner';
+check('the owner is never held to the self rule', HR.canApprove(boss));
+ctx.App.user = { id: 1, name: 'Nobody' };
+console.log('the Full access plans');
+check('the trial has Full access, a plain yearly plan does not, a Full access plan does', (ctx.Store.set('registered_at', Date.now()), ctx.Sub.isFull()) && (ctx.Sub.applyPlan({ days: 365 }), !ctx.Sub.isFull()) && (ctx.Sub.applyPlan({ days: 365, full: true }), ctx.Sub.isFull() && ctx.Sub.fullUntil() === ctx.Sub.subscriptionUntil()));
+check('the Full access plans are on the list with their prices', ctx.Sub.PLANS.filter(p => p.full).map(p => p.price).join() === '599,4999,7999' && ctx.Sub.planLabel(7).includes('HR'));
 const offer = HR.offerLetterHtml(ravi, { date: '07/10/2026', place: 'Hyderabad', probation: 6, notice: 30, hours: '8 hours a day', manager: 'Asha', terms: ['Laptop provided.'] });
 check('the offer letter carries the designation, the pay and the terms', offer.includes('OFFER OF EMPLOYMENT') && offer.includes('position of <b>Employee</b>') && offer.includes('Cost to company') && offer.includes('Laptop provided.') && offer.includes('probation of 6 months'));
 

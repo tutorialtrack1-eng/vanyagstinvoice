@@ -112,6 +112,11 @@ const admin = async (service, method, p, body) => { const r = await fetch(URL_ +
     check('the server refuses hr approving a claim', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
     err = null; try { await tsWrite('rb:live1', { id: 'live1', empId: 'live1', amount: 900, status: 'approved' }); } catch (e) { err = e; }
     check('and hr changing the claim the manager approved', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
+    // The reporting line on the live server: Bala is employee lm1, le1 reports to lm1
+    await A.Supabase.call('sync', { token: A.Sync.state().token, epoch: A.Sync.state().epoch, since: A.Sync.state().since, changes: [{ k: 'emp:lm1', d: { id: 'lm1', name: 'Live Bala', email: ub.email } }, { k: 'emp:le1', d: { id: 'le1', name: 'Report', managerId: 'lm1' } }], company: beta, owner: ua.id });
+    check('hr as the reporting manager approves a report\'s claim', !!(await tsWrite('rb:live3', { id: 'live3', empId: 'le1', amount: 250, status: 'approved' })).epoch);
+    err = null; try { await tsWrite('rb:live4', { id: 'live4', empId: 'lm1', amount: 250, status: 'approved' }); } catch (e) { err = e; }
+    check('but never their own', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
     s = await A.Companies.rpc('set_member', { cid: beta, identity: ub.email, role_in: 'sales' }); await B.Companies.load();
     const lm = await A.Companies.rpc('list_members', { cid: beta });
     check('members listed', Array.isArray(lm) && lm.length === 2 && lm[0].role === 'owner', lm);

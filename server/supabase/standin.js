@@ -15,12 +15,32 @@ function sessionFor(u) { const t = 'h.' + b64({ sub: u.id, exp: Math.floor(Date.
 function makeUser(name, phone, email, pw) { const u = { id: crypto.randomUUID(), email, phone, password: pwHash(pw), user_metadata: { name, phone }, created_at: new Date().toISOString() }; users.set(u.id, u); profiles.set(u.id, { id: u.id, name, phone, email }); return u; }
 // ---- the rules of companies.sql
 const roleOf = (uid, cid) => { if (!uid || !cid) return null; if (cid === uid) return 'owner'; const c = companies.get(cid); if (!c) return null; if (c.owner_id === uid) return 'owner'; const m = members.get(cid + '|' + uid); return m ? m.role : null; };
+// 'self' | 'manager' | '' as companies.sql hr_relation
+function relation(uid, cid, empId) {
+  const p = profiles.get(uid); if (!p) return '';
+  let cur = empId, i = 0;
+  while (cur && i < 8) {
+    const row = books.find(x => x.user_id === cid && x.k === 'emp:' + cur); if (!row || !row.d) return '';
+    const e = row.d;
+    if ((p.phone && String(e.phone || '').trim() === String(p.phone).trim()) || (p.email && String(e.email || '').trim().toLowerCase() === String(p.email).trim().toLowerCase())) return i === 0 ? 'self' : 'manager';
+    cur = e.managerId; i++;
+  }
+  return '';
+}
 function mayWrite(uid, cid, k, d) {
   const r = roleOf(uid, cid); if (!r || k === 'sub') return false;
-  if (r === 'owner' || r === 'admin') return true;
+  if (r === 'owner') return true;
+  if (/^(ts|rb):/.test(k)) {
+    if (!['admin', 'manager', 'hr'].includes(r)) return false;
+    const decided = d != null && (k.startsWith('ts:') ? (d.approved === true || d.approved === 'true') : ['approved', 'rejected', 'paid'].includes(d.status || 'pending'));
+    if (!decided) return true;
+    const rel = relation(uid, cid, d.empId);
+    if (rel === 'self') return false;
+    return r === 'admin' || r === 'manager' || rel === 'manager';
+  }
+  if (r === 'admin') return true;
   if (r === 'accountant') return k !== 'company';
-  if (r === 'manager') return /^(emp|att|ts|rb|pay):/.test(k) || k === 'hr';
-  if (r === 'hr') { if (k.startsWith('ts:')) return d == null || !(d.approved === true || d.approved === 'true'); if (k.startsWith('rb:')) return d == null || (d.status || 'pending') === 'pending'; return /^(emp|att|pay):/.test(k) || k === 'hr'; }
+  if (r === 'manager' || r === 'hr') return /^(emp|att|pay):/.test(k) || k === 'hr';
   if (r === 'sales') return /^(inv|dc|note|contact|item):/.test(k) || (k.startsWith('jrn:') && (d == null || String((d && d.kind) || '') === 'Receipt'));
   return false;
 }

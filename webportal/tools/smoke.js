@@ -59,7 +59,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('.modal .mf .btn.outline');
   check('installable: manifest, icons and the offline shell are linked', (await page.getAttribute('link[rel=manifest]', 'href')) === 'manifest.webmanifest' && (await page.getAttribute('link[rel=apple-touch-icon]', 'href')) === 'icons/apple-touch-icon.png' && fs.existsSync(path.resolve(__dirname, '..', 'sw.js')) && fs.existsSync(path.resolve(__dirname, '..', 'icons', 'icon-512.png')));
   const trial = await page.evaluate(() => Sub.statusText());
-  check('activated for 30 days on registration', /^Activated till \d{2}\/\d{2}\/\d{4} \(30 days left\)$/.test(trial), trial);
+  check('activated for 30 days on registration', /^Activated till \d{2}\/\d{2}\/\d{4} \(30 days left, with Full access to try\)$/.test(trial), trial);
   await page.evaluate(() => App.go('company'));
   check('company profile shows the remaining days', (await page.textContent('#cSubLeft')).includes('30 days remaining'), await page.textContent('#cSubLeft'));
   await page.click('.modal .mf .btn.outline');
@@ -79,7 +79,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await packSave(2);
   const refused = await packSave(3);
   check('a used-up pack refuses the next invoice and opens the subscription', refused.includes('used up') && (await page.evaluate(() => Store.list('invoices').length)) === 2 && (await page.$('#subDlg')) !== null, refused);
-  check('subscription dialog lists the invoice packs among the plans', await page.evaluate(() => Sub.PLANS.map(p => p.name).join()) === 'Monthly plan,Yearly plan,2 years plan,5 years plan,15 invoices pack,40 invoices pack' && await page.evaluate(() => Sub.planLabel(4) + '|' + Sub.planLabel(5)) === '15 invoices pack  (15 invoices, valid 3 months)  -  Rs 99|40 invoices pack  (40 invoices, valid 6 months)  -  Rs 199');
+  check('subscription dialog lists the invoice packs among the plans', await page.evaluate(() => Sub.PLANS.map(p => p.name).join()) === 'Monthly plan,Yearly plan,2 years plan,5 years plan,15 invoices pack,40 invoices pack,Full access monthly,Full access yearly,Full access 2 years' && await page.evaluate(() => Sub.planLabel(4) + '|' + Sub.planLabel(5)) === '15 invoices pack  (15 invoices, valid 3 months)  -  Rs 99|40 invoices pack  (40 invoices, valid 6 months)  -  Rs 199');
   // A pack has a date: buying one sets it, and invoices not used by then lapse; a new pack does not bring them back
   check('a pack bought now is valid for its months, and lapses after them', await page.evaluate(() => {
     const keep = ['inv_quota', 'inv_used', 'inv_until'].map(k => Store.get(k, 0)), day = 86400000, out = [];

@@ -81,7 +81,7 @@
     timesheet(t) { return JSON.parse(JSON.stringify(t)); },
     reimbursement(r) { return JSON.parse(JSON.stringify(r)); },
     payroll(p) { return JSON.parse(JSON.stringify(p)); },
-    sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort(), inv_quota: num(x.inv_quota), inv_used: num(x.inv_used), inv_until: num(x.inv_until), yearly_until: num(x.yearly_until) }; }
+    sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort(), inv_quota: num(x.inv_quota), inv_used: num(x.inv_used), inv_until: num(x.inv_until), yearly_until: num(x.yearly_until), full_until: num(x.full_until) }; }
   };
 
   // ------------------------------------------------------------ app row -> portal document (old = the record already here, if any)
@@ -190,7 +190,7 @@
     { name: 'reimbursement', col: 'reimbursements', prefix: 'rb:', key: (d) => s(d.id), byId: true },
     { name: 'payroll', col: 'payroll', prefix: 'pay:', key: (d) => s(d.id), byId: true }
   ];
-  function subState() { return { registered_at: Store.get('registered_at', 0), valid_until: Store.get('valid_until', 0), used_codes: Store.get('used_codes', []), inv_quota: Store.get('inv_quota', 0), inv_used: Store.get('inv_used', 0), inv_until: Store.get('inv_until', 0), yearly_until: Store.get('yearly_until', 0) }; }
+  function subState() { return { registered_at: Store.get('registered_at', 0), valid_until: Store.get('valid_until', 0), used_codes: Store.get('used_codes', []), inv_quota: Store.get('inv_quota', 0), inv_used: Store.get('inv_used', 0), inv_until: Store.get('inv_until', 0), yearly_until: Store.get('yearly_until', 0), full_until: Store.get('full_until', 0) }; }
 
   // Every record of the signed-in user as {key: app row}
   function snapshot() {
@@ -223,6 +223,7 @@
         Store.set('valid_until', Math.max(a.valid_until, b.valid_until));
         // A yearly plan activated in the app shows up here as a validity stretched by a year or more
         Store.set('yearly_until', Math.max(a.yearly_until, b.yearly_until, b.valid_until - Math.max(a.valid_until, Date.now()) >= 360 * 24 * 3600 * 1000 ? b.valid_until : 0));
+        Store.set('full_until', Math.max(num(a.full_until), num(b.full_until)));
         Store.set('used_codes', Array.from(new Set(a.used_codes.concat(b.used_codes))));
         Store.set('inv_quota', Math.max(num(a.inv_quota), num(b.inv_quota)));
         Store.set('inv_used', Math.max(num(a.inv_used), num(b.inv_used)));

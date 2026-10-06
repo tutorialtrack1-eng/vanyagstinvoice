@@ -12,10 +12,12 @@
 --   accountant  every record of the books (invoices, purchases, expenses, journal, receipts, payments, parties,
 --               items); not the company profile, members or subscription
 --   sales       sales invoices, delivery challans, credit / debit notes, receipts, customers and items only
---   manager     the HR records (emp:, att:, ts:, rb:, pay:, hr) and, in the portal, approves timesheets and reimbursements
+--   manager     the HR records (emp:, att:, ts:, rb:, pay:, hr) and approves timesheets and reimbursements
 --   hr          the HR records only (employees, attendance, timesheets, reimbursements, payroll, HR settings); reads
---               nothing else of the books but the company profile and the subscription; may not save or change an
---               approved timesheet or a decided reimbursement claim (approval is the manager's)
+--               nothing else of the books but the company profile and the subscription; approves only as the
+--               reporting manager of the employee (hr_relation)
+--   Nobody but the owner decides on their own timesheet or claim (the employee record carrying the login's mobile
+--   or email); the reporting line is emp:<id>.managerId.
 --   viewer      looks at everything, changes nothing
 -- The rules below enforce the role on the server; the app and the portal hide what a role cannot do.
 --
@@ -113,24 +115,51 @@ $$;
 grant execute on function public.company_owner(uuid) to authenticated;
 
 -- Whether the signed-in account may write record k (with content d, null for a deletion) in company cid
+-- How the signed-in login stands to an employee of the company: 'self' when the employee record carries the login's
+-- mobile or email, 'manager' when the login is the employee's reporting manager or one of the managers above
+-- (employee records link through managerId), '' otherwise. Approvals (hr.js) follow this on both sides.
+create or replace function public.hr_relation(cid uuid, emp_id text) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare p public.profiles%rowtype; e jsonb; cur text := emp_id; i int := 0;
+begin
+  select * into p from public.profiles where id = auth.uid();
+  if not found or cur is null or cur = '' then return ''; end if;
+  while cur is not null and cur <> '' and i < 8 loop
+    select b.d into e from public.books b where b.user_id = cid and b.k = 'emp:' || cur;
+    if e is null then exit; end if;
+    if (coalesce(p.phone, '') <> '' and trim(coalesce(e ->> 'phone', '')) = trim(p.phone))
+       or (coalesce(p.email, '') <> '' and lower(trim(coalesce(e ->> 'email', ''))) = lower(trim(p.email))) then
+      return case when i = 0 then 'self' else 'manager' end;
+    end if;
+    cur := e ->> 'managerId'; i := i + 1;
+  end loop;
+  return '';
+exception when others then return '';
+end $$;
+
 create or replace function public.books_may_write(cid uuid, k text, d jsonb) returns boolean
 language plpgsql stable security definer set search_path = public as $$
-declare r text := public.company_role(cid);
+declare r text := public.company_role(cid); decided boolean; rel text;
 begin
   if r is null or k = 'sub' then return false; end if;       -- the subscription lives with the owner's account
-  if r in ('owner', 'admin') then return true; end if;
-  if r = 'accountant' then return k <> 'company'; end if;
-  if r = 'manager' then return k like 'emp:%' or k like 'att:%' or k like 'ts:%' or k like 'rb:%' or k like 'pay:%' or k = 'hr'; end if;
-  if r = 'hr' then
-    -- HR enters timesheets, a manager approves them: an approved sheet is neither saved nor changed by HR. The update
-    -- policy runs this on the old row (using) and on the new one (with check), so HR can neither approve, nor
-    -- unapprove, nor edit or delete a sheet once it is approved.
-    if k like 'ts:%' then return d is null or coalesce(d ->> 'approved', 'false') not in ('true', 't', '1'); end if;
-    -- Likewise a reimbursement claim: HR enters it and may change it while pending; approving, rejecting and
-    -- touching a decided claim are the manager's. "Paid" is derived from the finalised payroll, never written.
-    if k like 'rb:%' then return d is null or coalesce(d ->> 'status', 'pending') = 'pending'; end if;
-    return k like 'emp:%' or k like 'att:%' or k like 'pay:%' or k = 'hr';
+  if r = 'owner' then return true; end if;
+  -- Timesheets and reimbursement claims: a decided record (an approved sheet, a claim approved / rejected / paid) is
+  -- written only by someone entitled to decide for that employee: never the employee themselves, otherwise an admin,
+  -- a manager, or the employee's reporting manager (and the managers above) with HR access. The update policy runs
+  -- this on the old row (using) and on the new one (with check), so a decision can neither be made nor undone nor
+  -- edited by anyone else, HR included.
+  if k like 'ts:%' or k like 'rb:%' then
+    if r not in ('admin', 'manager', 'hr') then return false; end if;
+    decided := d is not null and (case when k like 'ts:%' then coalesce(d ->> 'approved', 'false') in ('true', 't', '1')
+                                       else coalesce(d ->> 'status', 'pending') in ('approved', 'rejected', 'paid') end);
+    if not decided then return true; end if;
+    rel := public.hr_relation(cid, d ->> 'empId');
+    if rel = 'self' then return false; end if;
+    return r in ('admin', 'manager') or rel = 'manager';
   end if;
+  if r = 'admin' then return true; end if;
+  if r = 'accountant' then return k <> 'company'; end if;
+  if r in ('manager', 'hr') then return k like 'emp:%' or k like 'att:%' or k like 'pay:%' or k = 'hr'; end if;
   if r = 'sales' then
     return k like 'inv:%' or k like 'dc:%' or k like 'note:%' or k like 'contact:%' or k like 'item:%'
         or (k like 'jrn:%' and (d is null or coalesce(d ->> 'kind', '') = 'Receipt'));

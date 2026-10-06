@@ -122,9 +122,9 @@ Everything the app has:
   the profile and the members; **Accountant** every record of the books and HR, not the profile or members;
   **Sales** sales invoices, delivery challans, credit / debit notes, receipts, customers and items; **Manager** the HR
   screens, and approves timesheets and reimbursements; **HR** the HR screens only (employees, attendance,
-  timesheets, reimbursements, payroll, HR settings) without approving, and nothing of the books (the server shows
-  an HR or manager login only those records, and refuses an HR login saving or changing an approved timesheet or
-  a decided reimbursement claim);
+  timesheets, reimbursements, payroll, HR settings), approving only as somebody's reporting manager, and nothing
+  of the books (the server shows an HR or manager login only those records, and refuses a decision on a timesheet
+  or claim by anyone not entitled to it, one's own included);
   **Viewer** looks at everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
   is refused with a note, and the server refuses it as well.
 - Each company has its own storage namespace in the browser and its own sync; the account's own first company
@@ -150,6 +150,9 @@ ledger all show what is really due.
 
 ## HR & payroll
 
+The HR screens come with the Full access plans (and the trial): on any other plan they show a *Full access
+subscription required* lock with the plans. Members of a company run on the owner's plan.
+
 - **Employees**: code, designation, department, dates, reporting manager, PAN / Aadhaar / UAN / ESI number, bank
   account, the pay type (a monthly salary from the attendance, or a rate per hour from the weekly timesheets), the
   salary structure (basic, DA, HRA, conveyance, special), whether PF, ESI and PT apply, the monthly TDS and the
@@ -157,13 +160,18 @@ ledger all show what is really due.
   until typed. Under the Code on Wages basic + DA must be at least 50% of the pay: a structure below that gets a
   note, and payroll counts the shortfall as wages for PF. *Offer letter* prints a letter per employee (date,
   place, probation, notice period, working hours, reporting manager, extra terms) with the pay and CTC breakup.
-- **Timesheets**: a week per screen (Monday to Sunday), hours worked a day per employee, total and overtime; a
-  manager, an admin or the owner ticks *Approved*, which locks the hours (HR enters, a manager approves). An
+- **Who approves**: a timesheet or a claim is approved by the employee's reporting manager (the employee record
+  names one; the managers above in that line count too), by an admin, a manager or the owner; never by the
+  employee themselves (the login whose mobile or email is on the employee record), the owner excepted. The server
+  applies the same rule (`hr_relation` in companies.sql), so an HR login that is somebody's reporting manager can
+  approve for their reports and nobody can approve their own.
+- **Timesheets**: a week per screen (Monday to Sunday), hours worked a day per employee, total and overtime; the
+  approver ticks *Approved*, which locks the hours (HR enters, the reporting manager approves). An
   hourly employee is paid from the timesheets: hours above the weekly limit (40) at 1.5x, holidays of the list on
   working days paid at the hours of a day; payroll flags the weeks of the month still to be approved. *Copy last
   week* fills the sheet from the previous week.
 - **Reimbursements**: claims per employee (date, category, amount, description, bill number) as pending /
-  approved / rejected / paid; a manager, an admin or the owner approves, and the server holds an HR login to
+  approved / rejected / paid; the approver (above) approves or rejects, and the server holds everyone else to
   entering and editing pending claims. Approved claims are paid with the next payroll (on the payslip under
   Reimbursements, in the books as Staff Reimbursements); each payroll row lists the claims it pays, so a claim
   shows as paid once that month is finalised and is free again if the month is reopened.
@@ -271,8 +279,14 @@ offer the APK and these iPhone / iPad steps. The native iPhone / iPad app (a she
 
 ## Activation codes
 
-The plans are a monthly plan (30 days), a yearly plan (365), a 2 years plan (730), a 5 years plan (1825), and
-invoice packs of 15 invoices (valid 3 months) and 40 invoices (valid 6 months). A time plan opens every feature.
+The plans are a monthly plan (30 days, Rs 299), a yearly plan (365, Rs 2499), a 2 years plan (730, Rs 3999), a
+5 years plan (1825, Rs 7999), invoice packs of 15 invoices (valid 3 months, Rs 99) and 40 invoices (valid 6 months,
+Rs 199), and the **Full access** plans, which cover the accounts and HR & payroll together: monthly Rs 599, yearly
+Rs 4999, 2 years Rs 7999 (priced against GST billing apps at about Rs 3000-3500 a year and payroll tools at Rs 50-100
+per employee a month). A time plan opens every accounting feature; HR & payroll need a Full access plan
+(`Sub.isFull`, from `full_until`, which such a plan sets and which syncs with the sub record; the 30-day trial has
+it too so it can be tried). Full access is bought through Cashfree (a grant with `full` true); activation codes
+cover the plain plans.
 On an invoice pack every saved invoice, credit note or debit note uses one invoice, invoices not used by the pack's
 date lapse, the portal then shows only invoicing (New Invoice,
 Sales, Credit Notes, Debit Notes, Customer, Supplier, Sales Report), and a saved invoice or note is read-only

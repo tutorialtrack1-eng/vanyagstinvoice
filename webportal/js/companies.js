@@ -36,7 +36,7 @@
   // The dashboard tiles a role gets (null = all)
   const TILES = { owner: null, admin: null, accountant: null, sales: ['invoice', 'sales', 'items', 'receipts', 'customers', 'reports'], manager: ['hr'], hr: ['hr'], viewer: ['invoice', 'purchases', 'sales', 'items', 'expenses', 'receipts', 'payments', 'journal', 'customers', 'suppliers', 'reports'] };
   const COLLECTIONS = ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'company', 'employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hr'];
-  const SUB_KEYS = ['registered_at', 'valid_until', 'used_codes', 'inv_quota', 'inv_used', 'inv_until', 'yearly_until'];
+  const SUB_KEYS = ['registered_at', 'valid_until', 'used_codes', 'inv_quota', 'inv_used', 'inv_until', 'yearly_until', 'full_until'];
   const lower = (s) => String(s == null ? '' : s).trim().toLowerCase();
 
   const Companies = {

@@ -758,6 +758,7 @@
       else if (k === 'suppliers') App.go('contacts', { type: 'Supplier' });
       else if (k === 'receipts') App.go('money', { kind: 'receipt' });
       else if (k === 'payments') App.go('money', { kind: 'payment' });
+      else if (k === 'hr' && !HR.allowed()) HR.lock();
       else if (k === 'hr') UI.menu('HR & Payroll', ['Employees', 'Attendance', 'Timesheets', 'Reimbursements', 'Payroll', 'HR Settings'], (i) => App.go(['employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hrsettings'][i]));
       else App.go(k);
     });
@@ -959,7 +960,7 @@
     granted(grants) {
       Sub.clearPendingRequest();
       App.checkSubscription();
-      const what = grants.map(g => g.days > 0 ? g.days + ' days' : g.invoices + ' invoices').join(', ');
+      const what = grants.map(g => g.days > 0 ? g.days + ' days' + (g.full ? ' of Full access' : '') : g.invoices + ' invoices').join(', ');
       UI.alert('Payment received', 'Thank you! ' + (what ? 'Added: ' + what + '. ' : '') + Sub.statusText() + '.');
       if (App.current) App.go(App.current.route, App.current.params); else App.go('dashboard');
     }

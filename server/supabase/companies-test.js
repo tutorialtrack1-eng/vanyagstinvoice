@@ -162,6 +162,19 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
   check('hr may not change an approved claim', err && err.status === 403);
   err = null; try { await tsWrite('rb:c1', { id: 'c1', empId: 'y', amount: 500, status: 'pending' }); } catch (e) { err = e; }
   check('nor put it back to pending', err && err.status === 403);
+  // The reporting line: Bala (b@example.com) is employee m1; e1 reports to m1. As HR, Bala approves e1's sheet (the
+  // reporting manager) but never their own; even as admin the self rule holds.
+  await A.Supabase.call('sync', { token: A.Sync.state().token, epoch: A.Sync.state().epoch, since: A.Sync.state().since, changes: [{ k: 'emp:m1', d: { id: 'm1', name: 'Bala', email: 'b@example.com' } }, { k: 'emp:e1', d: { id: 'e1', name: 'Eshwar', managerId: 'm1' } }], company: beta, owner: ua.id });
+  check('hr as the reporting manager approves a timesheet of their report', !!(await tsWrite('ts:e1:2026-10-05', { id: 'e1:2026-10-05', empId: 'e1', week: '2026-10-05', hours: { 0: 8 }, approved: true })).epoch);
+  check('and approves their claim', !!(await tsWrite('rb:c2', { id: 'c2', empId: 'e1', amount: 200, status: 'approved' })).epoch);
+  err = null; try { await tsWrite('ts:m1:2026-10-05', { id: 'm1:2026-10-05', empId: 'm1', week: '2026-10-05', hours: { 0: 8 }, approved: true }); } catch (e) { err = e; }
+  check('but not their own timesheet', err && err.status === 403);
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'admin' }); await B.Companies.load();
+  err = null; try { await tsWrite('rb:c3', { id: 'c3', empId: 'm1', amount: 100, status: 'approved' }); } catch (e) { err = e; }
+  check('nor their own claim, even as admin', err && err.status === 403);
+  check('an admin approves someone else\'s claim', !!(await tsWrite('rb:c4', { id: 'c4', empId: 'e1', amount: 100, status: 'approved' })).epoch);
+  check('the portal agrees: own claim no, report yes', (B.App.user = { id: 1, name: 'Bala', phone: '9876543211', email: 'b@example.com' }, await B.Sync.run(), B.HR.relation(B.Store.find('employees', 'm1')) === 'self' && B.HR.relation(B.Store.find('employees', 'e1')) === 'manager' && !B.HR.canApprove(B.Store.find('employees', 'm1')) && B.HR.canApprove(B.Store.find('employees', 'e1'))), [B.HR.myEmployee(), B.Store.list('employees').map(e => e.id)]);
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'hr' }); await B.Companies.load();
   r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'sales' }); await B.Companies.load();
 
   console.log('leaving, removing and deleting');

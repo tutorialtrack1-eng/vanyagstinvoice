@@ -34,11 +34,13 @@ create table if not exists public.grants (
   claimed_at timestamptz
 );
 alter table public.grants add column if not exists pack_days int not null default 0;
+-- A Full access plan (accounts + HR & payroll): the clients set full_until from its days
+alter table public.grants add column if not exists "full" boolean not null default false;
 alter table public.grants enable row level security;
 drop policy if exists "own grants" on public.grants;
 create policy "own grants" on public.grants for select to authenticated using (auth.uid() = user_id);
 
--- The signed-in account's unclaimed grants, marked claimed: [{"id":1,"days":30,"invoices":0,"pack_days":0,"note":"..."}]
+-- The signed-in account's unclaimed grants, marked claimed: [{"id":1,"days":30,"invoices":0,"pack_days":0,"full":false,"note":"..."}]
 create or replace function public.claim_grants() returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare out jsonb;
@@ -47,9 +49,9 @@ begin
   with c as (
     update public.grants set claimed_at = now()
     where user_id = auth.uid() and claimed_at is null
-    returning id, days, invoices, pack_days, note
+    returning id, days, invoices, pack_days, "full", note
   )
-  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'days', days, 'invoices', invoices, 'pack_days', pack_days, 'note', note)), '[]'::jsonb) into out from c;
+  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'days', days, 'invoices', invoices, 'pack_days', pack_days, 'full', "full", 'note', note)), '[]'::jsonb) into out from c;
   return out;
 end $$;
 grant execute on function public.claim_grants() to authenticated;
