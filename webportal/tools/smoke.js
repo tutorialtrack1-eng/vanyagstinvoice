@@ -59,7 +59,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('.modal .mf .btn.outline');
   check('installable: manifest, icons and the offline shell are linked', (await page.getAttribute('link[rel=manifest]', 'href')) === 'manifest.webmanifest' && (await page.getAttribute('link[rel=apple-touch-icon]', 'href')) === 'icons/apple-touch-icon.png' && fs.existsSync(path.resolve(__dirname, '..', 'sw.js')) && fs.existsSync(path.resolve(__dirname, '..', 'icons', 'icon-512.png')));
   const trial = await page.evaluate(() => Sub.statusText());
-  check('activated for 30 days on registration', /^Activated till \d{2}\/\d{2}\/\d{4} \(30 days left, with Full access to try\)$/.test(trial), trial);
+  check('activated for 30 days on registration', /^Activated till \d{2}\/\d{2}\/\d{4} \(30 days left, every feature to try except the group statements\)$/.test(trial), trial);
   await page.evaluate(() => App.go('company'));
   check('company profile shows the remaining days', (await page.textContent('#cSubLeft')).includes('30 days remaining'), await page.textContent('#cSubLeft'));
   await page.click('.modal .mf .btn.outline');
@@ -117,7 +117,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
   check('sync is on', await page.evaluate(() => Sync.status === 'idle'));
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
-  check('top bar in groups: Dashboard, Sales, Purchases, Books, Company; the company chip', await page.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales,Purchases,Books,HR,Company' && Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).includes('Company Profile') && !!document.querySelector('#barCo')));
+  check('top bar in groups: Dashboard, Sales, Purchases, Stock, Books, HR, Company; the company chip', await page.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales,Purchases,Stock,Books,HR,Company' && Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).includes('Company Profile') && !!document.querySelector('#barCo')));
   await page.hover('#nav .navgrp:nth-of-type(2) .grp'); await page.waitForTimeout(300);
   check('a group opens on hover and shows its screens', await page.evaluate(() => { const g = document.querySelector('#nav .navgrp.open'); return !!g && g.querySelector('.grp span').textContent === 'Purchases' && getComputedStyle(g.querySelector('.navmenu')).display === 'block'; }));
   await page.mouse.move(600, 500); await page.waitForTimeout(400);
@@ -449,8 +449,8 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('#quickBtn'); await page.waitForSelector('.qitem'); await page.screenshot({ path: OUT + '/21b-m-quick.png' }); await page.click('.modal .mf .btn.outline');
   await page.evaluate(() => App.go('sales')); await page.screenshot({ path: OUT + '/22-m-sales.png', fullPage: true });
   // top navigation: the strip scrolls sideways on phones, the tapped link becomes the active one
-  await page.click('#nav .navgrp:nth-of-type(2) .grp'); await page.waitForTimeout(200); await page.screenshot({ path: OUT + '/23-m-nav.png' }); await page.click('#nav [data-go=stock]'); await page.waitForTimeout(300);
-  check('a tap opens the group on a phone, and the navigation marks the open screen and its group', (await page.textContent('#nav .navitem.active')) === 'Stock in Hand' && (await page.textContent('#nav .navlink.active')) === 'Purchases' && (await page.$('#nav .navgrp.open')) === null);
+  await page.click('#nav .navgrp:nth-of-type(3) .grp'); await page.waitForTimeout(200); await page.screenshot({ path: OUT + '/23-m-nav.png' }); await page.click('#nav [data-go=stock]'); await page.waitForTimeout(300);
+  check('a tap opens the group on a phone, and the navigation marks the open screen and its group', (await page.textContent('#nav .navitem.active')) === 'Stock in Hand' && (await page.textContent('#nav .navlink.active')) === 'Stock' && (await page.$('#nav .navgrp.open')) === null);
   // every screen has its own address; the address opens the screen, and the back button walks back
   check('the address follows the screen', await page.evaluate(() => location.hash === '#stock'));
   await page.evaluate(() => { location.hash = '#contacts?type=Supplier'; }); await page.waitForFunction(() => document.querySelector('.page-h h2') && document.querySelector('.page-h h2').textContent === 'Supplier Contacts');

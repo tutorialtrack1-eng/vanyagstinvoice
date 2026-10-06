@@ -231,7 +231,8 @@
       { key: 'notes', t: 'Credit Notes', params: { kind: 'CN' } }, { key: 'notes', t: 'Debit Notes', params: { kind: 'DN' } },
       { key: 'contacts', t: 'Customers', params: { type: 'Customer' } }, { key: 'salesReport', t: 'Sales Report' }, { key: 'aging', t: 'Outstanding & Ageing' }] },
     { t: 'Purchases', ic: 'cart', items: [
-      { key: 'purchases', t: 'Purchases & Quotations' }, { key: 'contacts', t: 'Suppliers', params: { type: 'Supplier' } }, { key: 'expenses', t: 'Expenses' },
+      { key: 'purchases', t: 'Purchases & Quotations' }, { key: 'contacts', t: 'Suppliers', params: { type: 'Supplier' } }, { key: 'expenses', t: 'Expenses' }] },
+    { t: 'Stock', ic: 'box', items: [
       { key: 'items', t: 'Stock & Items' }, { key: 'stock', t: 'Stock in Hand' }] },
     { t: 'Books', ic: 'book', items: [
       { key: 'money', t: 'Receipts & Payments' }, { key: 'journal', t: 'Journal' }, { key: 'ledger', t: 'Party Ledger' },

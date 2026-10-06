@@ -46,9 +46,9 @@ Everything the app has:
 
 - Dashboard with greeting, company chips, subscription status, monthly stats, recent products and the
   tiles Invoice, Sales, Items, Customer, Supplier, Purchase, Expense, Journal, Reports. The top bar is
-  Dashboard and four groups that drop down on hover (or a tap on a phone): Sales (New Invoice, Sales,
+  Dashboard and six groups that drop down on hover (or a tap on a phone): Sales (New Invoice, Sales,
   Delivery Challans, Credit / Debit Notes, Customers, Sales Report, Outstanding & Ageing), Purchases
-  (Purchases & Quotations, Suppliers, Expenses, Stock & Items, Stock in Hand), Books (Receipts & Payments,
+  (Purchases & Quotations, Suppliers, Expenses), Stock (Stock & Items, Stock in Hand), Books (Receipts & Payments,
   Journal, Party Ledger, Profit & Loss, Balance Sheet, Group Statements), HR (Employees, Attendance, Timesheets,
   Reimbursements, Payroll, HR Settings) and Company (Company Profile,
   Companies, GST Returns, Export / Import, AI Access, Subscription); the company chip, dark mode and Logout
@@ -128,9 +128,10 @@ Everything the app has:
   **Viewer** looks at everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
   is refused with a note, and the server refuses it as well.
 - Each company has its own storage namespace in the browser and its own sync; the account's own first company
-  is the one it always had. Making companies, grouping them, adding members and the group statements come
-  with the yearly plan and longer (the subscription of the company that is open; an invoice pack has none of
-  it); a company one was given a role in can always be opened. Everyone working in a company runs on its owner's subscription (shown under
+  is the one it always had. Making companies, grouping them and adding members come with the yearly plan and
+  longer, and with the 30-day trial (the subscription of the company that is open; an invoice pack has none of
+  it); the group statements need the paid yearly plan, the one thing the trial does not have; a company one was
+  given a role in can always be opened. Everyone working in a company runs on its owner's subscription (shown under
   Subscription); AI Access belongs to the account and is offered in its own company only.
 - **Group Statements** (top bar, Reports): choose a group or all companies, Profit & Loss for a period or
   Balance Sheet as at a date. The latest books of every company are fetched first; the table has a column per
@@ -239,10 +240,11 @@ so export regularly.
 
 ## GST returns (GSTR-1 and GSTR-3B JSON)
 
-**GST** in the top bar is shown to every account. It opens for accounts on a **yearly plan or longer**
-(`Sub.isYearly`: a plan of 365 days or more applied here, by code, by payment or by a sync that stretched the
-validity by a year, is remembered as `yearly_until`; an account activated elsewhere still counts while more
-than 300 days of validity remain); everyone else gets a *Yearly subscription required* dialog with the plans.
+**GST** in the top bar is shown to every account. It opens for accounts on a **yearly plan or longer** and during
+the 30-day trial (`Sub.isYearly`: a plan of 365 days or more applied here, by code, by payment or by a sync that
+stretched the validity by a year, is remembered as `yearly_until`; an account activated elsewhere still counts while
+more than 300 days of validity remain; `Sub.isYearlyPaid` is the same without the trial, for the group statements);
+everyone else gets a *Yearly subscription required* dialog with the plans.
 A regular GST registration is needed (composition dealers file CMP-08 / GSTR-4).
 
 Pick the return period (a month, or a quarter for quarterly filers; the month gone by is offered first). The
@@ -285,8 +287,9 @@ Rs 199), and the **Full access** plans, which cover the accounts and HR & payrol
 Rs 4999, 2 years Rs 7999 (priced against GST billing apps at about Rs 3000-3500 a year and payroll tools at Rs 50-100
 per employee a month). A time plan opens every accounting feature; HR & payroll need a Full access plan
 (`Sub.isFull`, from `full_until`, which such a plan sets and which syncs with the sub record; the 30-day trial has
-it too so it can be tried). Full access is bought through Cashfree (a grant with `full` true); activation codes
-cover the plain plans.
+it too so it can be tried). Full access is bought through Cashfree (a grant with `full` true) or entered as a
+Full access code (`redeem_code_v2` answers `full` true, `server/supabase/activation.sql`); the other activation
+codes cover the plain plans.
 On an invoice pack every saved invoice, credit note or debit note uses one invoice, invoices not used by the pack's
 date lapse, the portal then shows only invoicing (New Invoice,
 Sales, Credit Notes, Debit Notes, Customer, Supplier, Sales Report), and a saved invoice or note is read-only

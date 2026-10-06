@@ -8681,14 +8681,22 @@ public class MainActivity extends Activity implements Sync.Listener {
         if (r.equals("sales")) return what.equals("invoices") || what.equals("challans") || what.equals("notes") || what.equals("contacts") || what.equals("items") || what.equals("receipts");
         return false;
     }
-    /** Companies, groups, members and the group statements come with the yearly plan and longer (the plan of the company
-     *  that is open: in another owner's company, the owner's); an invoice pack has none of it. Opening a company one was
-     *  given a role in is always possible. */
+    /** Companies, groups and members come with the yearly plan and longer, and with the 30-day trial (the plan of the
+     *  company that is open: in another owner's company, the owner's); the group statements need the paid yearly plan;
+     *  an invoice pack has none of it. Opening a company one was given a role in is always possible. */
     private boolean yearly() { return Subscription.isYearly(this, userId) && !Subscription.isLite(this, userId); }
     private boolean requireYearly() {
         if (yearly()) return true;
+        return yearlyLock("Companies, groups, members and the group statements come with the yearly plan and longer. ");
+    }
+    private boolean requireYearlyPaid() {
+        if (Subscription.isYearlyPaid(this, userId) && !Subscription.isLite(this, userId)) return true;
+        boolean trial = Subscription.isOnTrial(this, userId) && Subscription.isTimeActive(this, userId);
+        return yearlyLock("The consolidated Profit & Loss and Balance Sheet of a group of companies come with the yearly plan and longer" + (trial ? " and are not part of the trial" : "") + ". ");
+    }
+    private boolean yearlyLock(String why) {
         AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("Yearly subscription required")
-                .setMessage("Companies, groups, members and the group statements come with the yearly plan and longer. " + Subscription.statusText(this, userId) + ".")
+                .setMessage(why + Subscription.statusText(this, userId) + ".")
                 .setNegativeButton("Close", null);
         if (!inCompany()) b.setPositiveButton("Buy yearly plan", (d, w) -> showPlanChooser());
         b.show();
@@ -9000,7 +9008,7 @@ public class MainActivity extends Activity implements Sync.Listener {
        Eliminations column and out of the total, so the group only counts business with outsiders; a party is matched
        to a group company by name. Each company's GST stays its own. */
     private void showGroupStatements() {
-        if (!requireYearly()) return;
+        if (!requireYearlyPaid()) return;
         loadCompanies((list, err) -> {
             if (err != null && list.length() == 0) { new AlertDialog.Builder(this).setTitle("Group Statements").setMessage(err).setPositiveButton("OK", null).show(); return; }
             List<String> groups = groupNames(list);

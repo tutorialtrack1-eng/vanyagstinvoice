@@ -7,8 +7,8 @@
      - GSTR-3B, the monthly summary: outward taxable supplies (3.1 a), nil-rated (3.1 c), inward supplies under
        reverse charge (3.1 d), inter-state supplies to unregistered persons by state (3.2) and the input tax credit
        (4 A: reverse charge and all other ITC, net of debit notes).
-   The GST entry in the top bar is shown to everyone; the screen works on a yearly plan or longer (Sub.isYearly),
-   otherwise it says so and offers the plan. Always check the files in the offline tool before filing. */
+   The GST entry in the top bar is shown to everyone; the screen works on a yearly plan or longer and during the
+   30-day trial (Sub.isYearly), otherwise it says so and offers the plan. Always check the files in the offline tool before filing. */
 (function (global) {
   'use strict';
   const { esc, num, money } = U;

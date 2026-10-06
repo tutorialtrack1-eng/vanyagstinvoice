@@ -96,15 +96,19 @@
 
     isActive() { return this.isTimeActive() || this.invoicesLeft() > 0; },
 
-    // ---- yearly plans: the GST return files (gst.js) are for accounts on a yearly plan or longer (2 years, 5 years).
-    // yearly_until is set when such a plan is applied here (code, payment or a sync that stretched the validity by
-    // a year or more). An account activated elsewhere before this was recorded still counts while more than 300
-    // days of validity remain, which only a yearly or longer plan can give.
+    // ---- yearly plans: the GST return files (gst.js), companies, groups and members (companies.js) are for accounts on
+    // a yearly plan or longer (2 years, 5 years), and the 30-day trial has them to try (isYearly). yearly_until is set
+    // when such a plan is applied here (code, payment or a sync that stretched the validity by a year or more). An
+    // account activated elsewhere before this was recorded still counts while more than 300 days of validity remain,
+    // which only a yearly or longer plan can give. The group (consolidated) statements are the one thing the trial does
+    // not have: they need the paid plan (isYearlyPaid).
     yearlyUntil() { return n0(Store.get('yearly_until', 0)); },
-    isYearly() { const now = Date.now(), paid = this.subscriptionUntil(); return this.yearlyUntil() > now || (paid > now && paid - now > 300 * DAY); },
+    isYearlyPaid() { const now = Date.now(), paid = this.subscriptionUntil(); return this.yearlyUntil() > now || (paid > now && paid - now > 300 * DAY); },
+    isYearly() { return this.isYearlyPaid() || (this.isOnTrial() && this.isTimeActive()); },
     noteYearly(days, until) { if (n0(days) >= 360 && until > this.yearlyUntil()) Store.set('yearly_until', until); },
     // ---- Full access plans: HR & payroll (hr.js) for accounts on one, and during the trial so it can be tried.
-    // full_until is set when such a plan is applied here or arrives by sync; members run on the owner's record.
+    // full_until is set when such a plan (a payment, or a code with full true) is applied here or arrives by sync;
+    // members run on the owner's record.
     fullUntil() { return n0(Store.get('full_until', 0)); },
     isFull() { return this.fullUntil() > Date.now() || (this.isOnTrial() && this.isTimeActive()); },
     noteFull(plan, until) { if ((plan.full === true || plan.full === 'true') && until > this.fullUntil()) Store.set('full_until', until); },
@@ -117,7 +121,7 @@
         const days = Math.floor((left + DAY - 1) / DAY);
         const pack = this.invoiceQuota() > 0 && !this.packExpired() ? '; invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' left for later' + (this.packUntil() ? ', valid till ' + dmy(this.packUntil()) : '') : '';
         const full = this.fullUntil() > Date.now() ? '; Full access (HR & payroll) till ' + dmy(this.fullUntil()) : '';
-        if (this.isOnTrial()) return 'Activated till ' + date + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' left, with Full access to try)' + pack;
+        if (this.isOnTrial()) return 'Activated till ' + date + ' (' + days + ' day' + (days === 1 ? '' : 's') + ' left, every feature to try except the group statements)' + pack;
         return 'Subscription valid till ' + date + ' (' + days + ' days)' + full + pack;
       }
       if (this.invoicesLeft() > 0) return 'Invoice pack: ' + this.invoicesLeft() + ' of ' + this.invoiceQuota() + ' invoices left' + (this.packUntil() ? ', valid till ' + dmy(this.packUntil()) : '');
@@ -143,7 +147,7 @@
         if (!r || typeof r !== 'object') return -3;
         if (r.error != null) return r.error === -3 ? -3 : r.error;
         const days = n0(r.days), invoices = n0(r.invoices);
-        return days > 0 || invoices > 0 ? { days, invoices, packDays: n0(r.pack_days) } : -1;
+        return days > 0 || invoices > 0 ? { days, invoices, packDays: n0(r.pack_days), full: r.full === true } : -1;
       } catch (e) { return -3; }
     },
     // Returns {days, invoices} on success; -1 wrong code, -2 already used, -3 when the code could not be checked

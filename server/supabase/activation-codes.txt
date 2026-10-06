@@ -1,4 +1,4 @@
-BlitzBook activation codes (02/10/2026; invoice packs 03/10/2026). Each works once, on any account; a plan's days are added after the current validity ends, an invoice pack's
+BlitzBook activation codes (02/10/2026; invoice packs 03/10/2026; Full access 6 months 07/10/2026). Each works once, on any account; a plan's days are added after the current validity ends, an invoice pack's
 invoices are added to the pack balance (credit and debit notes count as invoices) and are to be used within the pack's validity,
 counted from the day the code is entered.
 They are live once server/supabase/activation.sql has been run in the Supabase SQL Editor.
@@ -74,3 +74,10 @@ Yearly plan  (365 days)
   VTHQ-PF7A-3UZU-6LL4
   U2CH-C9BW-KG3T-XFJ7
   YQSN-FAZ5-VFEJ-NAMM
+
+Full access 6 months  (180 days, accounts + HR & payroll; needs app 1.14 / the portal of 07/10/2026 or later)
+  GV74-SLW3-57DE-YD9Q
+  QXH3-J5CB-K47K-9R5R
+  Z8NX-X9JC-EQA6-X7L3
+  KWMJ-89RY-R52K-KJ4K
+  8EY9-GC54-K4DB-RM49

@@ -147,12 +147,14 @@ final class Subscription {
 
     static long subscriptionUntil(Context c, long userId) { return prefs(c).getLong("valid_until_" + userId, 0); }
 
-    // ---- yearly plans: companies, groups, members and the group statements are for accounts on a yearly plan or
-    // longer (2 years, 5 years). yearly_until_<userId> is set when such a plan is applied here or arrives by sync
-    // (the portal keeps the same field); an account activated before this was recorded still counts while more than
-    // 300 days of validity remain, which only a yearly or longer plan can give.
+    // ---- yearly plans: companies, groups and members are for accounts on a yearly plan or longer (2 years, 5 years),
+    // and the 30-day trial has them to try (isYearly). yearly_until_<userId> is set when such a plan is applied here or
+    // arrives by sync (the portal keeps the same field); an account activated before this was recorded still counts
+    // while more than 300 days of validity remain, which only a yearly or longer plan can give. The group (consolidated)
+    // statements are the one thing the trial does not have: they need the paid plan (isYearlyPaid).
     static long yearlyUntil(Context c, long userId) { return prefs(c).getLong("yearly_until_" + userId, 0); }
-    static boolean isYearly(Context c, long userId) { long now = System.currentTimeMillis(), paid = subscriptionUntil(c, userId); return yearlyUntil(c, userId) > now || (paid > now && paid - now > 300 * DAY_MILLIS); }
+    static boolean isYearlyPaid(Context c, long userId) { long now = System.currentTimeMillis(), paid = subscriptionUntil(c, userId); return yearlyUntil(c, userId) > now || (paid > now && paid - now > 300 * DAY_MILLIS); }
+    static boolean isYearly(Context c, long userId) { return isYearlyPaid(c, userId) || (isOnTrial(c, userId) && isTimeActive(c, userId)); }
     static void noteYearly(SharedPreferences.Editor e, Context c, long userId, int days, long until) { if (days >= 360 && until > yearlyUntil(c, userId)) e.putLong("yearly_until_" + userId, until); }
     // ---- Full access plans: HR & payroll in the web portal. full_until_<userId> is set when such a plan is bought here
     // or arrives by sync; the portal reads it from the synced sub record.
@@ -217,7 +219,7 @@ final class Subscription {
         }
         long days = (left + DAY_MILLIS - 1) / DAY_MILLIS;
         String pack = quota > 0 && !packExpired(c, userId) ? "; invoice pack: " + packLeft + " of " + quota + " left for later" + (until > 0 ? ", valid till " + packDate : "") : "";
-        if (isOnTrial(c, userId)) return "Activated till " + date + " (" + days + (days == 1 ? " day" : " days") + " left)" + pack;
+        if (isOnTrial(c, userId)) return "Activated till " + date + " (" + days + (days == 1 ? " day" : " days") + " left, every feature to try except the group statements)" + pack;
         return "Subscription valid till " + date + " (" + days + " days)" + pack;
     }
 
@@ -233,9 +235,9 @@ final class Subscription {
             if (entered.length() != 16) result = -1;
             else if (prefs(a).getStringSet("used_codes_" + userId, new HashSet<>()).contains(entered)) result = -2;
             else {
-                // {days, invoices, pack days} from Supabase, or one error code (-1 unknown, -2 used, -3 not reachable)
+                // {days, invoices, pack days, full} from Supabase, or one error code (-1 unknown, -2 used, -3 not reachable)
                 int[] online = Supabase.enabled(a) ? Supabase.redeem(a, userId, entered) : new int[]{-3};
-                if (online.length >= 2) { applyPlan(a, userId, entered, online[0], online[1], online.length > 2 ? online[2] : 0); result = online[0] > 0 ? online[0] : online[1]; }
+                if (online.length >= 2) { applyPlan(a, userId, entered, online[0], online[1], online.length > 2 ? online[2] : 0, online.length > 3 && online[3] == 1); result = online[0] > 0 ? online[0] : online[1]; }
                 else if (online[0] == -2) result = -2;
                 else result = activate(a, userId, identity, code);
             }
@@ -245,7 +247,7 @@ final class Subscription {
     }
 
     /** The given days follow whatever is still running: a code entered with 10 days left adds its days after those 10. */
-    private static void applyDays(Context c, long userId, String entered, int days) { applyPlan(c, userId, entered, days, 0, 0); }
+    private static void applyDays(Context c, long userId, String entered, int days) { applyPlan(c, userId, entered, days, 0, 0, false); }
 
     /** What a payment bought, applied like a code: a plan's days follow the current validity, a pack's invoices join the balance. */
     static void applyGrant(Context c, long userId, int days, int invoices, int packDays, boolean full) {
@@ -271,13 +273,13 @@ final class Subscription {
     static void rememberLink(Context c, long userId, String linkId) { Set<String> s = pendingLinks(c, userId); s.add(linkId); prefs(c).edit().putStringSet("pending_links_" + userId, s).apply(); }
     static void forgetLink(Context c, long userId, String linkId) { Set<String> s = pendingLinks(c, userId); s.remove(linkId); prefs(c).edit().putStringSet("pending_links_" + userId, s).apply(); }
 
-    /** A plan's days follow the current validity; a pack's invoices join the pack balance. */
-    private static void applyPlan(Context c, long userId, String entered, int days, int invoices, int packDays) {
+    /** A plan's days follow the current validity (a Full access code also sets full_until); a pack's invoices join the pack balance. */
+    private static void applyPlan(Context c, long userId, String entered, int days, int invoices, int packDays, boolean full) {
         SharedPreferences p = prefs(c);
         Set<String> used = new HashSet<>(p.getStringSet("used_codes_" + userId, new HashSet<>()));
         used.add(entered);
         SharedPreferences.Editor e = p.edit().putStringSet("used_codes_" + userId, used);
-        if (days > 0) { long until = Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS; e.putLong("valid_until_" + userId, until); noteYearly(e, c, userId, days, until); }
+        if (days > 0) { long until = Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS; e.putLong("valid_until_" + userId, until); noteYearly(e, c, userId, days, until); noteFull(e, c, userId, full, until); }
         if (invoices > 0) addPack(e, c, userId, invoices, packDays);
         e.apply();
     }

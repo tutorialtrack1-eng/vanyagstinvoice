@@ -338,7 +338,7 @@ final class Supabase {
     static String myUid(Context c, long userId) { String t = Sync.token(c, userId); return t.isEmpty() ? "" : jwtSub(t); }
 
     /** Redeems an activation code issued in Supabase for the signed-in account: {days, invoices, pack days} of the plan or pack,
-     *  or one value: -1 unknown code, -2 already used, -3 not reachable / not signed in. redeem_code_v2 knows both
+     *  (and 1 as a fourth value for a Full access code) or one value: -1 unknown code, -2 already used, -3 not reachable / not signed in. redeem_code_v2 knows both
      *  kinds; a project with only the older redeem_code answers the days. Signs in again when the token has expired. */
     static int[] redeem(Context c, long userId, String code) {
         try {
@@ -416,7 +416,8 @@ final class Supabase {
         JSONObject o = r instanceof JSONObject ? (JSONObject) r : new JSONObject(String.valueOf(r));
         if (o.has("error")) return new int[]{o.optInt("error", -3)};
         int days = Math.max(0, o.optInt("days", 0)), invoices = Math.max(0, o.optInt("invoices", 0));
-        return days > 0 || invoices > 0 ? new int[]{days, invoices, Math.max(0, o.optInt("pack_days", 0))} : new int[]{-1};
+        // {days, invoices, pack days, 1 for a Full access code}
+        return days > 0 || invoices > 0 ? new int[]{days, invoices, Math.max(0, o.optInt("pack_days", 0)), o.optBoolean("full", false) ? 1 : 0} : new int[]{-1};
     }
 
     private static String freshToken(Context c, long userId) {

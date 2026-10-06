@@ -53,10 +53,12 @@
     roleLabel() { return ROLE_LABEL[this.role()]; },
     ownerOf(cid) { const c = cid ? this.find(cid) : null; return c ? c.owner_id : ''; },
     available() { return !!global.Sync && Sync.isSupabase && Sync.isSupabase() && !!Sync.user; },
-    // Making companies, grouping them, managing members and the group statements come with the yearly plan and longer
-    // (the subscription of the company that is open: in another owner's company, the owner's). An invoice pack has
-    // none of this. Opening a company one was invited to is always possible.
+    // Making companies, grouping them and managing members come with the yearly plan and longer, and with the 30-day
+    // trial (the subscription of the company that is open: in another owner's company, the owner's). The group
+    // statements need the paid yearly plan: they are the one thing the trial does not have. An invoice pack has none
+    // of this. Opening a company one was invited to is always possible.
     yearly() { return Sub.isYearly() && !Sub.isLite(); },
+    groupAllowed() { return Sub.isYearlyPaid() && !Sub.isLite(); },
     lock() {
       UI.modal({ title: 'Yearly subscription required', body: '<div class="gstlock"><div class="big">🔒</div><div><p>Companies, groups, members and group statements come with the yearly plan and longer. ' + esc(Sub.statusText()) + '.</p></div></div>',
         buttons: [{ label: 'Close', cls: 'outline' }, { label: 'Buy yearly plan', cls: 'blue', onClick: () => { if (Store.cid) Companies.switcher(); else Subscription.plans(); } }] });
@@ -350,8 +352,8 @@
     // ---- Group statements screen
     async groupScreen(p) {
       const here = () => App.current && App.current.route === 'group' && !!$('#gsBody');
-      if (!this.yearly()) {
-        const root = App.view(App.header('Group Statements') + '<div class="card white"><div class="bd gstlock"><div class="big">🔒</div><div><h3>Yearly subscription required</h3><p class="muted">The consolidated Profit &amp; Loss and Balance Sheet of a group of companies come with the yearly plan and longer. ' + esc(Sub.statusText()) + '.</p>' + (Store.cid ? '' : '<button class="btn blue" id="gsBuy">Buy yearly plan</button>') + '</div></div></div>');
+      if (!this.groupAllowed()) {
+        const root = App.view(App.header('Group Statements') + '<div class="card white"><div class="bd gstlock"><div class="big">🔒</div><div><h3>Yearly subscription required</h3><p class="muted">The consolidated Profit &amp; Loss and Balance Sheet of a group of companies come with the yearly plan and longer' + (Sub.isOnTrial() && Sub.isTimeActive() ? ' and are not part of the trial' : '') + '. ' + esc(Sub.statusText()) + '.</p>' + (Store.cid ? '' : '<button class="btn blue" id="gsBuy">Buy yearly plan</button>') + '</div></div></div>');
         App.wireBack(root); if ($('#gsBuy')) $('#gsBuy').onclick = () => Subscription.plans();
         return;
       }

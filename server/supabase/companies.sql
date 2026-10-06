@@ -213,14 +213,18 @@ create trigger books_company_name after insert or update on public.books
   for each row execute function public.books_company_name();
 
 -- Whether an account is on a yearly plan or longer (its "sub" record: a yearly date, or more than 300 days of validity
--- left, which only a yearly or longer plan gives). Companies, groups and members come with such a plan.
+-- left, which only a yearly or longer plan gives), or still in its 30-day trial (no plan yet and registered less than
+-- 30 days ago; the account's creation date stands in while no sub record has synced). Companies, groups and members
+-- come with such a plan, and the trial has them to try (the clients keep the group statements for a paid yearly plan).
 create or replace function public.is_yearly(uid uuid) returns boolean
 language plpgsql stable security definer set search_path = public as $$
-declare d jsonb; now_ms bigint := (extract(epoch from now()) * 1000)::bigint;
+declare d jsonb; now_ms bigint := (extract(epoch from now()) * 1000)::bigint; start_ms bigint;
 begin
   select b.d into d from public.books b where b.user_id = uid and b.k = 'sub';
-  if d is null then return false; end if;
-  return coalesce((d ->> 'yearly_until')::bigint, 0) > now_ms or coalesce((d ->> 'valid_until')::bigint, 0) - now_ms > 300::bigint * 24 * 3600 * 1000;
+  if d is not null and (coalesce((d ->> 'yearly_until')::bigint, 0) > now_ms or coalesce((d ->> 'valid_until')::bigint, 0) - now_ms > 300::bigint * 24 * 3600 * 1000) then return true; end if;
+  if coalesce((d ->> 'valid_until')::bigint, 0) > 0 then return false; end if;
+  select coalesce(nullif((d ->> 'registered_at')::bigint, 0), (extract(epoch from u.created_at) * 1000)::bigint) into start_ms from auth.users u where u.id = uid;
+  return start_ms is not null and start_ms + 30::bigint * 24 * 3600 * 1000 > now_ms;
 exception when others then return false;
 end $$;
 

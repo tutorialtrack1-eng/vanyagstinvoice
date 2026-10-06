@@ -61,11 +61,10 @@ async function invoice(page, buyer, rate, payment) {
   await A.evaluate(() => App.go('companies')); await A.waitForSelector('#coList table');
   check('companies screen lists the first company as owner', (await A.textContent('#coList')).includes('Alpha Traders') && (await A.textContent('#coList')).includes('Owner'));
   await A.screenshot({ path: OUT + '/co-01-companies.png', fullPage: true });
-  check('on the trial the companies screen is locked', (await A.textContent('#coList')).includes('Yearly subscription required') && (await A.$('#coBuy')) !== null);
-  await A.click('#coNew'); await A.waitForSelector('.modal .mh:has-text("Yearly subscription required")');
-  check('and New company asks for the yearly plan', true);
-  await A.click('.modal .mf .btn.outline');
-  // A yearly plan: the lock goes, the server (which reads the synced subscription) allows a company
+  check('on the trial the companies screen is open', !(await A.textContent('#coList')).includes('Yearly subscription required') && (await A.$('#coBuy')) === null);
+  await A.evaluate(() => App.go('group')); await A.waitForSelector('.gstlock');
+  check('but the group statements are not part of the trial', (await A.textContent('#view')).includes('not part of the trial') && (await A.$('#gsBuy')) !== null, await A.textContent('#view').then(t => t.slice(0, 200)));
+  // A yearly plan: the server (which reads the synced subscription) allows a company on it, as on the trial
   await A.evaluate(() => { Store.set('valid_until', Date.now() + 400 * 86400000); Store.set('yearly_until', Date.now() + 400 * 86400000); });
   for (let i = 0; i < 100 && !standin.books.some(b => b.k === 'sub' && b.d && +b.d.yearly_until > 0); i++) await A.waitForTimeout(200);
   check('the yearly plan reached the server', standin.books.some(b => b.k === 'sub' && b.d && +b.d.yearly_until > 0));

@@ -67,9 +67,10 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   registration and password reset go out by email (and SMS, with an SMS provider): `server/supabase/README.md`.
   Alternatively `server/` is a small Node server doing the same (`server/README.md`). Without either, data
   moves between the app and the portal by backup file (Export / Import on either side).
-- The trial after registering lasts 30 days; trial, validity and activation codes are shared between app and
-  portal when sync is on. The portal's GST screen (GSTR-1 and GSTR-3B JSON for the GST portal) is for accounts
-  on a yearly plan or longer; invoices carry a payment due date and optional terms & conditions on the PDF.
+- The trial after registering lasts 30 days and has every feature except the group (consolidated) statements;
+  trial, validity and activation codes are shared between app and portal when sync is on. The portal's GST
+  screen (GSTR-1 and GSTR-3B JSON for the GST portal) is for accounts on a yearly plan or longer; invoices carry
+  a payment due date and optional terms & conditions on the PDF.
 - AI access: an account makes API keys in the portal or the app (AI Access, read only or read & write) and connects any
   AI assistant (ChatGPT, Claude, Gemini, Copilot or another MCP client) to its books with the same universal key through BlitzBook's MCP server, a Supabase Edge Function
   (`server/supabase/README.md`, *AI access*).

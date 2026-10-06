@@ -52,7 +52,8 @@ function maySelect(uid, hdr, row) {
   const c = hdr ? companies.get(hdr) : null;
   return row.k === 'sub' && !!c && !!roleOf(uid, hdr) && row.user_id === c.owner_id;
 }
-const isYearly = (uid) => { const b = books.find(x => x.user_id === uid && x.k === 'sub'); if (!b || !b.d) return false; const now = Date.now(); return (+b.d.yearly_until || 0) > now || (+b.d.valid_until || 0) - now > 300 * 86400000; };
+// A yearly plan or longer, or the 30-day trial (no plan yet, registered less than 30 days ago; the account's creation date while no sub record has synced), as is_yearly() in companies.sql
+const isYearly = (uid) => { const b = books.find(x => x.user_id === uid && x.k === 'sub'), d = b && b.d ? b.d : {}, now = Date.now(); if ((+d.yearly_until || 0) > now || (+d.valid_until || 0) - now > 300 * 86400000) return true; if ((+d.valid_until || 0) > 0) return false; const u = users.get(uid), start = +d.registered_at || (u ? Date.parse(u.created_at) : 0); return start > 0 && start + 30 * 86400000 > now; };
 function ensurePrimary(uid) { if (!companies.has(uid)) { const co = books.find(b => b.user_id === uid && b.k === 'company'); companies.set(uid, { id: uid, owner_id: uid, name: co && co.d ? co.d.company_name || '' : '', group_name: '', created_at: new Date().toISOString() }); } }
 function upsertBook(cid, k, d) { const at = books.findIndex(x => x.user_id === cid && x.k === k); const nr = { user_id: cid, k, d, r: ++rev }; if (at >= 0) books[at] = nr; else books.push(nr); if (k === 'company' && d && companies.has(cid)) companies.get(cid).name = String(d.company_name || '').slice(0, 120); }
 const rpc = {

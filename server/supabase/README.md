@@ -77,8 +77,9 @@ what is missing). It creates `public.activation_codes`, the `redeem_code` and `r
 loads 60 codes (also listed in `activation-codes.txt`): ten each of the monthly plan (30 days), the yearly plan
 (365), the 2 years plan (730), the 5 years plan (1825), the 15 invoices pack (valid 3 months) and the 40 invoices
 pack (valid 6 months). The Full access plans (accounts + HR & payroll: monthly Rs 599, yearly Rs 4999, 2 years
-Rs 7999) are sold through the Cashfree function only (`grants.full`); there are no codes for them. A time plan
-opens every accounting feature; on an invoice pack every saved invoice, credit note or debit
+Rs 7999) are sold through the Cashfree function (`grants.full`); besides, five *Full access 6 months* codes (180 days,
+`activation_codes.full` true, 07/10/2026) are in the SQL, for app 1.14 / the portal of that date or later (an older
+client takes such a code as a plain 180-day plan). A time plan opens every accounting feature; on an invoice pack every saved invoice, credit note or debit
 note uses one of its invoices, invoices not used by the pack's date lapse, only the invoicing features are offered on it, and a saved invoice or note cannot be
 changed or deleted. A code works once, on any account, and its days are added to the end of the current validity (trial or plan); a lapsed account starts from the day the code is entered. **The codes only work once
 this SQL has been run in the project**: until then the app and the portal answer "Invalid activation code".

@@ -148,10 +148,14 @@ async function upload(page, file) {
   check('classic layout gets a filler row above the totals on the last page', pdfs[1].includes("el('tr', 'fill')"));
 
   console.log('GST returns');
+  await page.evaluate(() => App.go('gst')); await page.waitForSelector('#g1');
+  check('GST is in the top bar for everyone and opens during the trial', (await page.textContent('#nav .navitem.active')).includes('GST') && (await page.$('.modal')) === null);
+  check('the trial counts as yearly, but not as a paid yearly plan', await page.evaluate(() => Sub.isYearly() && !Sub.isYearlyPaid()));
+  await page.evaluate(() => { Sub.applyPlan({ days: 30, invoices: 0 }); App.go('dashboard'); }); await page.waitForSelector('.tiles.dash');
   await page.evaluate(() => App.go('gst')); await page.waitForSelector('.modal');
-  check('GST is in the top bar for everyone and asks for a yearly plan', (await modal().textContent()).includes('Yearly subscription required') && (await page.textContent('#nav .navitem.active')).includes('GST') && (await page.$('#gBuy')) !== null);
+  check('on a monthly plan GST asks for a yearly plan', (await modal().textContent()).includes('Yearly subscription required') && (await page.textContent('#nav .navitem.active')).includes('GST') && (await page.$('#gBuy')) !== null);
   await modal().locator('.mf .btn').first().click();
-  check('isYearly follows a plan of a year or more', await page.evaluate(() => { const a = Sub.isYearly(); Sub.applyPlan({ days: 30, invoices: 0 }); const b = Sub.isYearly(); Sub.applyPlan({ days: 365, invoices: 0 }); return !a && !b && Sub.isYearly() && Sub.yearlyUntil() === Store.get('valid_until'); }));
+  check('isYearly follows a plan of a year or more', await page.evaluate(() => { const b = Sub.isYearly(); Sub.applyPlan({ days: 365, invoices: 0 }); return !b && Sub.isYearly() && Sub.isYearlyPaid() && Sub.yearlyUntil() === Store.get('valid_until'); }));
   await page.evaluate(() => App.go('gst')); await page.waitForSelector('#g1');
   check('the GST screen opens on the month gone by, with the summary cards', (await page.$('.modal')) === null && (await page.textContent('#view')).includes('GSTR-1 - Outward supplies') && (await page.inputValue('#gstPeriod')) === await page.evaluate(() => { const n = new Date(); return 'M' + String(n.getMonth() || 12).padStart(2, '0') + (n.getMonth() ? n.getFullYear() : n.getFullYear() - 1); }), await page.inputValue('#gstPeriod'));
   // this month's documents (the invoices are dated today)
