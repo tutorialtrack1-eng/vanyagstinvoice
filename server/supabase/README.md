@@ -182,6 +182,8 @@ by `user_id`; the rules on `books` check the role per record:
   (25 per owner), `update_company(id, name, group)`, `delete_company(id)` (owner, never the first company; the
   books go with it), `list_members(id)`, `set_member(id, mobile or email, role)` (owner / admin; the account must
   be registered already; 50 per company), `remove_member(id, user)` (owner / admin, or oneself).
+- `create_company` and `set_member` need the owner on a yearly plan or longer (`is_yearly`: the owner's `sub`
+  record has a `yearly_until` ahead or more than 300 days of validity), as the clients require.
 - The company name in `companies` follows the company profile record (`books_company_name` trigger).
 - The foreign key from `books.user_id` to `auth.users` is dropped (a company id is not a user); triggers delete a
   company's books with the company and an account's books with the account.

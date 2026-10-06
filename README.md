@@ -30,8 +30,10 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 - Companies (side menu): the books of several companies under one login, each with its own profile, parties,
   invoices and reports; Switch company on the dashboard moves between them. Companies go in groups
   ("Sharma Group") and other BlitzBook accounts get a role in a company: owner, admin, accountant, sales or
-  viewer. Everyone working in a company runs on its owner's subscription; the server refuses what a role may
-  not change (`server/supabase/companies.sql`).
+  viewer. Making companies, grouping them and adding members come with the yearly plan and longer (an
+  invoice pack keeps to invoicing); a company one was given a role in can always be opened. Everyone working
+  in a company runs on its owner's subscription; the server refuses what a role may not change
+  (`server/supabase/companies.sql`).
 - Group Statements (side menu, Reports): the Profit & Loss or Balance Sheet of every company in a group side by
   side with the group total, after fetching each company's latest books. Dealings between companies of the group
   (an invoice of A on B, B's purchase from A, what they owe each other; parties matched to companies by name) go

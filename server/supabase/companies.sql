@@ -154,6 +154,18 @@ drop trigger if exists books_company_name on public.books;
 create trigger books_company_name after insert or update on public.books
   for each row execute function public.books_company_name();
 
+-- Whether an account is on a yearly plan or longer (its "sub" record: a yearly date, or more than 300 days of validity
+-- left, which only a yearly or longer plan gives). Companies, groups and members come with such a plan.
+create or replace function public.is_yearly(uid uuid) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare d jsonb; now_ms bigint := (extract(epoch from now()) * 1000)::bigint;
+begin
+  select b.d into d from public.books b where b.user_id = uid and b.k = 'sub';
+  if d is null then return false; end if;
+  return coalesce((d ->> 'yearly_until')::bigint, 0) > now_ms or coalesce((d ->> 'valid_until')::bigint, 0) - now_ms > 300::bigint * 24 * 3600 * 1000;
+exception when others then return false;
+end $$;
+
 -- ---------------------------------------------------------------- the account's companies
 
 -- Makes sure the signed-in account has its first company row (id = the account id)
@@ -197,6 +209,7 @@ declare nm text := left(trim(coalesce(name_in, '')), 120); g text := left(trim(c
 begin
   if auth.uid() is null then return jsonb_build_object('error', 'Sign in first'); end if;
   if nm = '' then return jsonb_build_object('error', 'Enter the company name'); end if;
+  if not public.is_yearly(auth.uid()) then return jsonb_build_object('error', 'Companies, groups and members come with the yearly plan and longer'); end if;
   perform public.ensure_primary_company();
   if (select count(*) from public.companies where owner_id = auth.uid()) >= 25 then
     return jsonb_build_object('error', 'An account can own 25 companies');
@@ -261,6 +274,7 @@ language plpgsql security definer set search_path = public as $$
 declare p public.profiles%rowtype; r text := lower(trim(coalesce(role_in, ''))); own uuid;
 begin
   if public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
+  if not public.is_yearly(coalesce((select owner_id from public.companies where id = cid), cid)) then return jsonb_build_object('error', 'Members come with the yearly plan and longer (the owner of the company has to be on it)'); end if;
   if r not in ('admin', 'accountant', 'sales', 'viewer') then return jsonb_build_object('error', 'Role must be admin, accountant, sales or viewer'); end if;
   select * into p from public.profiles where phone = trim(identity) or lower(email) = lower(trim(identity)) limit 1;
   if not found then return jsonb_build_object('error', 'No BlitzBook account with that mobile number or email. Ask them to register first.'); end if;

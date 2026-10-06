@@ -1,6 +1,6 @@
 {
-  "versionCode": 9,
-  "versionName": "1.8",
+  "versionCode": 10,
+  "versionName": "1.9",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "Companies: keep the books of several companies under one login and switch between them (dashboard > Switch company). Groups and members: put companies in a group and give other BlitzBook accounts a role in a company (owner, admin, accountant, sales, viewer). Group Statements: the Profit & Loss and Balance Sheet of every company in a group side by side with inter-company eliminations and the group total."
+  "notes": "Companies, groups, members and Group Statements now come with the yearly plan and longer (an invoice pack keeps to invoicing); a company you were given a role in can always be opened. The yearly plan is recognised on every device."
 }

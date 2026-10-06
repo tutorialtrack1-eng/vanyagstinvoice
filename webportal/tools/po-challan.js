@@ -149,7 +149,7 @@ async function upload(page, file) {
 
   console.log('GST returns');
   await page.evaluate(() => App.go('gst')); await page.waitForSelector('.modal');
-  check('GST is in the top bar for everyone and asks for a yearly plan', (await modal().textContent()).includes('Yearly subscription required') && (await page.textContent('#nav .navlink.active')).includes('GST') && (await page.$('#gBuy')) !== null);
+  check('GST is in the top bar for everyone and asks for a yearly plan', (await modal().textContent()).includes('Yearly subscription required') && (await page.textContent('#nav .navitem.active')).includes('GST') && (await page.$('#gBuy')) !== null);
   await modal().locator('.mf .btn').first().click();
   check('isYearly follows a plan of a year or more', await page.evaluate(() => { const a = Sub.isYearly(); Sub.applyPlan({ days: 30, invoices: 0 }); const b = Sub.isYearly(); Sub.applyPlan({ days: 365, invoices: 0 }); return !a && !b && Sub.isYearly() && Sub.yearlyUntil() === Store.get('valid_until'); }));
   await page.evaluate(() => App.go('gst')); await page.waitForSelector('#g1');

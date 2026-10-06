@@ -41,7 +41,7 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
   console.log('the account\'s own company, as before');
   check('first round signs in', await A.Sync.run(), A.Sync.lastError);
   A.Store.saveCompany(Object.assign(A.Store.company(), { name: 'Alpha Traders', gstin: '37AAAAA0000A1Z5', address: 'VIJAYAWADA', phone: '9876543210', email: 'a@example.com', gstType: 'Regular' }));
-  A.Store.set('valid_until', Date.now() + 200 * 86400000);
+  A.Store.set('valid_until', Date.now() + 400 * 86400000);
   A.Store.add('invoices', inv('0001', 'Beta Supplies\nGuntur', 1000, 'Credit'));   // to the other company of the group
   A.Store.add('invoices', inv('0002', 'Outside Customer', 500, 'Cash'));
   check('A pushes under its own id, no header', await A.Sync.run() && books.every(b => b.user_id === ua.id), A.Sync.lastError);

@@ -220,31 +220,30 @@
     grid.addEventListener('pointerup', end); grid.addEventListener('pointercancel', end);
     grid.addEventListener('click', e => { const t = e.target.closest('.tile'); if (t && (t.dataset.dragged || grid.classList.contains('arrange'))) { e.stopPropagation(); e.preventDefault(); } }, true);
   }
-  // Top navigation. The company profile is reached through the company chip on the right of the bar.
+  /* Top navigation: Dashboard, then groups that drop down on hover (or a tap on a touch screen). Every item is a
+     screen; some carry parameters (Credit Notes is the notes screen for CN). The company profile is also reached
+     through the company chip on the right of the bar. */
   const NAV = [
     { key: 'dashboard', t: 'Dashboard', ic: 'home' },
-    { key: 'purchases', t: 'Purchases', ic: 'cart' },
-    { key: 'salesReport', t: 'Sales Report', ic: 'trend' },
-    { key: 'pnl', t: 'Profit & Loss', ic: 'pie' },
-    { key: 'balance', t: 'Balance Sheet', ic: 'scale' },
-    { key: 'money', t: 'Receipts & Payments', ic: 'bank' },
-    { key: 'stock', t: 'Stock in Hand', ic: 'box' },
-    { key: 'backup', t: 'Export / Import', ic: 'download' },
-    // GST returns are shown to everyone; the screen itself opens on a yearly plan or longer (gst.js)
-    { key: 'gst', t: 'GST', ic: 'file' },
-    // API keys for the MCP server: an AI assistant working with these books (server/supabase/functions/mcp)
-    { key: 'ai', t: 'AI Access', ic: 'key' },
-    // Several companies under one login, groups, members with roles, and the consolidated statements (companies.js)
-    { key: 'companies', t: 'Companies', ic: 'users' },
-    { key: 'group', t: 'Group Statements', ic: 'layers' },
-    { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true }
+    { t: 'Sales', ic: 'rupee', items: [
+      { key: 'invoice', t: 'New Invoice' }, { key: 'sales', t: 'Sales' }, { key: 'challans', t: 'Delivery Challans' },
+      { key: 'notes', t: 'Credit Notes', params: { kind: 'CN' } }, { key: 'notes', t: 'Debit Notes', params: { kind: 'DN' } },
+      { key: 'contacts', t: 'Customers', params: { type: 'Customer' } }, { key: 'salesReport', t: 'Sales Report' }, { key: 'aging', t: 'Outstanding & Ageing' }] },
+    { t: 'Purchases', ic: 'cart', items: [
+      { key: 'purchases', t: 'Purchases & Quotations' }, { key: 'contacts', t: 'Suppliers', params: { type: 'Supplier' } }, { key: 'expenses', t: 'Expenses' },
+      { key: 'items', t: 'Stock & Items' }, { key: 'stock', t: 'Stock in Hand' }] },
+    { t: 'Books', ic: 'book', items: [
+      { key: 'money', t: 'Receipts & Payments' }, { key: 'journal', t: 'Journal' }, { key: 'ledger', t: 'Party Ledger' },
+      { key: 'pnl', t: 'Profit & Loss' }, { key: 'balance', t: 'Balance Sheet' }, { key: 'group', t: 'Group Statements' }] },
+    { t: 'Company', ic: 'building', items: [
+      { key: 'company', t: 'Company Profile' }, { key: 'companies', t: 'Companies' }, { key: 'gst', t: 'GST Returns' }, { key: 'backup', t: 'Export / Import' },
+      // API keys for the MCP server: an AI assistant working with these books (server/supabase/functions/mcp)
+      { key: 'ai', t: 'AI Access' }, { key: 'subscription', t: 'Subscription' }] }
   ];
   // Routes that open a dialog over the current screen: they never become the active link or the screen to redraw
   const DIALOGS = ['company', 'subscription', 'sync'];
   // What an account on an invoice pack gets: invoicing only (Sub.isLite)
-  const LITE_NAV = ['dashboard', 'salesReport', 'backup', 'gst', 'ai', 'subscription'];
-  // Screens that belong to the account rather than to a company: not offered while another company's books are open
-  const ACCOUNT_NAV = ['ai'];
+  const LITE_KEYS = ['dashboard', 'invoice', 'sales', 'notes', 'contacts', 'salesReport', 'company', 'gst', 'backup', 'ai', 'subscription'];
   const LITE_TILES = [
     { key: 'invoice', t: 'New Invoice', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
     { key: 'sales', t: 'Sales', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
@@ -254,7 +253,20 @@
     { key: 'suppliers', t: 'Supplier', ic: 'truck', a: '#C2410C', b: '#F97316' },
     { key: 'reports', t: 'Sales Report', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
   ];
-  const navItems = () => (Sub.isLite() ? NAV.filter(n => LITE_NAV.includes(n.key)) : NAV).filter(n => Companies.mayOpen(n.key) && !(Store.cid && ACCOUNT_NAV.includes(n.key)));
+  // Screens that belong to the account rather than to a company: not offered while another company's books are open
+  const ACCOUNT_NAV = ['ai'];
+  // The groups and items this account gets right now: the plan (invoice pack = invoicing only), the role in the company
+  function navItems() {
+    const ok = (n) => (!Sub.isLite() || LITE_KEYS.includes(n.key)) && Companies.mayOpen(n.key) && !(Store.cid && ACCOUNT_NAV.includes(n.key));
+    return NAV.map(g => g.items ? Object.assign({}, g, { items: g.items.filter(ok) }) : g).filter(g => g.items ? g.items.length > 0 : ok(g));
+  }
+  const navKeys = () => navItems().map(g => g.items ? g.t + ':' + g.items.map(i => i.key + (i.params ? JSON.stringify(i.params) : '')).join('|') : g.key).join();
+  function navHtml() {
+    return navItems().map(n => n.items
+      ? '<div class="navgrp"><button class="navlink grp" aria-haspopup="true" aria-expanded="false">' + icon(n.ic) + '<span>' + esc(n.t) + '</span><i class="caret"></i></button><div class="navmenu" role="menu">' +
+        n.items.map(it => '<button class="navitem" role="menuitem" data-go="' + it.key + '"' + (it.params ? ' data-params="' + esc(JSON.stringify(it.params)) + '"' : '') + '>' + esc(it.t) + '</button>').join('') + '</div></div>'
+      : '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('');
+  }
   // The Android app, served next to the portal. The iPhone / iPad app: the App Store link once it is published
   // (ios/README.md); until then the portal itself is installed from Safari as a web app.
   const APK_URL = 'BlitzBook.apk';
@@ -303,7 +315,7 @@
     shell() {
       $('#root').innerHTML =
         '<header class="appbar"><button class="brandmark" id="homeBtn" title="Dashboard">' + BRAND + '</button>' +
-        '<nav class="nav" id="nav" aria-label="Main">' + navItems().map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('') + '</nav>' +
+        '<nav class="nav" id="nav" aria-label="Main">' + navHtml() + '</nav>' +
         '<div class="bar-right">' + (Native.ios ? '' : '<span class="dlgroup" id="dlApp"><button class="navlink dl" id="dlAndroid" title="Download the BlitzBook Android app (APK)">' + icon('android') + '<span>Android App</span></button>' +
           '<button class="navlink dl" id="dlIos" title="BlitzBook on iPhone / iPad">' + icon('apple') + '<span>iOS App</span></button></span>') +
         '<button class="cochip" id="barCo" title="Switch company / Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
@@ -316,9 +328,37 @@
       Theme.apply();
       $('#barCo').onclick = () => Companies.switcher();
       $('#logoutBtn').onclick = () => UI.confirm('Logout', 'Do you want to logout?', () => this.logout(), 'Logout');
-      $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
+      $('#nav').dataset.keys = navKeys();
+      this.wireNav();
       this.refreshBar();
     },
+    // The drop-down groups: open on hover with a mouse, on a tap otherwise; a click elsewhere, Escape, a resize
+    // or a scroll closes them. The menu is positioned on the page so the scrolling bar on a phone does not clip it.
+    wireNav() {
+      const nav = $('#nav');
+      $$('[data-go]', nav).forEach(el => el.onclick = (e) => { e.stopPropagation(); this.closeMenus(); this.go(el.dataset.go, el.dataset.params ? JSON.parse(el.dataset.params) : undefined); });
+      $$('.navgrp', nav).forEach(g => {
+        const btn = $('.grp', g);
+        // A click on a group opened by the mouse hovering over it leaves it open; a tap (no hover) toggles it
+        btn.onclick = (e) => { e.stopPropagation(); const open = g.classList.contains('open'); if (open && g.hovered) return; this.closeMenus(); if (!open) this.openMenu(g); };
+        g.addEventListener('pointerenter', e => { if (e.pointerType !== 'mouse') return; g.hovered = true; clearTimeout(this.menuTimer); if (!g.classList.contains('open')) { this.closeMenus(); this.openMenu(g); } });
+        g.addEventListener('pointerleave', e => { if (e.pointerType !== 'mouse') return; g.hovered = false; clearTimeout(this.menuTimer); this.menuTimer = setTimeout(() => this.closeMenus(), 180); });
+      });
+      if (!this.menusWired) {
+        this.menusWired = true;
+        document.addEventListener('click', () => this.closeMenus());
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') this.closeMenus(); });
+        window.addEventListener('resize', () => this.closeMenus());
+        nav.addEventListener('scroll', () => $$('#nav .navgrp.open').forEach(g => this.openMenu(g))); // the bar scrolled: the menu follows its group
+      }
+    },
+    openMenu(g) {
+      g.classList.add('open'); $('.grp', g).setAttribute('aria-expanded', 'true');
+      const m = $('.navmenu', g), r = g.getBoundingClientRect();
+      m.style.top = r.bottom + 'px';
+      m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + 'px';
+    },
+    closeMenus() { $$('#nav .navgrp.open').forEach(g => { g.classList.remove('open'); $('.grp', g).setAttribute('aria-expanded', 'false'); }); },
     refreshBar() {
       if (!this.user || !$('#barSub')) return;
       const c = Store.company(), name = c.name || Companies.currentName() || '';
@@ -328,24 +368,30 @@
     // The top navigation follows the subscription kind (every screen, or invoicing only on an invoice pack)
     refreshNav() {
       const nav = $('#nav'); if (!nav) return;
-      const want = navItems().map(n => n.key).join();
+      const want = navKeys();
       if (nav.dataset.keys === want) return;
       nav.dataset.keys = want;
-      nav.innerHTML = navItems().map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('');
-      $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
-      if (this.current) this.markNav(this.current.route);
+      nav.innerHTML = navHtml();
+      this.wireNav();
+      if (this.current) this.markNav(this.current.route, this.current.params);
     },
-    // Highlights the current screen in the top navigation and scrolls it into view on narrow screens
-    markNav(route) {
-      const nav = $('#nav'); let on = null;
-      $$('.navlink', nav).forEach(b => { const hit = b.dataset.go === route; b.classList.toggle('active', hit); if (hit) { b.setAttribute('aria-current', 'page'); on = b; } else b.removeAttribute('aria-current'); });
-      if (on) nav.scrollLeft = on.offsetLeft - (nav.clientWidth - on.offsetWidth) / 2;
+    // Highlights the current screen in the top navigation (the item and its group) and scrolls the group into
+    // view on narrow screens. An item with parameters (Credit Notes) is the one open when those parameters match.
+    markNav(route, params) {
+      const nav = $('#nav'); if (!nav) return;
+      params = params || {};
+      const hit = (el) => { if (el.dataset.go !== route) return false; if (!el.dataset.params) return true; const p = JSON.parse(el.dataset.params); return Object.keys(p).every(k => String(params[k]) === String(p[k])); };
+      let on = null;
+      $$('[data-go]', nav).forEach(el => { const h = hit(el); el.classList.toggle('active', h); if (h) { el.setAttribute('aria-current', 'page'); on = el; } else el.removeAttribute('aria-current'); });
+      $$('.navgrp', nav).forEach(g => $('.grp', g).classList.toggle('active', !!$('.navitem.active', g)));
+      const top = on && on.closest('.navgrp') ? $('.grp', on.closest('.navgrp')) : on;
+      if (top) nav.scrollLeft = top.offsetLeft - (nav.clientWidth - top.offsetWidth) / 2;
     },
     go(route, params) {
       const fn = this.routes[route];
       if (!fn) { UI.toast('Screen not available: ' + route); return; }
       if (!Companies.mayOpen(route)) { UI.hold = 0; UI.toast('Your role in this company (' + Companies.roleLabel() + ') does not open this screen', 4000); if (!this.current) route = 'dashboard'; else return; }
-      if (!DIALOGS.includes(route)) { window.scrollTo(0, 0); this.markNav(route); this.current = { route, params: params || {} }; this.stale = false; $('#view').classList.remove('still'); this.setHash(route, params || {}); }
+      if (!DIALOGS.includes(route)) { window.scrollTo(0, 0); this.markNav(route, params); this.current = { route, params: params || {} }; this.stale = false; $('#view').classList.remove('still'); this.setHash(route, params || {}); }
       fn(params || {});
       this.refreshBar();
     },

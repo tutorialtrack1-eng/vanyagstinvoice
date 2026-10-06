@@ -56,11 +56,21 @@ async function invoice(page, buyer, rate, payment) {
   check('signed in through the stand-in Supabase', await A.evaluate(() => Sync.isSupabase()));
   await A.click('.modal .mf .btn.outline').catch(() => null); // company profile prompt: Later
   await profile(A, 'Alpha Traders', '36AAOFT3399K1ZB');
-  check('nav shows Companies and Group Statements', await A.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join()).then(s => s.includes('Companies') && s.includes('Group Statements')));
+  check('nav shows Companies and Group Statements', await A.evaluate(() => Array.from(document.querySelectorAll('#nav [data-go]')).map(e => e.textContent).join()).then(s => s.includes('Companies') && s.includes('Group Statements')));
   await until(A, () => Sync.status === 'idle' && Object.keys(Sync.state().base).includes('company'), 20000);
   await A.evaluate(() => App.go('companies')); await A.waitForSelector('#coList table');
   check('companies screen lists the first company as owner', (await A.textContent('#coList')).includes('Alpha Traders') && (await A.textContent('#coList')).includes('Owner'));
   await A.screenshot({ path: OUT + '/co-01-companies.png', fullPage: true });
+  check('on the trial the companies screen is locked', (await A.textContent('#coList')).includes('Yearly subscription required') && (await A.$('#coBuy')) !== null);
+  await A.click('#coNew'); await A.waitForSelector('.modal .mh:has-text("Yearly subscription required")');
+  check('and New company asks for the yearly plan', true);
+  await A.click('.modal .mf .btn.outline');
+  // A yearly plan: the lock goes, the server (which reads the synced subscription) allows a company
+  await A.evaluate(() => { Store.set('valid_until', Date.now() + 400 * 86400000); Store.set('yearly_until', Date.now() + 400 * 86400000); });
+  for (let i = 0; i < 100 && !standin.books.some(b => b.k === 'sub' && b.d && +b.d.yearly_until > 0); i++) await A.waitForTimeout(200);
+  check('the yearly plan reached the server', standin.books.some(b => b.k === 'sub' && b.d && +b.d.yearly_until > 0));
+  await A.evaluate(() => App.go('companies')); await A.waitForSelector('#coList table');
+  check('on a yearly plan the lock is gone', !(await A.textContent('#coList')).includes('Yearly subscription required'));
   await A.click('#coNew'); await A.waitForSelector('#ncName');
   await A.fill('#ncName', 'Beta Supplies'); await A.fill('#ncGroup', 'Sharma Group'); await A.click('.modal .mf .btn.green');
   await A.waitForSelector('.modal .mh:has-text("Open Beta Supplies?")');
@@ -68,7 +78,7 @@ async function invoice(page, buyer, rate, payment) {
   await A.waitForSelector('.hero');
   check('switched: the chip names the company and the role, hero shows the group', await until(A, () => document.querySelector('#barSub').textContent.includes('Beta Supplies') && document.querySelector('#barSub').textContent.includes('Owner') && !!document.querySelector('#coSwitch') && document.querySelector('.hero .chips').textContent.includes('Sharma Group')), await A.textContent('#barSub'));
   check('its own namespace: no invoices here, the company profile synced in', await until(A, () => Store.cid !== '' && Store.list('invoices').length === 0 && Store.company().name === 'Beta Supplies'));
-  check('AI Access is not offered in another company', !(await A.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join())).includes('AI Access'));
+  check('AI Access is not offered in another company', !(await A.evaluate(() => Array.from(document.querySelectorAll('#nav [data-go]')).map(e => e.textContent).join())).includes('AI Access'));
   await profile(A, 'Beta Supplies', '36AAOFT3399K1ZB');
   await invoice(A, 'Outside Customer', 200, 'Cash');
   await A.evaluate(() => { Store.add('purchases', { kind: 'PUR', no: 'PUR-0001', date: U.today(), supplier: 'Alpha Traders', supplierGstin: '', paidBy: 'Credit', notes: '', taxable: 1000, gst: 180, cgst: 90, sgst: 90, igst: 0, total: 1180, rcm: false, inclusive: false, tdsRate: 0, tds: 0, items: [{ name: 'Goods', hsn: '', qty: 1, uqc: 'NOS', rate: 1000, gst: '18', amount: 1000, stock: false }] }); });
@@ -113,7 +123,7 @@ async function invoice(page, buyer, rate, payment) {
   await B.evaluate(() => App.go('companies')); await B.waitForSelector('#coList table');
   check('Bala sees Beta as viewer with the owner named', (await B.textContent('#coList')).includes('Beta Supplies') && (await B.textContent('#coList')).includes('Viewer') && (await B.textContent('#coList')).includes('Asha'));
   await B.click('[data-open="' + betaId + '"]'); await B.waitForSelector('.hero');
-  check('viewer: books arrive, nav trimmed, subscription is the owner\'s', await until(B, () => Store.cid !== '' && Store.list('invoices').length === 1 && Store.company().name === 'Beta Supplies' && Sub.isActive(), 20000) && !(await B.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join())).includes('Export / Import'));
+  check('viewer: books arrive, nav trimmed, subscription is the owner\'s', await until(B, () => Store.cid !== '' && Store.list('invoices').length === 1 && Store.company().name === 'Beta Supplies' && Sub.isActive(), 20000) && !(await B.evaluate(() => Array.from(document.querySelectorAll('#nav [data-go]')).map(e => e.textContent).join())).includes('Export / Import'));
   await B.evaluate(() => App.go('invoice')); await B.waitForSelector('#rows');
   await B.fill('#bName', 'Nope'); await B.fill('#rows tr[data-i="0"] [data-k=desc]', 'Goods'); await B.fill('#rows tr[data-i="0"] [data-k=qty]', '1'); await B.fill('#rows tr[data-i="0"] [data-k=rate]', '10'); await B.click('#iSave'); await B.waitForSelector('.toast');
   await B.waitForTimeout(300);

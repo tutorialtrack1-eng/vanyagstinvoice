@@ -145,6 +145,14 @@ final class Subscription {
 
     static long subscriptionUntil(Context c, long userId) { return prefs(c).getLong("valid_until_" + userId, 0); }
 
+    // ---- yearly plans: companies, groups, members and the group statements are for accounts on a yearly plan or
+    // longer (2 years, 5 years). yearly_until_<userId> is set when such a plan is applied here or arrives by sync
+    // (the portal keeps the same field); an account activated before this was recorded still counts while more than
+    // 300 days of validity remain, which only a yearly or longer plan can give.
+    static long yearlyUntil(Context c, long userId) { return prefs(c).getLong("yearly_until_" + userId, 0); }
+    static boolean isYearly(Context c, long userId) { long now = System.currentTimeMillis(), paid = subscriptionUntil(c, userId); return yearlyUntil(c, userId) > now || (paid > now && paid - now > 300 * DAY_MILLIS); }
+    static void noteYearly(SharedPreferences.Editor e, Context c, long userId, int days, long until) { if (days >= 360 && until > yearlyUntil(c, userId)) e.putLong("yearly_until_" + userId, until); }
+
     /** Paid subscription end if there is one, otherwise the end of the trial. */
     static long expiresAt(Context c, long userId) {
         long paid = subscriptionUntil(c, userId);
@@ -173,7 +181,7 @@ final class Subscription {
     static void copy(Context c, long from, long to) {
         SharedPreferences p = prefs(c);
         p.edit().putLong("registered_at_" + to, p.getLong("registered_at_" + from, 0)).putLong("valid_until_" + to, p.getLong("valid_until_" + from, 0))
-                .putStringSet("used_codes_" + to, new HashSet<>(p.getStringSet("used_codes_" + from, new HashSet<>())))
+                .putStringSet("used_codes_" + to, new HashSet<>(p.getStringSet("used_codes_" + from, new HashSet<>()))).putLong("yearly_until_" + to, p.getLong("yearly_until_" + from, 0))
                 .putInt("inv_quota_" + to, p.getInt("inv_quota_" + from, 0)).putInt("inv_used_" + to, p.getInt("inv_used_" + from, 0)).putLong("inv_until_" + to, p.getLong("inv_until_" + from, 0)).apply();
     }
 
@@ -235,7 +243,7 @@ final class Subscription {
     /** What a payment bought, applied like a code: a plan's days follow the current validity, a pack's invoices join the balance. */
     static void applyGrant(Context c, long userId, int days, int invoices, int packDays) {
         SharedPreferences.Editor e = prefs(c).edit();
-        if (days > 0) e.putLong("valid_until_" + userId, Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS);
+        if (days > 0) { long until = Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS; e.putLong("valid_until_" + userId, until); noteYearly(e, c, userId, days, until); }
         if (invoices > 0) addPack(e, c, userId, invoices, packDays);
         e.apply();
     }
@@ -262,7 +270,7 @@ final class Subscription {
         Set<String> used = new HashSet<>(p.getStringSet("used_codes_" + userId, new HashSet<>()));
         used.add(entered);
         SharedPreferences.Editor e = p.edit().putStringSet("used_codes_" + userId, used);
-        if (days > 0) e.putLong("valid_until_" + userId, Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS);
+        if (days > 0) { long until = Math.max(System.currentTimeMillis(), expiresAt(c, userId)) + days * DAY_MILLIS; e.putLong("valid_until_" + userId, until); noteYearly(e, c, userId, days, until); }
         if (invoices > 0) addPack(e, c, userId, invoices, packDays);
         e.apply();
     }

@@ -1795,7 +1795,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         chips.addView(chip(lineOfActivityStr.isEmpty() || lineOfActivityStr.startsWith("Select") ? "General" : lineOfActivityStr, 0x33FFFFFF, Color.WHITE));
         banner.addView(chips);
         // Which company of the account is open, its group and the role here; the last chip switches companies
-        if (inCompany() || cachedCompanies().length() > 1) {
+        if ((inCompany() || cachedCompanies().length() > 1) && !Subscription.isLite(this, userId)) {
             LinearLayout chips2 = new LinearLayout(this);
             chips2.setOrientation(LinearLayout.HORIZONTAL);
             String group = inCompany() ? companyInfo[3] : groupOfPrimary();
@@ -8607,6 +8607,19 @@ public class MainActivity extends Activity implements Sync.Listener {
         if (r.equals("sales")) return what.equals("invoices") || what.equals("challans") || what.equals("notes") || what.equals("contacts") || what.equals("items") || what.equals("receipts");
         return false;
     }
+    /** Companies, groups, members and the group statements come with the yearly plan and longer (the plan of the company
+     *  that is open: in another owner's company, the owner's); an invoice pack has none of it. Opening a company one was
+     *  given a role in is always possible. */
+    private boolean yearly() { return Subscription.isYearly(this, userId) && !Subscription.isLite(this, userId); }
+    private boolean requireYearly() {
+        if (yearly()) return true;
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("Yearly subscription required")
+                .setMessage("Companies, groups, members and the group statements come with the yearly plan and longer. " + Subscription.statusText(this, userId) + ".")
+                .setNegativeButton("Close", null);
+        if (!inCompany()) b.setPositiveButton("Buy yearly plan", (d, w) -> showPlanChooser());
+        b.show();
+        return false;
+    }
     private boolean requireWrite(String what) {
         if (canWrite(what)) return true;
         Toast.makeText(this, what.equals("company") ? "Only the owner or an admin can change the company profile (your role here: " + roleLabel(role()) + ")"
@@ -8722,7 +8735,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         box.addView(boundedScroll(listBox, 0.55), new LinearLayout.LayoutParams(-1, -2));
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Companies").setView(box)
                 .setPositiveButton("New company", null).setNeutralButton("Group statements", (d, w) -> showGroupStatements()).setNegativeButton("Close", null).create();
-        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> showNewCompanyDialog(dialog)));
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { if (requireYearly()) showNewCompanyDialog(dialog); }));
         dialog.show();
         loadCompanies((list, err) -> {
             if (!dialog.isShowing()) return;
@@ -8753,7 +8766,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                     List<String> opts = new ArrayList<>(); List<Runnable> acts = new ArrayList<>();
                     if (!open) { opts.add("Open"); acts.add(() -> { dialog.dismiss(); switchCompany(c); }); }
                     opts.add("Members"); acts.add(() -> showMembersDialog(c));
-                    if (own || "admin".equals(c.optString("role"))) { opts.add("Group / name"); acts.add(() -> showCompanyGroupDialog(c, dialog)); }
+                    if ((own || "admin".equals(c.optString("role"))) && yearly()) { opts.add("Group / name"); acts.add(() -> showCompanyGroupDialog(c, dialog)); }
                     if (own && !c.optBoolean("primary")) { opts.add("Delete company"); acts.add(() -> new AlertDialog.Builder(this).setTitle("Delete Company").setMessage("Delete \"" + c.optString("name") + "\" and all its books (invoices, parties, purchases, everything) for every member? This cannot be undone.\n\nTip: open the company and take an Export first.")
                             .setNegativeButton("Cancel", null).setPositiveButton("Delete", (d2, w2) -> companyAction(dialog, () -> Supabase.deleteCompany(this, userId, c.optString("id")), "Company deleted", c.optString("id"))).show()); }
                     if (!own) { opts.add("Leave company"); acts.add(() -> new AlertDialog.Builder(this).setTitle("Leave Company").setMessage("Leave \"" + c.optString("name") + "\"? You will no longer see its books unless the owner adds you again.")
@@ -8835,7 +8848,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
     // The people with access to a company; the owner and admins add, change and remove them
     private void showMembersDialog(JSONObject c) {
-        boolean manage = "owner".equals(c.optString("role")) || "admin".equals(c.optString("role"));
+        boolean manage = ("owner".equals(c.optString("role")) || "admin".equals(c.optString("role"))) && yearly();
         String cid = c.optString("id"), me = Supabase.myUid(this, userId);
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(16), dp(8), dp(16), dp(4));
         LinearLayout listBox = new LinearLayout(this); listBox.setOrientation(LinearLayout.VERTICAL);
@@ -8911,6 +8924,7 @@ public class MainActivity extends Activity implements Sync.Listener {
        Eliminations column and out of the total, so the group only counts business with outsiders; a party is matched
        to a group company by name. Each company's GST stays its own. */
     private void showGroupStatements() {
+        if (!requireYearly()) return;
         loadCompanies((list, err) -> {
             if (err != null && list.length() == 0) { new AlertDialog.Builder(this).setTitle("Group Statements").setMessage(err).setPositiveButton("OK", null).show(); return; }
             List<String> groups = groupNames(list);

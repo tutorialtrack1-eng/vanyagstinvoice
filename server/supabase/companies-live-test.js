@@ -41,7 +41,7 @@ const admin = async (service, method, p, body) => { const r = await fetch(URL_ +
     console.log('own company');
     check('A signs in and syncs its own books', await A.Sync.run(), A.Sync.lastError);
     A.Store.saveCompany(Object.assign(A.Store.company(), { name: 'Live Alpha', gstin: '36AAOFT3399K1ZB', address: 'X', phone: '9876543210', email: ua.email, gstType: 'Regular' }));
-    A.Store.set('valid_until', Date.now() + 100 * 86400000);
+    A.Store.set('valid_until', Date.now() + 400 * 86400000);
     A.Store.add('invoices', inv('0001', 'Live Beta\nGuntur', 1000, 'Credit'));
     check('A pushes', await A.Sync.run(), A.Sync.lastError);
     let list = await A.Companies.load();

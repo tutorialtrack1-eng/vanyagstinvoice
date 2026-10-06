@@ -44,9 +44,13 @@ here and vice versa, and the trial and activation are shared.
 Everything the app has:
 
 - Dashboard with greeting, company chips, subscription status, monthly stats, recent products and the
-  tiles Invoice, Sales, Items, Customer, Supplier, Purchase, Expense, Journal, Reports. The top bar carries
-  Company Profile, Sales Report, Profit & Loss, Balance Sheet, Stock in Hand, Export / Import, Subscription
-  and Sync, with the sync status, company name and Logout on the right.
+  tiles Invoice, Sales, Items, Customer, Supplier, Purchase, Expense, Journal, Reports. The top bar is
+  Dashboard and four groups that drop down on hover (or a tap on a phone): Sales (New Invoice, Sales,
+  Delivery Challans, Credit / Debit Notes, Customers, Sales Report, Outstanding & Ageing), Purchases
+  (Purchases & Quotations, Suppliers, Expenses, Stock & Items, Stock in Hand), Books (Receipts & Payments,
+  Journal, Party Ledger, Profit & Loss, Balance Sheet, Group Statements) and Company (Company Profile,
+  Companies, GST Returns, Export / Import, AI Access, Subscription); the company chip, dark mode and Logout
+  sit on the right. An invoice pack and a role in another company trim the groups to what they may open.
 - Invoice editor: number with step buttons and owner-defined format, date, payment mode, RCM for service
   businesses, buyer and consignee blocks with contact pick-list, other details (transporter, delivery note,
   buyer order no and date, reference, info), item rows with HSN (filled from the item master or the
@@ -118,7 +122,9 @@ Everything the app has:
   everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
   is refused with a note, and the server refuses it as well.
 - Each company has its own storage namespace in the browser and its own sync; the account's own first company
-  is the one it always had. Everyone working in a company runs on its owner's subscription (shown under
+  is the one it always had. Making companies, grouping them, adding members and the group statements come
+  with the yearly plan and longer (the subscription of the company that is open; an invoice pack has none of
+  it); a company one was given a role in can always be opened. Everyone working in a company runs on its owner's subscription (shown under
   Subscription); AI Access belongs to the account and is offered in its own company only.
 - **Group Statements** (top bar, Reports): choose a group or all companies, Profit & Loss for a period or
   Balance Sheet as at a date. The latest books of every company are fetched first; the table has a column per

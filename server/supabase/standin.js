@@ -28,6 +28,7 @@ function maySelect(uid, hdr, row) {
   const c = hdr ? companies.get(hdr) : null;
   return row.k === 'sub' && !!c && !!roleOf(uid, hdr) && row.user_id === c.owner_id;
 }
+const isYearly = (uid) => { const b = books.find(x => x.user_id === uid && x.k === 'sub'); if (!b || !b.d) return false; const now = Date.now(); return (+b.d.yearly_until || 0) > now || (+b.d.valid_until || 0) - now > 300 * 86400000; };
 function ensurePrimary(uid) { if (!companies.has(uid)) { const co = books.find(b => b.user_id === uid && b.k === 'company'); companies.set(uid, { id: uid, owner_id: uid, name: co && co.d ? co.d.company_name || '' : '', group_name: '', created_at: new Date().toISOString() }); } }
 function upsertBook(cid, k, d) { const at = books.findIndex(x => x.user_id === cid && x.k === k); const nr = { user_id: cid, k, d, r: ++rev }; if (at >= 0) books[at] = nr; else books.push(nr); if (k === 'company' && d && companies.has(cid)) companies.get(cid).name = String(d.company_name || '').slice(0, 120); }
 const rpc = {
@@ -43,13 +44,14 @@ const rpc = {
     }
     return [200, out.sort((a, b) => (b.owner_id === uid) - (a.owner_id === uid) || b.primary - a.primary || a.group_name.localeCompare(b.group_name) || a.name.localeCompare(b.name))];
   },
-  create_company(uid, b) { if (!uid) return [200, { error: 'Sign in first' }]; const nm = String(b.name_in || '').trim(); if (!nm) return [200, { error: 'Enter the company name' }]; ensurePrimary(uid); const id = crypto.randomUUID(); companies.set(id, { id, owner_id: uid, name: nm, group_name: String(b.group_in || '').trim(), created_at: new Date().toISOString() }); upsertBook(id, 'company', { company_name: nm }); return [200, { id, name: nm, group_name: String(b.group_in || '').trim() }]; },
+  create_company(uid, b) { if (!uid) return [200, { error: 'Sign in first' }]; const nm = String(b.name_in || '').trim(); if (!nm) return [200, { error: 'Enter the company name' }]; if (!isYearly(uid)) return [200, { error: 'Companies, groups and members come with the yearly plan and longer' }]; ensurePrimary(uid); const id = crypto.randomUUID(); companies.set(id, { id, owner_id: uid, name: nm, group_name: String(b.group_in || '').trim(), created_at: new Date().toISOString() }); upsertBook(id, 'company', { company_name: nm }); return [200, { id, name: nm, group_name: String(b.group_in || '').trim() }]; },
   update_company(uid, b) { if (!['owner', 'admin'].includes(roleOf(uid, b.cid))) return [200, { error: 'Only the owner or an admin can change the company' }]; companies.get(b.cid).group_name = String(b.group_in || '').trim(); return [200, { ok: true }]; },
   delete_company(uid, b) { if (!uid || b.cid === uid) return [200, { error: 'The first company of an account cannot be deleted' }]; const c = companies.get(b.cid); if (!c || c.owner_id !== uid) return [200, { error: 'Only the owner can delete a company' }]; companies.delete(b.cid); for (const k of Array.from(members.keys())) if (k.startsWith(b.cid + '|')) members.delete(k); for (let i = books.length - 1; i >= 0; i--) if (books[i].user_id === b.cid) books.splice(i, 1); return [200, { ok: true }]; },
   list_members(uid, b) { if (!roleOf(uid, b.cid)) return [200, { error: 'Not a member of this company' }]; const c = companies.get(b.cid), own = c ? c.owner_id : b.cid, p = profiles.get(own) || {}; const out = [{ user_id: own, name: p.name || '', phone: p.phone || '', email: p.email || '', role: 'owner' }]; for (const [k, m] of members) if (k.startsWith(b.cid + '|')) { const q = profiles.get(m.user_id) || {}; out.push({ user_id: m.user_id, name: q.name || '', phone: q.phone || '', email: q.email || '', role: m.role }); } return [200, out]; },
   set_member(uid, b) {
     if (!['owner', 'admin'].includes(roleOf(uid, b.cid))) return [200, { error: 'Only the owner or an admin can manage members' }];
     const r = String(b.role_in || '').toLowerCase(); if (!['admin', 'accountant', 'sales', 'viewer'].includes(r)) return [200, { error: 'Role must be admin, accountant, sales or viewer' }];
+    const co = companies.get(b.cid); if (!isYearly(co ? co.owner_id : b.cid)) return [200, { error: 'Members come with the yearly plan and longer (the owner of the company has to be on it)' }];
     const id = String(b.identity || '').trim().toLowerCase(), p = Array.from(profiles.values()).find(x => x.phone === id || (x.email || '').toLowerCase() === id);
     if (!p) return [200, { error: 'No BlitzBook account with that mobile number or email. Ask them to register first.' }];
     const c = companies.get(b.cid); if (p.id === (c ? c.owner_id : b.cid)) return [200, { error: 'That is the owner of the company' }];

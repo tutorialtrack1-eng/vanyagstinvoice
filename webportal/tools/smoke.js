@@ -67,7 +67,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   // a saved invoice is read-only, and a used-up pack refuses the next one
   await page.evaluate(() => { Store.set('registered_at', Date.now() - 40 * 86400000); Store.set('valid_until', 0); Store.set('inv_quota', 2); Store.set('inv_used', 0); App.checkSubscription(); App.go('dashboard'); });
   await page.waitForSelector('#stPack');
-  check('invoice pack: only the invoicing features are offered', await page.evaluate(() => Sub.isLite() && Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales Report,Export / Import,GST,AI Access,Subscription' && Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customer,Supplier,Sales Report' && document.querySelector('#stPack').textContent === '2 of 2'), await page.evaluate(() => [Sub.statusText(), Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join()]));
+  check('invoice pack: only the invoicing features are offered', await page.evaluate(() => Sub.isLite() && Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales,Purchases,Company' && Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customers,Sales Report,Suppliers,Company Profile,GST Returns,Export / Import,AI Access,Subscription' && Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join() === 'New Invoice,Sales,Credit Notes,Debit Notes,Customer,Supplier,Sales Report' && document.querySelector('#stPack').textContent === '2 of 2'), await page.evaluate(() => [Sub.statusText(), Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join(), Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).join()]));
   await page.screenshot({ path: OUT + '/01b-pack-dashboard.png', fullPage: true });
   const packSave = async (n) => { await page.evaluate(() => App.go('invoice')); await page.waitForSelector('#rows'); await page.fill('#bName', 'Pack Buyer ' + n); await page.fill(row(0) + '[data-k=desc]', 'Thing ' + n); await page.fill(row(0) + '[data-k=qty]', '1'); await page.fill(row(0) + '[data-k=rate]', '100'); await page.click('#iSave'); await page.waitForSelector('.toast'); return toast(page); };
   await packSave(1);
@@ -117,7 +117,11 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
   check('sync is on', await page.evaluate(() => Sync.status === 'idle'));
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
-  check('top bar: Purchases in, Company Profile out (reached through the company chip)', await page.evaluate(() => { const t = Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent); return t.includes('Purchases') && !t.includes('Company Profile') && !!document.querySelector('#barCo'); }));
+  check('top bar in groups: Dashboard, Sales, Purchases, Books, Company; the company chip', await page.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales,Purchases,Books,Company' && Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).includes('Company Profile') && !!document.querySelector('#barCo')));
+  await page.hover('#nav .navgrp:nth-of-type(2) .grp'); await page.waitForTimeout(300);
+  check('a group opens on hover and shows its screens', await page.evaluate(() => { const g = document.querySelector('#nav .navgrp.open'); return !!g && g.querySelector('.grp span').textContent === 'Purchases' && getComputedStyle(g.querySelector('.navmenu')).display === 'block'; }));
+  await page.mouse.move(600, 500); await page.waitForTimeout(400);
+  check('and closes when the mouse leaves', (await page.$('#nav .navgrp.open')) === null);
   const tileOrder = () => page.evaluate(() => Array.from(document.querySelectorAll('.tiles.dash .t')).map(e => e.textContent).join());
   check('dashboard tiles in the agreed order, without descriptions', (await tileOrder()) === 'New Invoice,Purchases,Sales,Stock,Expense,Receipts,Payments,Journal,Customer,Supplier,Reports' && (await page.$('.tiles.dash .d')) === null, await tileOrder());
   // drag the first tile onto the third: the order changes, is saved, and Reset order brings the standard one back
@@ -446,8 +450,8 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('#quickBtn'); await page.waitForSelector('.qitem'); await page.screenshot({ path: OUT + '/21b-m-quick.png' }); await page.click('.modal .mf .btn.outline');
   await page.evaluate(() => App.go('sales')); await page.screenshot({ path: OUT + '/22-m-sales.png', fullPage: true });
   // top navigation: the strip scrolls sideways on phones, the tapped link becomes the active one
-  await page.click('#nav [data-go=stock]'); await page.waitForTimeout(300); await page.screenshot({ path: OUT + '/23-m-nav.png' });
-  check('navigation marks the open screen', (await page.textContent('#nav .navlink.active')) === 'Stock in Hand');
+  await page.click('#nav .navgrp:nth-of-type(2) .grp'); await page.waitForTimeout(200); await page.screenshot({ path: OUT + '/23-m-nav.png' }); await page.click('#nav [data-go=stock]'); await page.waitForTimeout(300);
+  check('a tap opens the group on a phone, and the navigation marks the open screen and its group', (await page.textContent('#nav .navitem.active')) === 'Stock in Hand' && (await page.textContent('#nav .navlink.active')) === 'Purchases' && (await page.$('#nav .navgrp.open')) === null);
   // every screen has its own address; the address opens the screen, and the back button walks back
   check('the address follows the screen', await page.evaluate(() => location.hash === '#stock'));
   await page.evaluate(() => { location.hash = '#contacts?type=Supplier'; }); await page.waitForFunction(() => document.querySelector('.page-h h2') && document.querySelector('.page-h h2').textContent === 'Supplier Contacts');

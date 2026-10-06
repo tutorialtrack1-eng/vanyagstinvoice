@@ -49,6 +49,15 @@
     roleLabel() { return ROLE_LABEL[this.role()]; },
     ownerOf(cid) { const c = cid ? this.find(cid) : null; return c ? c.owner_id : ''; },
     available() { return !!global.Sync && Sync.isSupabase && Sync.isSupabase() && !!Sync.user; },
+    // Making companies, grouping them, managing members and the group statements come with the yearly plan and longer
+    // (the subscription of the company that is open: in another owner's company, the owner's). An invoice pack has
+    // none of this. Opening a company one was invited to is always possible.
+    yearly() { return Sub.isYearly() && !Sub.isLite(); },
+    lock() {
+      UI.modal({ title: 'Yearly subscription required', body: '<div class="gstlock"><div class="big">🔒</div><div><p>Companies, groups, members and group statements come with the yearly plan and longer. ' + esc(Sub.statusText()) + '.</p></div></div>',
+        buttons: [{ label: 'Close', cls: 'outline' }, { label: 'Buy yearly plan', cls: 'blue', onClick: () => { if (Store.cid) Companies.switcher(); else Subscription.plans(); } }] });
+      return false;
+    },
     // The account's own id on the server, from the token
     myUid() { try { const t = Sync.state().token; return JSON.parse(atob(String(t).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).sub || ''; } catch (e) { return ''; } },
 
@@ -127,22 +136,23 @@
         '<div class="hint" style="margin-bottom:10px">Keep the books of several companies under one login, put companies in a group for consolidated statements, and give other BlitzBook accounts a role in a company. Everyone working in a company runs on its owner\'s subscription.</div>' +
         '<div id="coList"><div class="hint">Loading…</div></div>');
       App.wireBack(root);
-      $('#coNew').onclick = () => this.create();
+      $('#coNew').onclick = () => this.yearly() ? this.create() : this.lock();
       $('#coGroup').onclick = () => App.go('group');
       if (!this.available()) { $('#coList').innerHTML = '<div class="empty">Companies live in your BlitzBook account on the server. This browser is not signed in to the server right now.</div>'; $('#coNew').disabled = true; return; }
       let list;
       try { list = await this.load(); }
       catch (e) { if (here()) $('#coList').innerHTML = '<div class="empty">' + esc(e.status === 404 ? 'Companies are not set up on the server yet (run server/supabase/companies.sql).' : 'The companies could not be loaded: ' + (e.message || 'no connection') + '.') + '</div>'; return; }
       if (!here()) return;
-      const me = this.myUid(), cur = Store.cid || '';
+      const me = this.myUid(), cur = Store.cid || '', yearly = this.yearly();
       const card = (g) => '<div class="card white"><div class="hd">' + esc(g.name || 'No group') + (g.name ? '<span class="small muted" style="margin-left:8px">' + g.items.length + ' compan' + (g.items.length === 1 ? 'y' : 'ies') + '</span>' : '') + '</div><div class="bd"><table class="list cards"><thead><tr><th>Company</th><th>Your role</th><th>Owner</th><th class="num">Members</th><th></th></tr></thead><tbody>' +
         g.items.map(c => { const key = c.primary && c.role === 'owner' ? '' : c.id, own = c.role === 'owner', mine = c.owner_id === me;
           return '<tr' + (key === cur ? ' class="grp"' : '') + '><td data-l="Company"><b>' + esc(c.name || 'Unnamed company') + '</b>' + (c.primary && mine ? '<div class="small muted">Your first company</div>' : '') + '</td><td data-l="Role"><span class="pill ' + (own ? 'ok' : c.role === 'viewer' ? '' : 'warn') + '">' + esc(ROLE_LABEL[c.role] || c.role) + '</span></td><td data-l="Owner">' + esc(mine ? 'You' : c.owner_name || '') + '</td><td class="num" data-l="Members">' + (1 + (parseInt(c.members, 10) || 0)) + '</td>' +
             '<td class="actions">' + (key === cur ? '<span class="pill ok">Open now</span>' : '<button class="btn sm" data-open="' + esc(key) + '">Open</button>') +
-            '<button class="btn sm outline" data-members="' + esc(c.id) + '">Members</button>' + (own || c.role === 'admin' ? '<button class="btn sm outline" data-edit="' + esc(c.id) + '">Group / name</button>' : '') +
+            '<button class="btn sm outline" data-members="' + esc(c.id) + '">Members</button>' + ((own || c.role === 'admin') && yearly ? '<button class="btn sm outline" data-edit="' + esc(c.id) + '">Group / name</button>' : '') +
             (own && !c.primary ? '<button class="btn sm red" data-del="' + esc(c.id) + '">Delete</button>' : '') + (!own ? '<button class="btn sm red" data-leave="' + esc(c.id) + '">Leave</button>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
-      $('#coList').innerHTML = this.grouped(list).map(card).join('') +
+      $('#coList').innerHTML = (yearly ? '' : '<div class="card white"><div class="bd gstlock"><div class="big">🔒</div><div><h3>Yearly subscription required</h3><p class="muted">Making companies, groups and members and the group statements come with the yearly plan and longer; a company you were given a role in can be opened. ' + esc(Sub.statusText()) + '.</p>' + (Store.cid ? '' : '<button class="btn blue" id="coBuy">Buy yearly plan</button>') + '</div></div></div>') + this.grouped(list).map(card).join('') +
         '<div class="card white"><div class="hd">Roles</div><div class="bd"><table class="list"><tbody>' + ROLES.map(r => '<tr><td style="white-space:nowrap"><span class="pill ' + (r === 'owner' ? 'ok' : r === 'viewer' ? '' : 'warn') + '">' + ROLE_LABEL[r] + '</span></td><td>' + esc(ROLE_HELP[r]) + '</td></tr>').join('') + '</tbody></table></div></div>';
+      if ($('#coBuy')) $('#coBuy').onclick = () => Subscription.plans();
       $$('[data-open]', root).forEach(b => b.onclick = () => this.switchTo(b.dataset.open));
       $$('[data-members]', root).forEach(b => b.onclick = () => this.members(list.find(c => c.id === b.dataset.members)));
       $$('[data-edit]', root).forEach(b => b.onclick = () => this.edit(list.find(c => c.id === b.dataset.edit)));
@@ -186,7 +196,7 @@
     },
     // The people with access to a company; the owner and admins add, change and remove them
     async members(c) {
-      const manage = c.role === 'owner' || c.role === 'admin', me = this.myUid();
+      const manage = (c.role === 'owner' || c.role === 'admin') && this.yearly(), me = this.myUid();
       const bg = UI.modal({ title: 'Members of ' + (c.name || 'the company'), wide: true, focus: false, body: '<div id="mbList"><div class="hint">Loading…</div></div>' +
           (manage ? '<div class="field span" style="margin-top:12px"><label>Add a member</label><div class="btnrow" style="margin:0"><input id="mbId" placeholder="Mobile number or email of a BlitzBook account" style="flex:1;min-width:200px">' + UI.select('mbRole', ROLES.filter(r => r !== 'owner').map(r => [r, ROLE_LABEL[r]]), 'viewer') + '<button class="btn sm green" id="mbAdd">Add</button></div><div class="hint">They must have a BlitzBook account already (registered in the app or the portal). The company then appears under Companies in their login, and they work in it on your subscription.</div></div>' : ''),
         buttons: [{ label: 'Close', cls: 'outline' }] });
@@ -335,6 +345,11 @@
     // ---- Group statements screen
     async groupScreen(p) {
       const here = () => App.current && App.current.route === 'group' && !!$('#gsBody');
+      if (!this.yearly()) {
+        const root = App.view(App.header('Group Statements') + '<div class="card white"><div class="bd gstlock"><div class="big">🔒</div><div><h3>Yearly subscription required</h3><p class="muted">The consolidated Profit &amp; Loss and Balance Sheet of a group of companies come with the yearly plan and longer. ' + esc(Sub.statusText()) + '.</p>' + (Store.cid ? '' : '<button class="btn blue" id="gsBuy">Buy yearly plan</button>') + '</div></div></div>');
+        App.wireBack(root); if ($('#gsBuy')) $('#gsBuy').onclick = () => Subscription.plans();
+        return;
+      }
       const list = this.list(), groups = this.groupNames(list);
       const group = p.group != null ? p.group : (groups[0] || '');
       const stmt = p.stmt === 'balance' ? 'balance' : 'pnl';
