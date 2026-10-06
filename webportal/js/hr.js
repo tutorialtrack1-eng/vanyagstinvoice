@@ -4,7 +4,8 @@
    month into the books as a journal voucher. HR Settings hold the rates, the ceilings, the state for PT, working
    hours, the HRA rule and the holiday list. The records sync like the rest of the books ("emp:", "att:", "ts:",
    "rb:", "pay:", "hr"); the HR and Manager roles of a company (companies.js) open only these screens, and only a
-   manager, an admin or the owner approves timesheets and reimbursements.
+   manager, an admin or the owner approves timesheets and reimbursements: the server (companies.sql) lets the HR
+   role save a timesheet only while unapproved and a claim only while pending.
 
    Pay (India, 2026, changeable under HR Settings):
      Wages  Code on Wages: basic + DA must be at least 50% of the pay; when the allowances are more than half, the
@@ -119,8 +120,13 @@
       for (const [lim, tax] of slabs) if (lim === '*' || gross <= lim) return r2(tax);
       return 0;
     },
-    // Approved reimbursements waiting to be paid, or already paid with this month's payroll
-    reimbursementsOf(empId, month) { return Store.list('reimbursements').filter(r => r.empId === empId && ((r.status === 'approved' && !r.paidMonth) || (r.status === 'paid' && r.paidMonth === month))); },
+    /* A claim is "paid" when a finalised payroll carries its id (each payroll row lists the claims it pays, reimbIds),
+       so the claim record itself is written only when it is entered (HR) or decided (a manager); the server lets the
+       HR role save a claim only while it is pending. Reopening a month frees its claims by itself. */
+    paidIn(claimId) { const run = Store.list('payroll').find(p => p.status === 'final' && (p.rows || []).some(row => (row.reimbIds || []).includes(claimId))); return run ? run.month : (Store.find('reimbursements', claimId) || {}).paidMonth || ''; },
+    claimState(r) { const paid = r.status === 'paid' ? (r.paidMonth || '') : r.status === 'approved' ? this.paidIn(r.id) : ''; return paid ? { status: 'paid', paidMonth: paid } : { status: r.status, paidMonth: '' }; },
+    // Approved reimbursements to pay with this month: not yet paid by another finalised month
+    reimbursementsOf(empId, month) { return Store.list('reimbursements').filter(r => r.empId === empId && (r.status === 'approved' || r.status === 'paid') && [month, ''].includes(this.claimState(r).paidMonth)); },
     // One employee's pay for a month: earned per paid day (or the timesheet hours at the rate), overtime, reimbursements,
     // then PF / ESI / PT / TDS. prev keeps the manual entries (advance recovered, other deductions, remarks).
     compute(emp, month, prev) {
@@ -147,12 +153,12 @@
       const edli = Math.round(pfWage * num(s.edliRate) / 100), pfAdmin = Math.round(pfWage * num(s.pfAdmin) / 100);
       const esiOn = emp.esi !== false && structure <= num(s.esiCeiling), esiEmp = esiOn ? ceil((gross + ot) * num(s.esiEmp) / 100) : 0, esiEmployer = esiOn ? ceil((gross + ot) * num(s.esiEmployer) / 100) : 0;
       const pt = emp.pt === false ? 0 : this.ptOf(gross + ot, s);
-      const reimb = r2(this.reimbursementsOf(emp.id, month).reduce((x, r) => x + num(r.amount), 0));
+      const claims = this.reimbursementsOf(emp.id, month), reimb = r2(claims.reduce((x, r) => x + num(r.amount), 0));
       const tds = r2(num(emp.tds)), advance = r2(num(prev && prev.advance)), other = r2(num(prev && prev.other));
       const net = r2(gross + ot + reimb - pfEmp - esiEmp - pt - tds - advance - other);
       return { empId: emp.id, code: emp.code || '', name: emp.name, designation: emp.designation || '', payType: hourly ? 'hourly' : 'monthly', rate: hourly ? num(emp.hourlyRate) : 0, days: sum.total, paid: sum.paid, lop: sum.lop, present: sum.P, leave: sum.L, hours: sum.hours, otHours: sum.ot,
         regularHours: hoursInfo ? hoursInfo.regular : 0, holidayHours: hoursInfo ? hoursInfo.holiday : 0, unapproved: hoursInfo ? hoursInfo.unapproved : 0,
-        basic, da, hra, conv, special, gross, ot, reimb, wagesAdded, pfWage, pfEmp, epf, eps, edli, pfAdmin, pfEmployer: epf + eps, esiEmp, esiEmployer, pt, tds, advance, other, deductions: r2(pfEmp + esiEmp + pt + tds + advance + other), net, remarks: (prev && prev.remarks) || '',
+        basic, da, hra, conv, special, gross, ot, reimb, reimbIds: claims.map(r => r.id), wagesAdded, pfWage, pfEmp, epf, eps, edli, pfAdmin, pfEmployer: epf + eps, esiEmp, esiEmployer, pt, tds, advance, other, deductions: r2(pfEmp + esiEmp + pt + tds + advance + other), net, remarks: (prev && prev.remarks) || '',
         bank: emp.bankName || '', account: emp.bankAccount || '', ifsc: emp.bankIfsc || '', uan: emp.uan || '', esiNo: emp.esiNo || '', pan: emp.pan || '' };
     },
     computeRun(month) {
@@ -181,10 +187,6 @@
       const old = run.voucherId ? Store.find('journal', run.voucherId) : null;
       if (old) { Object.assign(old, v); Store.update('journal', old); return old.id; }
       return Store.add('journal', v).id;
-    },
-    // Reimbursements paid with a finalised month are marked so; reopening the month frees them again
-    settleReimbursements(run, paid) {
-      run.rows.forEach(r => this.reimbursementsOf(r.empId, run.month).forEach(x => { if (paid) { x.status = 'paid'; x.paidMonth = run.month; } else { x.status = 'approved'; delete x.paidMonth; } Store.update('reimbursements', x); }));
     },
 
     // ------------------------------------------------------------ employees
@@ -339,20 +341,21 @@
     // ------------------------------------------------------------ reimbursements (claims approved by a manager, paid with the payroll)
     screenReimbursements(p) {
       const status = p.status || '', approve = this.canApprove(), emps = new Map(this.employees(true).map(e => [e.id, e]));
-      const all = Store.list('reimbursements').sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || num(b.createdAt) - num(a.createdAt)), list = status ? all.filter(r => r.status === status) : all;
+      const all = Store.list('reimbursements').map(r => Object.assign({}, r, this.claimState(r))).sort((a, b) => U.dateMs(b.date) - U.dateMs(a.date) || num(b.createdAt) - num(a.createdAt)), list = status ? all.filter(r => r.status === status) : all;
       const pill = (st) => st === 'paid' ? 'ok' : st === 'approved' ? '' : st === 'rejected' ? 'bad' : 'warn';
       const chip = (k, label) => '<button class="btn sm ' + (status === k ? '' : 'outline') + '" data-st="' + k + '">' + label + '</button>';
       const root = App.view(App.header('Reimbursements', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="rbAdd">+ Claim</button><button class="btn sm outline" id="rbPay">Payroll</button><button class="btn sm outline" id="rbXls">Export Excel</button></div>') +
         '<div class="btnrow">' + chip('', 'All') + chip('pending', 'Pending') + chip('approved', 'Approved') + chip('paid', 'Paid') + chip('rejected', 'Rejected') + '</div>' +
-        '<div class="hint" style="margin-bottom:10px">Expenses an employee paid for the company (travel, food, phone, medical ...). A manager, an admin or the owner approves a claim; approved claims are paid with the next payroll, on the payslip under Reimbursements and in the books as Staff Reimbursements.</div>' +
+        '<div class="hint" style="margin-bottom:10px">Expenses an employee paid for the company (travel, food, phone, medical ...). A manager, an admin or the owner approves a claim (the server holds HR to entering); approved claims are paid with the next payroll, on the payslip under Reimbursements and in the books as Staff Reimbursements, and show as paid once that month is finalised.</div>' +
         Ledger.listTable(['Date', 'Employee', 'Category', 'Description', '#Amount', 'Status', ''], list.map(r => { const e = emps.get(r.empId) || { name: '-' };
           return '<tr>' + Ledger.td('Date', esc(r.date)) + Ledger.td('Employee', '<b>' + esc(e.name) + '</b>') + Ledger.td('Category', esc(r.category)) + Ledger.td('Description', esc(r.description || '') + (r.bill ? '<div class="small muted">Bill ' + esc(r.bill) + '</div>' : '')) + Ledger.td('Amount', '<b>' + money(num(r.amount)) + '</b>', 'num') + Ledger.td('Status', '<span class="pill ' + pill(r.status) + '">' + esc(r.status[0].toUpperCase() + r.status.slice(1)) + '</span>' + (r.paidMonth ? '<div class="small muted">' + esc(monthLabel(r.paidMonth)) + '</div>' : r.approvedBy ? '<div class="small muted">' + esc(r.approvedBy) + '</div>' : '')) +
-            '<td class="actions">' + (r.status === 'pending' && approve ? '<button class="btn sm green" data-ok="' + esc(r.id) + '">Approve</button><button class="btn sm red" data-no="' + esc(r.id) + '">Reject</button>' : '') + (r.status !== 'paid' ? '<button class="btn sm outline" data-e="' + esc(r.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(r.id) + '">Delete</button>' : '') + '</td></tr>'; }), status ? 'No ' + status + ' claims.' : 'No reimbursement claims yet.'));
+            '<td class="actions">' + (r.status === 'pending' && approve ? '<button class="btn sm green" data-ok="' + esc(r.id) + '">Approve</button><button class="btn sm red" data-no="' + esc(r.id) + '">Reject</button>' : '') + (r.status === 'pending' || (approve && r.status !== 'paid') ? '<button class="btn sm outline" data-e="' + esc(r.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(r.id) + '">Delete</button>' : '') + '</td></tr>'; }), status ? 'No ' + status + ' claims.' : 'No reimbursement claims yet.'));
       App.wireBack(root);
       const back = () => this.screenReimbursements({ status });
       $$('[data-st]', root).forEach(b => b.onclick = () => this.screenReimbursements({ status: b.dataset.st }));
       $('#rbAdd').onclick = () => this.editReimbursement(null, back); $('#rbPay').onclick = () => App.go('payroll');
       $('#rbXls').onclick = () => UI.xls('Reimbursements', ['Date', 'Employee', 'Category', 'Description', 'Bill', 'Amount', 'Status', 'Approved by', 'Paid with'], list.map(r => [r.date, (emps.get(r.empId) || {}).name, r.category, r.description, r.bill, num(r.amount), r.status, r.approvedBy || '', r.paidMonth ? monthLabel(r.paidMonth) : '']));
+      // Edit keeps the stored record (status as entered), not the derived state
       $$('[data-e]', root).forEach(b => b.onclick = () => this.editReimbursement(Store.find('reimbursements', b.dataset.e), back));
       $$('[data-d]', root).forEach(b => b.onclick = () => UI.confirm('Delete Claim', 'Delete this claim?', () => { Store.delete('reimbursements', b.dataset.d); UI.toast('Claim deleted'); back(); }, 'Delete'));
       const decide = (id, st) => { const r = Store.find('reimbursements', id); r.status = st; r.approvedBy = (App.user && App.user.name) || Companies.roleLabel(); r.approvedAt = Date.now(); Store.update('reimbursements', r); UI.toast(st === 'approved' ? 'Approved: paid with the next payroll' : 'Rejected'); back(); };
@@ -397,9 +400,9 @@
       // A typed advance or deduction is kept with the run first, so the recomputation picks it up
       if (!fin && run) { $$('input.adv, input.oth', root).forEach(inp => inp.onchange = () => { manual(); saveRun(run); const r = this.computeRun(month); saveRun(r); this.screenPayroll({ month }); }); }
       if ($('#pyFinal')) $('#pyFinal').onclick = () => UI.confirm('Finalise Payroll', 'Finalise ' + monthLabel(month) + ' for ' + run.rows.length + ' employees, net pay ' + money(run.totals.net) + '?' + (unapproved ? ' ' + unapproved + ' timesheet' + (unapproved === 1 ? ' is' : 's are') + ' not approved yet.' : '') + ' A journal voucher is posted to the books (Salaries & Wages, Employer PF & ESI, Staff Reimbursements, PF / ESI / PT / TDS Payable, Salary Payable) and the month is locked. The salaries are then paid with a Payment voucher against Salary Payable.', () => {
-        manual(); saveRun(run); const r = this.computeRun(month); r.status = 'final'; r.finalisedAt = Date.now(); r.voucherId = this.post(r); saveRun(r); this.settleReimbursements(r, true); UI.toast('Payroll finalised and posted'); this.screenPayroll({ month });
+        manual(); saveRun(run); const r = this.computeRun(month); r.status = 'final'; r.finalisedAt = Date.now(); r.voucherId = this.post(r); saveRun(r); UI.toast('Payroll finalised and posted'); this.screenPayroll({ month });
       }, 'Finalise');
-      if ($('#pyReopen')) $('#pyReopen').onclick = () => UI.confirm('Reopen Payroll', 'Reopen ' + monthLabel(month) + '? The posted voucher is removed from the books until the month is finalised again.', () => { if (run.voucherId && Store.find('journal', run.voucherId)) Store.delete('journal', run.voucherId); this.settleReimbursements(run, false); run.status = 'draft'; delete run.voucherId; saveRun(run); UI.toast('Payroll reopened'); this.screenPayroll({ month }); }, 'Reopen');
+      if ($('#pyReopen')) $('#pyReopen').onclick = () => UI.confirm('Reopen Payroll', 'Reopen ' + monthLabel(month) + '? The posted voucher is removed from the books until the month is finalised again.', () => { if (run.voucherId && Store.find('journal', run.voucherId)) Store.delete('journal', run.voucherId); run.status = 'draft'; delete run.voucherId; saveRun(run); UI.toast('Payroll reopened'); this.screenPayroll({ month }); }, 'Reopen');
       const REG = ['Code', 'Employee', 'Pay type', 'Days / hours', 'Paid days', 'LOP', 'OT hrs', 'Basic', 'DA', 'HRA', 'Conveyance', 'Special', 'Gross', 'Overtime', 'Reimbursements', 'PF wages', 'PF (employee)', 'ESI (employee)', 'PT', 'TDS', 'Advance', 'Other', 'Net pay', 'Employer EPF', 'Employer EPS', 'EDLI', 'PF admin', 'Employer ESI'];
       const reg = (r) => [r.code, r.name, r.payType, r.payType === 'hourly' ? r.hours : r.days, r.paid, r.lop, r.otHours, r.basic, r.da, r.hra, r.conv, r.special, r.gross, r.ot, r.reimb, r.pfWage, r.pfEmp, r.esiEmp, r.pt, r.tds, r.advance, r.other, r.net, r.epf, r.eps, r.edli, r.pfAdmin, r.esiEmployer];
       if ($('#pyXls')) $('#pyXls').onclick = () => UI.xls('Payroll_' + month, REG, rows.map(reg).concat([['', 'Total', '', '', '', '', '', rows.reduce((x, r) => x + r.basic, 0), rows.reduce((x, r) => x + r.da, 0), rows.reduce((x, r) => x + r.hra, 0), rows.reduce((x, r) => x + r.conv, 0), rows.reduce((x, r) => x + r.special, 0), t.gross, t.ot, t.reimb, rows.reduce((x, r) => x + r.pfWage, 0), t.pfEmp, t.esiEmp, t.pt, t.tds, t.advance, t.other, t.net, t.epf, t.eps, t.edli, t.pfAdmin, t.esiEmployer]]));

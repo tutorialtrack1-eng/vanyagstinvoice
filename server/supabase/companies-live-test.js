@@ -107,6 +107,11 @@ const admin = async (service, method, p, body) => { const r = await fetch(URL_ +
     check('the server refuses hr approving it', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
     err = null; try { await tsWrite('ts:live1:2026-10-05', { id: 'live1:2026-10-05', empId: 'live1', week: '2026-10-05', hours: { 0: 9 }, approved: false }); } catch (e) { err = e; }
     check('and hr changing the sheet the manager approved', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
+    check('hr saves a pending claim', !!(await tsWrite('rb:live2', { id: 'live2', empId: 'live2', amount: 300, status: 'pending' })).epoch);
+    err = null; try { await tsWrite('rb:live2', { id: 'live2', empId: 'live2', amount: 300, status: 'approved' }); } catch (e) { err = e; }
+    check('the server refuses hr approving a claim', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
+    err = null; try { await tsWrite('rb:live1', { id: 'live1', empId: 'live1', amount: 900, status: 'approved' }); } catch (e) { err = e; }
+    check('and hr changing the claim the manager approved', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
     s = await A.Companies.rpc('set_member', { cid: beta, identity: ub.email, role_in: 'sales' }); await B.Companies.load();
     const lm = await A.Companies.rpc('list_members', { cid: beta });
     check('members listed', Array.isArray(lm) && lm.length === 2 && lm[0].role === 'owner', lm);

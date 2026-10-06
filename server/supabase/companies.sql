@@ -15,7 +15,7 @@
 --   manager     the HR records (emp:, att:, ts:, rb:, pay:, hr) and, in the portal, approves timesheets and reimbursements
 --   hr          the HR records only (employees, attendance, timesheets, reimbursements, payroll, HR settings); reads
 --               nothing else of the books but the company profile and the subscription; may not save or change an
---               approved timesheet (approval is the manager's)
+--               approved timesheet or a decided reimbursement claim (approval is the manager's)
 --   viewer      looks at everything, changes nothing
 -- The rules below enforce the role on the server; the app and the portal hide what a role cannot do.
 --
@@ -126,7 +126,10 @@ begin
     -- policy runs this on the old row (using) and on the new one (with check), so HR can neither approve, nor
     -- unapprove, nor edit or delete a sheet once it is approved.
     if k like 'ts:%' then return d is null or coalesce(d ->> 'approved', 'false') not in ('true', 't', '1'); end if;
-    return k like 'emp:%' or k like 'att:%' or k like 'rb:%' or k like 'pay:%' or k = 'hr';
+    -- Likewise a reimbursement claim: HR enters it and may change it while pending; approving, rejecting and
+    -- touching a decided claim are the manager's. "Paid" is derived from the finalised payroll, never written.
+    if k like 'rb:%' then return d is null or coalesce(d ->> 'status', 'pending') = 'pending'; end if;
+    return k like 'emp:%' or k like 'att:%' or k like 'pay:%' or k = 'hr';
   end if;
   if r = 'sales' then
     return k like 'inv:%' or k like 'dc:%' or k like 'note:%' or k like 'contact:%' or k like 'item:%'

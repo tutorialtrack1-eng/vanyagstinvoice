@@ -123,7 +123,8 @@ Everything the app has:
   **Sales** sales invoices, delivery challans, credit / debit notes, receipts, customers and items; **Manager** the HR
   screens, and approves timesheets and reimbursements; **HR** the HR screens only (employees, attendance,
   timesheets, reimbursements, payroll, HR settings) without approving, and nothing of the books (the server shows
-  an HR or manager login only those records, and refuses an HR login saving or changing an approved timesheet);
+  an HR or manager login only those records, and refuses an HR login saving or changing an approved timesheet or
+  a decided reimbursement claim);
   **Viewer** looks at everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
   is refused with a note, and the server refuses it as well.
 - Each company has its own storage namespace in the browser and its own sync; the account's own first company
@@ -162,9 +163,10 @@ ledger all show what is really due.
   working days paid at the hours of a day; payroll flags the weeks of the month still to be approved. *Copy last
   week* fills the sheet from the previous week.
 - **Reimbursements**: claims per employee (date, category, amount, description, bill number) as pending /
-  approved / rejected / paid; a manager, an admin or the owner approves. Approved claims are paid with the next
-  payroll (on the payslip under Reimbursements, in the books as Staff Reimbursements), marked paid when the month
-  is finalised and freed again if it is reopened.
+  approved / rejected / paid; a manager, an admin or the owner approves, and the server holds an HR login to
+  entering and editing pending claims. Approved claims are paid with the next payroll (on the payslip under
+  Reimbursements, in the books as Staff Reimbursements); each payroll row lists the claims it pays, so a claim
+  shows as paid once that month is finalised and is free again if the month is reopened.
 - **Attendance**: a grid of the month, one cell per day: P present, A absent (loss of pay), L paid leave, HD half
   day, W weekly off, H holiday (weekly offs and holidays from HR Settings). Hours = hours per day worked plus the
   overtime hours typed for the month. Attendance locks once the month's payroll is finalised.

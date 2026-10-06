@@ -20,7 +20,7 @@ function mayWrite(uid, cid, k, d) {
   if (r === 'owner' || r === 'admin') return true;
   if (r === 'accountant') return k !== 'company';
   if (r === 'manager') return /^(emp|att|ts|rb|pay):/.test(k) || k === 'hr';
-  if (r === 'hr') { if (k.startsWith('ts:')) return d == null || !(d.approved === true || d.approved === 'true'); return /^(emp|att|rb|pay):/.test(k) || k === 'hr'; }
+  if (r === 'hr') { if (k.startsWith('ts:')) return d == null || !(d.approved === true || d.approved === 'true'); if (k.startsWith('rb:')) return d == null || (d.status || 'pending') === 'pending'; return /^(emp|att|pay):/.test(k) || k === 'hr'; }
   if (r === 'sales') return /^(inv|dc|note|contact|item):/.test(k) || (k.startsWith('jrn:') && (d == null || String((d && d.kind) || '') === 'Receipt'));
   return false;
 }

@@ -152,6 +152,16 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
   check('and refuses hr changing or unapproving the sheet the manager approved', err && err.status === 403);
   err = null; try { await tsWrite('ts:x:2026-10-05', null); } catch (e) { err = e; }
   check('and deleting it', err && err.status === 403);
+  check('hr saves a pending reimbursement claim', !!(await tsWrite('rb:c1', { id: 'c1', empId: 'y', amount: 500, status: 'pending' })).epoch);
+  err = null; try { await tsWrite('rb:c1', { id: 'c1', empId: 'y', amount: 500, status: 'approved' }); } catch (e) { err = e; }
+  check('but may not approve it', err && err.status === 403);
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'manager' }); await B.Companies.load();
+  check('a manager approves it', !!(await tsWrite('rb:c1', { id: 'c1', empId: 'y', amount: 500, status: 'approved' })).epoch);
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'hr' }); await B.Companies.load();
+  err = null; try { await tsWrite('rb:c1', { id: 'c1', empId: 'y', amount: 900, status: 'approved' }); } catch (e) { err = e; }
+  check('hr may not change an approved claim', err && err.status === 403);
+  err = null; try { await tsWrite('rb:c1', { id: 'c1', empId: 'y', amount: 500, status: 'pending' }); } catch (e) { err = e; }
+  check('nor put it back to pending', err && err.status === 403);
   r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'sales' }); await B.Companies.load();
 
   console.log('leaving, removing and deleting');
