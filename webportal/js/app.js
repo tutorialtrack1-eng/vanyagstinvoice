@@ -270,9 +270,10 @@
         n.items.map(it => '<button class="navitem" role="menuitem" data-go="' + it.key + '"' + (it.params ? ' data-params="' + esc(JSON.stringify(it.params)) + '"' : '') + '>' + esc(it.t) + '</button>').join('') + '</div></div>'
       : '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('');
   }
-  // The Android app, served next to the portal. The iPhone / iPad app: the App Store link once it is published
-  // (ios/README.md); until then the portal itself is installed from Safari as a web app.
-  const APK_URL = 'BlitzBook.apk';
+  // The Android app, served next to the portal as BlitzBook-<version>.apk; app-version.json names the current file,
+  // so the download is saved with the version in its name. The iPhone / iPad app: the App Store link once it is
+  // published (ios/README.md); until then the portal itself is installed from Safari as a web app.
+  const APP_VERSION_URL = 'app-version.json';
   const IOS_APP_URL = '';
   const PORTAL_URL = 'https://blitzbook.co.in';
   const BRAND = '<span class="logo">' + icon('bolt') + '</span><span>Blitz<b>Book</b></span>';
@@ -501,8 +502,12 @@
   // same login and books.
   const GetApp = {
     android() {
-      const a = document.createElement('a'); a.href = APK_URL; a.download = 'BlitzBook.apk'; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 1000);
-      UI.alert('Android app', 'BlitzBook.apk is downloading. Open it on the phone to install (allow installing from this source if Android asks). Log in with the same mobile number or email and the books come down by sync.');
+      fetch(APP_VERSION_URL, { cache: 'no-store' }).then(r => r.json()).then(v => {
+        // The file next to the portal (the last part of the URL in the version file), saved as BlitzBook-<version>.apk
+        const file = String(v.apk || '').split('/').pop() || 'BlitzBook.apk', name = 'BlitzBook-' + (v.versionName || '') + '.apk';
+        const a = document.createElement('a'); a.href = file; a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 1000);
+        UI.alert('Android app', name + ' is downloading. Open it on the phone to install (allow installing from this source if Android asks). Log in with the same mobile number or email and the books come down by sync.');
+      }).catch(() => UI.toast('Could not reach the app\'s version file. Check the connection and try again.'));
     },
     ios() {
       const here = Native.installed && Native.isApple;
