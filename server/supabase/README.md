@@ -176,8 +176,10 @@ by `user_id`; the rules on `books` check the role per record:
 
 - owner / admin: every record; accountant: every record but the company profile; sales: `inv:`, `dc:`, `note:`,
   `contact:`, `item:` and receipt vouchers (`jrn:` with kind Receipt); hr and manager: `emp:`, `att:`, `ts:`,
-  `rb:`, `pay:` and `hr` only, and read nothing else of the books but `company` and `sub` (`books_may_read`; a manager
-  differs from hr only in the portal, where it approves timesheets and reimbursements); viewer: nothing. The subscription record
+  `rb:`, `pay:` and `hr` only, and read nothing else of the books but `company` and `sub` (`books_may_read`); hr may not
+  save a timesheet (`ts:`) with `approved` true nor change or delete one that is approved (the update policy checks
+  the old row and the new one), so approving is the manager's on the server too; reimbursement approval is a
+  portal rule only; viewer: nothing. The subscription record
   `sub` is never written in another company: everybody there runs on the owner's subscription, which a member
   may read (`k = 'sub'` of the owner) while the header names one of the owner's companies.
 - Functions: `my_companies()` (also makes the account's first company row), `create_company(name, group)`

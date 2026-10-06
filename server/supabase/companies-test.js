@@ -144,6 +144,14 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
   check('a manager may save a timesheet on the server', !!(await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'ts:x:2026-10-05', d: { id: 'x:2026-10-05', empId: 'x', week: '2026-10-05', hours: { 0: 8 }, approved: true } }], company: beta, owner: ua.id })).epoch);
   r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'hr' }); await B.Companies.load();
   check('hr enters but does not approve', B.Companies.role() === 'hr' && !B.HR.canApprove());
+  const tsWrite = (k, d) => B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k, d }], company: beta, owner: ua.id });
+  check('the server lets hr save an unapproved timesheet', !!(await tsWrite('ts:y:2026-10-05', { id: 'y:2026-10-05', empId: 'y', week: '2026-10-05', hours: { 0: 8 } })).epoch);
+  err = null; try { await tsWrite('ts:y:2026-10-05', { id: 'y:2026-10-05', empId: 'y', week: '2026-10-05', hours: { 0: 8 }, approved: true }); } catch (e) { err = e; }
+  check('but refuses hr approving it', err && err.status === 403);
+  err = null; try { await tsWrite('ts:x:2026-10-05', { id: 'x:2026-10-05', empId: 'x', week: '2026-10-05', hours: { 0: 9 }, approved: false }); } catch (e) { err = e; }
+  check('and refuses hr changing or unapproving the sheet the manager approved', err && err.status === 403);
+  err = null; try { await tsWrite('ts:x:2026-10-05', null); } catch (e) { err = e; }
+  check('and deleting it', err && err.status === 403);
   r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'sales' }); await B.Companies.load();
 
   console.log('leaving, removing and deleting');

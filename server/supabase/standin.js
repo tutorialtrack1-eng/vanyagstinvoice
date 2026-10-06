@@ -19,7 +19,8 @@ function mayWrite(uid, cid, k, d) {
   const r = roleOf(uid, cid); if (!r || k === 'sub') return false;
   if (r === 'owner' || r === 'admin') return true;
   if (r === 'accountant') return k !== 'company';
-  if (r === 'hr' || r === 'manager') return /^(emp|att|ts|rb|pay):/.test(k) || k === 'hr';
+  if (r === 'manager') return /^(emp|att|ts|rb|pay):/.test(k) || k === 'hr';
+  if (r === 'hr') { if (k.startsWith('ts:')) return d == null || !(d.approved === true || d.approved === 'true'); return /^(emp|att|rb|pay):/.test(k) || k === 'hr'; }
   if (r === 'sales') return /^(inv|dc|note|contact|item):/.test(k) || (k.startsWith('jrn:') && (d == null || String((d && d.kind) || '') === 'Receipt'));
   return false;
 }
@@ -80,7 +81,8 @@ const api = http.createServer((req, res) => {
       if (!uid) return reply(401, { message: 'JWT' });
       if (req.method === 'POST') {
         if (!/merge-duplicates/.test(req.headers.prefer || '')) return reply(400, { message: 'expected upsert' });
-        for (const row of b) if (!(row.user_id === uid || (row.user_id === hdr && mayWrite(uid, row.user_id, row.k, row.d)))) return reply(403, { code: '42501', message: 'new row violates row-level security policy for table "books"' });
+        // Like the RLS policies: the new row (with check) and, on an update, the old row too (using)
+        for (const row of b) { const old = books.find(x => x.user_id === row.user_id && x.k === row.k); if (!(row.user_id === uid || (row.user_id === hdr && mayWrite(uid, row.user_id, row.k, row.d) && (!old || mayWrite(uid, row.user_id, row.k, old.d))))) return reply(403, { code: '42501', message: 'new row violates row-level security policy for table "books"' }); }
         for (const row of b) upsertBook(row.user_id, row.k, row.d);
         res.writeHead(201, cors); return res.end();
       }
