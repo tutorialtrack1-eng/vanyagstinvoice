@@ -58,7 +58,7 @@
         '<div class="btnrow">' + chip('', 'All') + chip('receipt', 'Receipts') + chip('payment', 'Payments') + '<span class="hint bold" style="margin-left:auto">Received ' + money(sum('receipt')) + '   |   Paid ' + money(sum('payment')) + '</span></div>' +
         '<div class="hint" style="margin-bottom:10px">A receipt against a credit invoice brings the customer\'s outstanding down; a payment against a credit purchase brings what you owe the supplier down. Both move Cash or Bank and appear on the Balance Sheet and in the Journal. Every receipt is a voucher the customer can be given: it opens for printing or saving as a PDF when it is saved, and again from Receipt PDF.</div>' +
         listTable(['Date', 'No', 'Type', 'Party / Account', 'Against', 'Mode / Ref', '#Amount', ''], list.map(v => { const K = KIND[v.vtype]; return '<tr>' + td('Date', esc(v.date)) + td('No', '<b>' + esc(v.no || '-') + '</b>') + td('Type', '<span class="pill ' + K.pill + '">' + K.label + '</span>') +
-          td('Party', '<b>' + esc(v.party) + '</b>' + (v.narration ? '<div class="small muted">' + esc(v.narration) + '</div>' : '')) + td('Against', esc(v.ref || '-')) + td('Mode', esc(v.mode || '-') + (v.bankRef ? '<div class="small muted">' + esc(v.bankRef) + '</div>' : '')) + td('Amount', '<b>' + money(amountOf(v)) + '</b>', 'num') +
+          td('Party', '<b>' + esc(v.party) + '</b>' + (v.narration ? '<div class="small muted">' + esc(v.narration) + '</div>' : '')) + td('Against', Array.isArray(v.alloc) && v.alloc.length ? v.alloc.map(a => esc(a.no) + ' <span class="small muted">' + money(a.amount) + '</span>').join('<br>') : esc(v.ref || '-')) + td('Mode', esc(v.mode || '-') + (v.bankRef ? '<div class="small muted">' + esc(v.bankRef) + '</div>' : '')) + td('Amount', '<b>' + money(amountOf(v)) + '</b>', 'num') +
           '<td class="actions"><button class="btn sm" data-p="' + esc(v.id) + '" title="Print or save the voucher as a PDF">' + (v.vtype === 'receipt' ? 'Receipt PDF' : 'Voucher PDF') + '</button><button class="btn sm outline" data-e="' + esc(v.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(v.id) + '">Delete</button></td></tr>'; }),
           kind ? 'No ' + KIND[kind].label.toLowerCase() + 's yet.' : 'No receipts or payments yet. Add one, or upload your bank statement to record many at once.'));
       App.wireBack(root);
@@ -81,11 +81,16 @@
       v = Object.assign({ vtype: kind, no: nextNo(kind), date: U.today(), party: '', mode: 'Bank Transfer', ref: '', bankRef: '', narration: '', lines: [] }, v ? JSON.parse(JSON.stringify(v)) : {});
       const amount = v.lines.length ? amountOf(v).toFixed(2) : num(v.amount) > 0 ? num(v.amount).toFixed(2) : '';
       delete v.amount;
+      // What this receipt already knocks off (an older receipt names one invoice): added back to the dues shown
+      const own = new Map(); if (kind === 'receipt') (Array.isArray(v.alloc) && v.alloc.length ? v.alloc : (v.ref && v.lines.length ? [{ no: v.ref, amount: amountOf(v) }] : [])).forEach(a => own.set(lower(a.no), U.round2((own.get(lower(a.no)) || 0) + num(a.amount))));
+      const preset = !v.id && v.ref ? v.ref : '';
       const bg = UI.modal({ title: (fresh ? 'New ' : 'Edit ') + K.label, body: '<div class="grid2">' +
         UI.field(K.label + ' No', UI.input('vNo', v.no)) + UI.field('Date', UI.dateInput('vDate', v.date), { req: true }) +
         '<div class="field span"><label>' + K.party + ' <b>*</b></label><select id="vParty">' + accountOptions(kind, v.party) + '</select><div class="hint" id="vBal"></div></div>' +
         UI.field('Amount ₹', UI.input('vAmt', amount, { type: 'number', placeholder: '0.00', attrs: ' step="any" min="0"' }), { req: true }) + UI.field(K.cash, UI.select('vMode', MODES, MODES.includes(v.mode) ? v.mode : 'Bank Transfer'), { hint: 'Cash goes to the cash book, everything else to the bank book' }) +
-        '<div class="field"><label>' + K.against + '</label>' + UI.input('vRef', v.ref, { list: 'vRefDl', placeholder: kind === 'receipt' ? 'Invoice No (optional)' : 'Purchase No (optional)' }) + '<datalist id="vRefDl"></datalist><div class="hint" id="vRefHint">' + (kind === 'receipt' ? 'Name the invoice and this receipt clears what is due on it' : '') + '</div></div>' + UI.field('Bank / UPI / Cheque ref', UI.input('vBankRef', v.bankRef, { placeholder: 'UTR, cheque no (optional)' })) +
+        (kind === 'receipt' ? '<div class="field span"><label>Knock off against invoices</label><div id="vAlloc"></div><div class="hint" id="vAllocHint"></div></div>' :
+          '<div class="field"><label>' + K.against + '</label>' + UI.input('vRef', v.ref, { list: 'vRefDl', placeholder: 'Purchase No (optional)' }) + '<datalist id="vRefDl"></datalist><div class="hint" id="vRefHint"></div></div>') +
+        UI.field('Bank / UPI / Cheque ref', UI.input('vBankRef', v.bankRef, { placeholder: 'UTR, cheque no (optional)' })) +
         UI.field('Narration', UI.input('vNarr', v.narration, { placeholder: 'optional' }), { span: true }) + '</div>',
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Save', cls: 'green', onClick: (bg) => {
           const g = (id) => UI.val(id, bg);
@@ -93,43 +98,82 @@
           if (!UI.dateVal('vDate', bg)) { UI.toast('Date is required'); return false; }
           if (!party || party === NEW) { UI.mark('vParty', true, bg); UI.toast('Choose who the money ' + (kind === 'receipt' ? 'came from' : 'went to')); return false; }
           if (amt <= 0) { UI.mark('vAmt', true, bg); UI.toast('Enter the amount'); return false; }
-          Object.assign(v, { no: g('vNo').trim(), date: UI.dateVal('vDate', bg), party, mode: g('vMode'), ref: g('vRef').trim(), bankRef: g('vBankRef').trim(), narration: g('vNarr').trim(), lines: lines(kind, party, g('vMode'), amt) });
+          let ref = kind === 'receipt' ? '' : g('vRef').trim(), alloc = [];
+          if (kind === 'receipt') {
+            // The invoices ticked off, oldest first as listed; none means the money stays on account of the customer
+            alloc = allocRows(bg).map(r => ({ no: r.no, amount: U.round2(num(r.input.value)) })).filter(a => a.amount > 0);
+            const over = alloc.find(a => a.amount > allocRows(bg).find(r => r.no === a.no).due + 0.005);
+            if (over) { UI.toast('Invoice ' + over.no + ' has only ' + money(allocRows(bg).find(r => r.no === over.no).due) + ' due'); return false; }
+            const sum = U.round2(alloc.reduce((s, a) => s + a.amount, 0));
+            if (sum > amt + 0.005) { UI.toast('The knock-off (' + money(sum) + ') is more than the amount received'); return false; }
+            ref = alloc.map(a => a.no).join(', ');
+          }
+          Object.assign(v, { no: g('vNo').trim(), date: UI.dateVal('vDate', bg), party, mode: g('vMode'), ref, bankRef: g('vBankRef').trim(), narration: g('vNarr').trim(), lines: lines(kind, party, g('vMode'), amt) });
+          if (alloc.length) v.alloc = alloc; else delete v.alloc;
           if (v.id) Store.update('journal', v); else Store.add('journal', v);
           UI.toast(K.label + ' ' + v.no + ' saved'); if (onDone) onDone(v);
           // Money received is acknowledged on the spot: the receipt voucher opens to print or save as a PDF
           if (kind === 'receipt') {
             const c = Store.company();
             Print.show(Print.voucher(v, c));
-            UI.modal({ title: 'Receipt ' + v.no + ' Saved', body: '<p>The receipt is open in the print dialog: choose "Save as PDF" to download it, or a printer.</p>' + (v.ref ? '<p>Against invoice ' + esc(v.ref) + '.</p>' : ''),
+            const rest = U.round2(amt - (v.alloc || []).reduce((s, a) => s + a.amount, 0));
+            UI.modal({ title: 'Receipt ' + v.no + ' Saved', body: '<p>The receipt is open in the print dialog: choose "Save as PDF" to download it, or a printer.</p>' + (v.alloc ? '<p>Knocked off against ' + v.alloc.map(a => esc(a.no) + ' ' + money(a.amount)).join(', ') + (rest > 0.005 ? '; ' + money(rest) + ' kept on account of ' + esc(party) : '') + '.</p>' : '<p>' + money(amt) + ' kept on account of ' + esc(party) + '.</p>'),
               buttons: [{ label: 'Close', cls: 'outline' }, { label: 'Print again', cls: 'green', onClick: () => { Print.show(Print.voucher(v, c)); return false; } }] });
           }
         } }] });
       const sel = $('#vParty', bg);
-      // Outstanding balance of the chosen party, and its open bills as suggestions for "against"
+      /* Knock-off (payment advice): the customer's open credit invoices, oldest first, each with the amount of this
+         receipt set against it. Auto fills them in order until the amount runs out, so 8,000 received against
+         invoices of 2,999, 3,999 and 2,599 clears the first two and puts 1,002 on the third; anything not knocked
+         off stays on account of the customer. The amounts can be changed by hand. */
+      const allocRows = (root) => $$('#vAlloc [data-no]', root).map(el => ({ no: el.dataset.no, due: num(el.dataset.due), input: $('input', el) }));
+      const allocHint = () => {
+        if (kind !== 'receipt') return;
+        const amt = U.round2(num(UI.val('vAmt', bg))), rows = allocRows(bg), sum = U.round2(rows.reduce((s, r) => s + num(r.input.value), 0)), rest = U.round2(amt - sum);
+        const h = $('#vAllocHint', bg);
+        if (!rows.length) { h.textContent = 'No credit invoice of this customer is open; the money is kept on account.'; h.className = 'hint'; return; }
+        h.textContent = 'Knocked off ' + money(sum) + ' of ' + money(amt) + (rest > 0.005 ? '; ' + money(rest) + ' on account of the customer' : rest < -0.005 ? '; ' + money(-rest) + ' more than the amount received' : '') + '.';
+        h.className = 'hint ' + (rest < -0.005 ? 'red' : rest > 0.005 ? '' : 'green');
+      };
+      const autoAlloc = () => {
+        let left = U.round2(num(UI.val('vAmt', bg)));
+        allocRows(bg).forEach(r => { const a = Math.min(r.due, Math.max(0, left)); r.input.value = a > 0.005 ? a.toFixed(2) : ''; left = U.round2(left - a); });
+        allocHint();
+      };
+      const drawAlloc = () => {
+        if (kind !== 'receipt') return;
+        const party = sel.value, box = $('#vAlloc', bg);
+        if (!party || party === NEW) { box.innerHTML = ''; allocHint(); return; }
+        // Open invoices with what this receipt itself knocks off added back (when editing), oldest first
+        const bills = Biz.outstanding().all.filter(r => lower(r.party) === lower(party)).map(r => ({ no: r.no, date: r.date, days: r.days, due: U.round2(r.balance + (own.get(lower(r.no)) || 0)) })).filter(b => b.due > 0.005)
+          .sort((a, b) => U.dateMs(a.date) - U.dateMs(b.date) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }));
+        box.innerHTML = bills.length ? '<table class="list alloc"><thead><tr><th>Invoice</th><th>Date</th><th class="num">Due</th><th class="num">Knock off ₹</th></tr></thead><tbody>' +
+          bills.map(b => '<tr data-no="' + esc(b.no) + '" data-due="' + b.due + '"><td><b>' + esc(b.no) + '</b></td><td>' + esc(b.date) + ' <span class="small muted">' + b.days + ' d</span></td><td class="num">' + money(b.due) + '</td><td class="num"><input type="number" step="any" min="0" value="' + (own.has(lower(b.no)) ? own.get(lower(b.no)).toFixed(2) : '') + '" style="width:120px;min-height:34px;text-align:right"></td></tr>').join('') +
+          '</tbody></table><div class="btnrow" style="margin-top:6px"><button type="button" class="btn sm outline" id="vAuto">Auto: oldest first</button><button type="button" class="btn sm outline" id="vNone">Clear</button></div>' : '';
+        if (bills.length) {
+          $('#vAuto', bg).onclick = autoAlloc; $('#vNone', bg).onclick = () => { allocRows(bg).forEach(r => { r.input.value = ''; }); allocHint(); };
+          allocRows(bg).forEach(r => r.input.addEventListener('input', allocHint));
+          // A fresh receipt for an invoice (from Outstanding) is set against it; otherwise a fresh receipt starts with Auto
+          if (!v.id) { if (preset) allocRows(bg).forEach(r => { r.input.value = r.no === preset ? Math.min(r.due, num(UI.val('vAmt', bg))).toFixed(2) : ''; }); else if (num(UI.val('vAmt', bg)) > 0) autoAlloc(); }
+        }
+        allocHint();
+      };
+      // Outstanding balance of the chosen party, and (for a payment) its open bills as suggestions for "against"
       const refresh = () => {
         const party = sel.value;
         const bal = party && party !== NEW ? Books.partyBalance(party) : 0;
         $('#vBal', bg).textContent = !party || party === NEW ? '' : Math.abs(bal) < 0.005 ? 'No outstanding balance' : bal > 0 ? 'Outstanding: ' + money(bal) + ' owed to you' : 'Outstanding: ' + money(-bal) + ' owed by you';
+        if (kind === 'receipt') { drawAlloc(); return; }
         const bills = billsOf(kind, party);
-        $('#vRefDl', bg).innerHTML = bills.map(b => '<option value="' + esc(b.no) + '">' + esc(b.date + '  ' + money(b.amount) + (b.days != null ? ' due, ' + b.days + ' days' : '')) + '</option>').join('');
-        refHint();
-      };
-      // What is still due on the invoice named, so the amount can be matched to it
-      const refHint = () => {
-        const h = $('#vRefHint', bg), ref = UI.val('vRef', bg).trim();
-        if (kind !== 'receipt') { h.textContent = ''; return; }
-        if (!ref) { h.textContent = 'Name the invoice and this receipt clears what is due on it'; h.className = 'hint'; return; }
-        const r = Biz.invoiceBalance(ref), own = v.id ? amountOf(v) : 0, due = r ? U.round2(r.balance + (lower(v.ref) === lower(ref) ? own : 0)) : 0;
-        if (!r) { h.textContent = ref + ' is not a credit invoice; the money is kept on account of the party'; h.className = 'hint red'; return; }
-        h.textContent = ref + ' (' + r.date + ', ' + r.days + ' days): ' + (due > 0.005 ? money(due) + ' still due' : 'fully paid'); h.className = 'hint ' + (due > 0.005 ? 'green' : '');
+        $('#vRefDl', bg).innerHTML = bills.map(b => '<option value="' + esc(b.no) + '">' + esc(b.date + '  ' + money(b.amount)) + '</option>').join('');
       };
       sel.addEventListener('change', () => {
         if (sel.value !== NEW) { refresh(); return; }
         sel.value = v.party;
         Ledger.Journal.newAccount((name) => { sel.innerHTML = accountOptions(kind, name); refresh(); });
       });
-      $('#vRef', bg).addEventListener('input', refHint);
-      $('#vRef', bg).addEventListener('change', e => { const b = billsOf(kind, sel.value).find(x => x.no === e.target.value.trim()); if (b && !num(UI.val('vAmt', bg))) $('#vAmt', bg).value = b.amount.toFixed(2); refHint(); });
+      if (kind === 'receipt') $('#vAmt', bg).addEventListener('input', () => { if (!v.id && !allocRows(bg).some(r => r.input.value)) autoAlloc(); else allocHint(); });
+      else $('#vRef', bg).addEventListener('change', e => { const b = billsOf(kind, sel.value).find(x => x.no === e.target.value.trim()); if (b && !num(UI.val('vAmt', bg))) $('#vAmt', bg).value = b.amount.toFixed(2); });
       refresh();
     },
 

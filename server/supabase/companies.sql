@@ -12,6 +12,8 @@
 --   accountant  every record of the books (invoices, purchases, expenses, journal, receipts, payments, parties,
 --               items); not the company profile, members or subscription
 --   sales       sales invoices, delivery challans, credit / debit notes, receipts, customers and items only
+--   hr          employees, attendance, payroll and the HR settings only (emp:, att:, pay:, hr); reads nothing else of
+--               the books but the company profile and the subscription
 --   viewer      looks at everything, changes nothing
 -- The rules below enforce the role on the server; the app and the portal hide what a role cannot do.
 --
@@ -35,13 +37,16 @@ alter table public.companies enable row level security;
 create table if not exists public.company_members (
   company_id uuid not null references public.companies (id) on delete cascade,
   user_id    uuid not null references auth.users (id) on delete cascade,
-  role       text not null check (role in ('admin', 'accountant', 'sales', 'viewer')),
+  role       text not null check (role in ('admin', 'accountant', 'sales', 'hr', 'viewer')),
   added_by   uuid,
   created_at timestamptz not null default now(),
   primary key (company_id, user_id)
 );
 create index if not exists company_members_user on public.company_members (user_id);
 alter table public.company_members enable row level security;
+-- The HR role (app 1.10): added to the check of a table made by an earlier version of this file
+alter table public.company_members drop constraint if exists company_members_role_check;
+alter table public.company_members add constraint company_members_role_check check (role in ('admin', 'accountant', 'sales', 'hr', 'viewer'));
 
 -- Clients reach both tables through the functions below only
 revoke all on public.companies, public.company_members from anon, authenticated;
@@ -113,11 +118,23 @@ begin
   if r is null or k = 'sub' then return false; end if;       -- the subscription lives with the owner's account
   if r in ('owner', 'admin') then return true; end if;
   if r = 'accountant' then return k <> 'company'; end if;
+  if r = 'hr' then return k like 'emp:%' or k like 'att:%' or k like 'pay:%' or k = 'hr'; end if;
   if r = 'sales' then
     return k like 'inv:%' or k like 'dc:%' or k like 'note:%' or k like 'contact:%' or k like 'item:%'
         or (k like 'jrn:%' and (d is null or coalesce(d ->> 'kind', '') = 'Receipt'));
   end if;
   return false;
+end $$;
+
+-- Whether the signed-in account may read record k of company cid: every member reads the books, except the HR
+-- role, which sees the HR records, the company profile and the subscription only
+create or replace function public.books_may_read(cid uuid, k text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare r text := public.company_role(cid);
+begin
+  if r is null then return false; end if;
+  if r = 'hr' then return k in ('company', 'sub', 'hr') or k like 'emp:%' or k like 'att:%' or k like 'pay:%'; end if;
+  return true;
 end $$;
 
 drop policy if exists "own books" on public.books;
@@ -127,7 +144,7 @@ drop policy if exists "books update" on public.books;
 drop policy if exists "books delete" on public.books;
 create policy "books select" on public.books for select to authenticated using (
   user_id = auth.uid()
-  or (user_id = public.current_company() and public.company_role(user_id) is not null)
+  or (user_id = public.current_company() and public.books_may_read(user_id, k))
   or (k = 'sub' and public.company_role(public.current_company()) is not null
       and user_id = public.company_owner(public.current_company()))
 );
@@ -275,7 +292,7 @@ declare p public.profiles%rowtype; r text := lower(trim(coalesce(role_in, '')));
 begin
   if public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
   if not public.is_yearly(coalesce((select owner_id from public.companies where id = cid), cid)) then return jsonb_build_object('error', 'Members come with the yearly plan and longer (the owner of the company has to be on it)'); end if;
-  if r not in ('admin', 'accountant', 'sales', 'viewer') then return jsonb_build_object('error', 'Role must be admin, accountant, sales or viewer'); end if;
+  if r not in ('admin', 'accountant', 'sales', 'hr', 'viewer') then return jsonb_build_object('error', 'Role must be admin, accountant, sales, hr or viewer'); end if;
   select * into p from public.profiles where phone = trim(identity) or lower(email) = lower(trim(identity)) limit 1;
   if not found then return jsonb_build_object('error', 'No BlitzBook account with that mobile number or email. Ask them to register first.'); end if;
   select owner_id into own from public.companies where id = cid;

@@ -13,25 +13,27 @@
 (function (global) {
   'use strict';
   const { esc, money } = U;
-  const ROLES = ['owner', 'admin', 'accountant', 'sales', 'viewer'];
-  const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', accountant: 'Accountant', sales: 'Sales', viewer: 'Viewer' };
+  const ROLES = ['owner', 'admin', 'accountant', 'sales', 'hr', 'viewer'];
+  const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', accountant: 'Accountant', sales: 'Sales', hr: 'HR', viewer: 'Viewer' };
   const ROLE_HELP = {
     owner: 'Everything, including members, the subscription and deleting the company',
     admin: 'Everything in the books, the company profile and the members',
     accountant: 'Every record of the books: invoices, purchases, expenses, journal, receipts, payments, parties, items. Not the company profile or members',
     sales: 'Sales invoices, delivery challans, credit / debit notes, receipts, customers and items',
+    hr: 'Employees, attendance, payroll and HR settings only; sees nothing of the books',
     viewer: 'Looks at everything, changes nothing'
   };
   // The collections a role may change (null = all); the server applies the same rule to every record
-  const WRITES = { owner: null, admin: null, accountant: ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts'], sales: ['invoices', 'challans', 'notes', 'contacts', 'items', 'journal'], viewer: [] };
+  const WRITES = { owner: null, admin: null, accountant: ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'employees', 'attendance', 'payroll', 'hr'], sales: ['invoices', 'challans', 'notes', 'contacts', 'items', 'journal'], hr: ['employees', 'attendance', 'payroll', 'hr'], viewer: [] };
   // The screens a role may open (null = all)
   const OPENS = { owner: null, admin: null,
-    accountant: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'stock', 'purchases', 'expenses', 'journal', 'money', 'salesReport', 'aging', 'ledger', 'pnl', 'balance', 'backup', 'gst', 'companies', 'group', 'sync', 'company', 'subscription'],
+    accountant: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'stock', 'purchases', 'expenses', 'journal', 'money', 'salesReport', 'aging', 'ledger', 'pnl', 'balance', 'backup', 'gst', 'companies', 'group', 'sync', 'company', 'subscription', 'employees', 'attendance', 'payroll', 'hrsettings'],
+    hr: ['dashboard', 'employees', 'attendance', 'payroll', 'hrsettings', 'companies', 'sync', 'company', 'subscription'],
     sales: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'money', 'salesReport', 'aging', 'ledger', 'companies', 'sync', 'company', 'subscription'],
     viewer: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'stock', 'purchases', 'expenses', 'journal', 'money', 'salesReport', 'aging', 'ledger', 'pnl', 'balance', 'companies', 'group', 'sync', 'company', 'subscription'] };
   // The dashboard tiles a role gets (null = all)
-  const TILES = { owner: null, admin: null, accountant: null, sales: ['invoice', 'sales', 'items', 'receipts', 'customers', 'reports'], viewer: null };
-  const COLLECTIONS = ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'company'];
+  const TILES = { owner: null, admin: null, accountant: null, sales: ['invoice', 'sales', 'items', 'receipts', 'customers', 'reports'], hr: ['hr'], viewer: ['invoice', 'purchases', 'sales', 'items', 'expenses', 'receipts', 'payments', 'journal', 'customers', 'suppliers', 'reports'] };
+  const COLLECTIONS = ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'company', 'employees', 'attendance', 'payroll', 'hr'];
   const SUB_KEYS = ['registered_at', 'valid_until', 'used_codes', 'inv_quota', 'inv_used', 'inv_until', 'yearly_until'];
   const lower = (s) => String(s == null ? '' : s).trim().toLowerCase();
 
@@ -67,7 +69,7 @@
     tileAllowed(key) { if (!Store.cid) return true; const t = TILES[this.role()]; return !t || t.includes(key); },
     readOnlyText(key) {
       const r = this.roleLabel();
-      return key === 'company' ? 'Only the owner or an admin can change the company profile (your role here: ' + r + ')' : r === 'Viewer' ? 'Read-only access: a viewer cannot save changes in this company' : 'Your role here (' + r + ') cannot change ' + key;
+      return key === 'company' ? 'Only the owner or an admin can change the company profile (your role here: ' + r + ')' : r === 'Viewer' ? 'Read-only access: a viewer cannot save changes in this company' : 'Your role here (' + r + ') cannot change ' + (key === 'hr' ? 'the HR settings' : key);
     },
 
     // ---- server calls
@@ -144,6 +146,7 @@
       catch (e) { if (here()) $('#coList').innerHTML = '<div class="empty">' + esc(e.status === 404 ? 'Companies are not set up on the server yet (run server/supabase/companies.sql).' : 'The companies could not be loaded: ' + (e.message || 'no connection') + '.') + '</div>'; return; }
       if (!here()) return;
       const me = this.myUid(), cur = Store.cid || '', yearly = this.yearly();
+      const pillOf = (role) => role === 'owner' ? 'ok' : role === 'viewer' ? '' : 'warn';
       const card = (g) => '<div class="card white"><div class="hd">' + esc(g.name || 'No group') + (g.name ? '<span class="small muted" style="margin-left:8px">' + g.items.length + ' compan' + (g.items.length === 1 ? 'y' : 'ies') + '</span>' : '') + '</div><div class="bd"><table class="list cards"><thead><tr><th>Company</th><th>Your role</th><th>Owner</th><th class="num">Members</th><th></th></tr></thead><tbody>' +
         g.items.map(c => { const key = c.primary && c.role === 'owner' ? '' : c.id, own = c.role === 'owner', mine = c.owner_id === me;
           return '<tr' + (key === cur ? ' class="grp"' : '') + '><td data-l="Company"><b>' + esc(c.name || 'Unnamed company') + '</b>' + (c.primary && mine ? '<div class="small muted">Your first company</div>' : '') + '</td><td data-l="Role"><span class="pill ' + (own ? 'ok' : c.role === 'viewer' ? '' : 'warn') + '">' + esc(ROLE_LABEL[c.role] || c.role) + '</span></td><td data-l="Owner">' + esc(mine ? 'You' : c.owner_name || '') + '</td><td class="num" data-l="Members">' + (1 + (parseInt(c.members, 10) || 0)) + '</td>' +

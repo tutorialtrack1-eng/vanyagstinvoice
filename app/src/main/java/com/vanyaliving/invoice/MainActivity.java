@@ -1860,6 +1860,14 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Reports", R.drawable.ic_stock, 0xFF546E7A, 0xFFECEFF1, v -> showReportsMenu()),
         };
         DashboardTile[] tiles = menuForRole(Subscription.isLite(this, userId) ? liteTiles : fullTiles);
+        if (role().equals("hr")) {
+            TextView note = new TextView(this);
+            note.setText("Your role in this company is HR. Employees, attendance, payroll and the HR settings are in the BlitzBook web portal (blitzbook.co.in), with the same login; switch company above for your own books.");
+            note.setTextSize(13.5f); note.setPadding(dp(14), dp(14), dp(14), dp(14)); note.setTextColor(0xFF263238);
+            GradientDrawable nbg = new GradientDrawable(); nbg.setColor(0xFFF1F8E9); nbg.setCornerRadius(dp(12)); nbg.setStroke(dp(1), 0xFFC5E1A5);
+            note.setBackground(nbg); root.addView(note);
+            return;
+        }
         root.addView(tileGrid(tiles, 3, 13f, 11));
 
         // At-a-glance figures for the month, under the tiles
@@ -1898,10 +1906,10 @@ public class MainActivity extends Activity implements Sync.Listener {
             Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"date", "rounded_total", "grand_total", "payment_mode"}, null, null, null, null, null);
             while (c.moveToNext()) {
                 double total = c.isNull(1) || c.getDouble(1) == 0 ? c.getDouble(2) : c.getDouble(1);
-                if ("Credit".equalsIgnoreCase(c.getString(3))) credit += total;
                 if (Ledger.inRange(c.getString(0), from, null)) { sales += total; count++; }
             }
             c.close();
+            for (Object[] r : Ledger.outstanding(dbHelper.getReadableDatabase())) credit += (Double) r[4];
         } catch (Exception ignored) {}
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
@@ -7248,6 +7256,8 @@ public class MainActivity extends Activity implements Sync.Listener {
         // Every saved invoice, with the text a search may hit: number, date, buyer (name and address), phone,
         // GSTIN, state, payment mode and amount
         List<String[]> invoices = new ArrayList<>();
+        Map<String, Double> dues = new HashMap<>();
+        for (Object[] r : Ledger.outstanding(dbHelper.getReadableDatabase())) dues.put(((String) r[0]).toLowerCase(Locale.ROOT), (Double) r[4]);
         Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"invoice_no", "date", "buyer_name_addr", "rounded_total", "grand_total", "payment_mode", "rcm", "buyer_phone", "buyer_gstin", "buyer_state"}, null, null, null, null, "id DESC");
         while (c.moveToNext()) {
             String no = c.isNull(0) ? "" : c.getString(0), date = c.isNull(1) ? "" : c.getString(1), nameAddr = c.isNull(2) ? "" : c.getString(2);
@@ -7283,7 +7293,8 @@ public class MainActivity extends Activity implements Sync.Listener {
                 LinearLayout row = row();
                 row.setPadding(0, dp(6), 0, dp(6));
                 TextView tv = new TextView(this);
-                tv.setText(String.format(Locale.US, "%s  ·  %s\n%s\n%s  ·  %s%s", no, inv[1], inv[2].isEmpty() ? "(cash sale)" : titleCase(inv[2]), money(total), inv[4], inv[5].isEmpty() ? "" : "  ·  RCM"));
+                double dueNow = dues.containsKey(no.toLowerCase(Locale.ROOT)) ? dues.get(no.toLowerCase(Locale.ROOT)) : -1;
+                tv.setText(String.format(Locale.US, "%s  ·  %s\n%s\n%s  ·  %s%s%s", no, inv[1], inv[2].isEmpty() ? "(cash sale)" : titleCase(inv[2]), money(total), inv[4], inv[5].isEmpty() ? "" : "  ·  RCM", dueNow < 0 ? "" : dueNow > 0.005 ? "  ·  due " + money(dueNow) : "  ·  settled"));
                 tv.setTextSize(12.5f);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
                 ImageButton openBtn = iconButton(R.drawable.ic_edit, BLUE, "Open " + no);
@@ -7984,15 +7995,8 @@ public class MainActivity extends Activity implements Sync.Listener {
     // to it; -1 for an invoice paid at the time of sale
     private double invoiceBalance(String no, double total, String paymentMode) {
         if (!"Credit".equalsIgnoreCase(paymentMode)) return -1;
-        double got = 0;
-        SQLiteDatabase db = dbHelper.getReadableDatabase();
-        Cursor r = db.rawQuery("SELECT SUM(l.amount) FROM journal_lines l JOIN journal_vouchers v ON v.id=l.voucher_id WHERE v.kind='Receipt' AND v.ref_no=? AND l.side='Dr'", new String[]{no});
-        if (r.moveToFirst()) got += r.getDouble(0);
-        r.close();
-        Cursor n = db.rawQuery("SELECT SUM(total) FROM notes WHERE kind=? AND ref_no=? AND settlement='Credit'", new String[]{Ledger.NOTE_CREDIT, no});
-        if (n.moveToFirst()) got += n.getDouble(0);
-        n.close();
-        return Math.max(0, Math.round((total - got) * 100) / 100.0);
+        for (Object[] r : Ledger.outstanding(dbHelper.getReadableDatabase())) if (((String) r[0]).equalsIgnoreCase(no.trim())) return (Double) r[4];
+        return Math.max(0, Math.round(total * 100) / 100.0);
     }
 
     // Rct on an invoice in Sales: a credit invoice with money due opens the receipt form filled in; an invoice
@@ -8032,15 +8036,67 @@ public class MainActivity extends Activity implements Sync.Listener {
         if (amount > 0) eAmt.setText(String.format(Locale.US, "%.2f", amount));
         Spinner eMode = spinner(RECEIPT_MODES);
         int mi = Arrays.asList(RECEIPT_MODES).indexOf(mode); if (mi >= 0) eMode.setSelection(mi);
-        EditText eRef = edit("Invoice No (optional)", false); eRef.setText(ref);
         EditText eBank = edit("UTR, cheque no (optional)", false);
         EditText eNarr = edit("optional", false);
         LinearLayout r1 = row(); r1.addView(field("Receipt No", eNo), weightLp()); r1.addView(field("Date *", eDate), weightLp()); box.addView(r1);
         box.addView(field("Received from *", eParty));
         LinearLayout r2 = row(); r2.addView(field("Amount \u20b9 *", eAmt), weightLp()); r2.addView(field("Received in", eMode), weightLp()); box.addView(r2);
-        LinearLayout r3 = row(); r3.addView(field("Against invoice", eRef), weightLp()); r3.addView(field("Bank / UPI / Cheque ref", eBank), weightLp()); box.addView(r3);
+        /* Knock-off (payment advice): the customer's open credit invoices, oldest first, each with the amount of this
+           receipt set against it. Auto fills them in order until the amount runs out, so 8,000 received against invoices
+           of 2,999, 3,999 and 2,599 clears the first two and puts 1,002 on the third; anything not knocked off stays on
+           account of the customer. The amounts can be changed by hand. */
+        LinearLayout allocBox = new LinearLayout(this); allocBox.setOrientation(LinearLayout.VERTICAL);
+        TextView allocHint = new TextView(this); allocHint.setTextSize(12); allocHint.setPadding(dp(2), dp(4), dp(2), dp(2));
+        final List<Object[]> allocRows = new ArrayList<>(); // [invoice no, due, EditText]
+        Runnable hint = () -> {
+            double amt = parseNum(eAmt), sum = 0;
+            for (Object[] r : allocRows) sum += parseNum((EditText) r[2]);
+            double rest = Math.round((amt - sum) * 100) / 100.0;
+            if (allocRows.isEmpty()) { allocHint.setText("No credit invoice of this customer is open; the money is kept on account."); allocHint.setTextColor(0xFF607D8B); return; }
+            allocHint.setText("Knocked off " + money(sum) + " of " + money(amt) + (rest > 0.005 ? "; " + money(rest) + " on account of the customer" : rest < -0.005 ? "; " + money(-rest) + " more than the amount received" : "") + ".");
+            allocHint.setTextColor(rest < -0.005 ? RED : rest > 0.005 ? 0xFF607D8B : GREEN);
+        };
+        Runnable auto = () -> {
+            double left = parseNum(eAmt);
+            for (Object[] r : allocRows) { double a = Math.min((Double) r[1], Math.max(0, left)); ((EditText) r[2]).setText(a > 0.005 ? String.format(Locale.US, "%.2f", a) : ""); left = Math.round((left - a) * 100) / 100.0; }
+            hint.run();
+        };
+        Runnable draw = () -> {
+            allocBox.removeAllViews(); allocRows.clear();
+            String who = eParty.value().trim();
+            List<Object[]> open = new ArrayList<>();
+            if (!who.isEmpty()) for (Object[] r : Ledger.outstanding(dbHelper.getReadableDatabase())) if (((String) r[2]).equalsIgnoreCase(who) && (Double) r[4] > 0.005) open.add(r);
+            if (!open.isEmpty()) {
+                LinearLayout head = row(); head.setPadding(dp(4), dp(6), dp(4), dp(4)); head.setBackgroundColor(0xFFE7EBEF);
+                for (String h : new String[]{"Invoice", "Due", "Knock off \u20b9"}) { TextView t = new TextView(this); t.setText(h); t.setTextSize(11.5f); t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f)); }
+                allocBox.addView(head);
+                for (Object[] r : open) {
+                    LinearLayout line = row(); line.setPadding(dp(4), dp(2), dp(4), dp(2)); line.setGravity(Gravity.CENTER_VERTICAL);
+                    TextView no = new TextView(this); no.setText(r[0] + "\n" + r[1]); no.setTextSize(12); line.addView(no, new LinearLayout.LayoutParams(0, -2, 1f));
+                    TextView due = new TextView(this); due.setText(money((Double) r[4])); due.setTextSize(12); line.addView(due, new LinearLayout.LayoutParams(0, -2, 1f));
+                    EditText e = edit("0.00", true); e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL); e.setTextSize(13);
+                    e.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { hint.run(); } });
+                    line.addView(e, new LinearLayout.LayoutParams(0, -2, 1f));
+                    allocBox.addView(line);
+                    allocRows.add(new Object[]{r[0], r[4], e});
+                }
+                LinearLayout btns = row();
+                Button bAuto = new Button(this); bAuto.setText("Auto: oldest first"); bAuto.setAllCaps(false); bAuto.setTextSize(12); styleButton(bAuto, NAVY); bAuto.setOnClickListener(x -> auto.run());
+                Button bNone = new Button(this); bNone.setText("Clear"); bNone.setAllCaps(false); bNone.setTextSize(12); styleButton(bNone, SLATE); bNone.setOnClickListener(x -> { for (Object[] r : allocRows) ((EditText) r[2]).setText(""); hint.run(); });
+                btns.addView(bAuto, weightLp()); btns.addView(bNone, weightLp()); allocBox.addView(btns);
+                // A receipt opened for one invoice (Rct in Sales) is set against it; otherwise oldest first
+                if (!ref.isEmpty()) { double left = parseNum(eAmt); for (Object[] r : allocRows) ((EditText) r[2]).setText(((String) r[0]).equalsIgnoreCase(ref) ? String.format(Locale.US, "%.2f", Math.min((Double) r[1], left)) : ""); }
+                else auto.run();
+            }
+            allocBox.addView(allocHint);
+            hint.run();
+        };
+        eParty.onChanged = draw;
+        box.addView(field("Knock off against invoices", allocBox));
+        box.addView(field("Bank / UPI / Cheque ref", eBank));
         box.addView(field("Narration", eNarr));
-        box.addView(aiNote("Cash goes to the cash book, everything else to the bank book. Naming the invoice clears what is due on it. The receipt is saved as a PDF under Downloads/BlitzBook, ready to print or share with the customer."));
+        box.addView(aiNote("Cash goes to the cash book, everything else to the bank book. The amounts knocked off clear what is due on those invoices; the rest stays on account of the customer. The receipt is saved as a PDF under Downloads/BlitzBook, ready to print or share with the customer."));
+        draw.run();
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
         AlertDialog dlg = new AlertDialog.Builder(this).setTitle("New Receipt").setView(sc).setPositiveButton("Save & Print", null).setNegativeButton("Cancel", null).create();
@@ -8054,7 +8110,16 @@ public class MainActivity extends Activity implements Sync.Listener {
             Ledger.addAccount(db, who, Ledger.N_CUSTOMER);
             Ledger.JournalVoucher j = new Ledger.JournalVoucher();
             j.kind = "Receipt"; j.docNo = eNo.getText().toString().trim(); j.date = eDate.getText().toString().trim(); j.party = who;
-            j.refNo = eRef.getText().toString().trim(); j.mode = md; j.bankRef = eBank.getText().toString().trim(); j.narration = eNarr.getText().toString().trim();
+            j.mode = md; j.bankRef = eBank.getText().toString().trim(); j.narration = eNarr.getText().toString().trim();
+            List<Object[]> alloc = new ArrayList<>(); double sum = 0;
+            for (Object[] r : allocRows) {
+                double a = Math.round(parseNum((EditText) r[2]) * 100) / 100.0;
+                if (a <= 0) continue;
+                if (a > (Double) r[1] + 0.005) { Toast.makeText(this, "Invoice " + r[0] + " has only " + money((Double) r[1]) + " due", Toast.LENGTH_LONG).show(); return; }
+                alloc.add(new Object[]{r[0], a}); sum += a;
+            }
+            if (sum > amt + 0.005) { Toast.makeText(this, "The knock-off (" + money(sum) + ") is more than the amount received", Toast.LENGTH_LONG).show(); return; }
+            j.setAllocations(alloc);
             j.lines.add(new Ledger.JournalLine("Cash".equals(md) ? "Cash" : "Bank", true, amt));
             j.lines.add(new Ledger.JournalLine(who, false, amt));
             if (!requireWrite("receipts")) return;
@@ -8108,7 +8173,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             text(c, pt, receipt ? "Against Invoice:" : "Against Bill:", rlX, my, true); text(c, pt, v.refNo.isEmpty() ? "-" : v.refNo, R, my, false, true, false); my += 13;
             text(c, pt, "Mode:", rlX, my, true); text(c, pt, mode, R, my, false, true, false);
 
-            String[] inv = receipt && !v.refNo.isEmpty() ? invoiceSummary(v.refNo) : null;
+            String[] inv = receipt && !v.refNo.isEmpty() && v.allocations().size() == 1 ? invoiceSummary((String) v.allocations().get(0)[0]) : null;
             y = 125; float boxH = 62;
             box(c, pt, L, y, W, boxH);
             pt.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 18, pt); pt.setColor(Color.BLACK);
@@ -8134,6 +8199,12 @@ public class MainActivity extends Activity implements Sync.Listener {
             y += 40;
             pt.setTextSize(9.5f); text(c, pt, clipText(pt, "Amount in Words: " + rupeesPaiseWords(amount), W), L, y, true); y += 14;
             if (inv != null && !inv[1].isEmpty()) { text(c, pt, clipText(pt, inv[1], W), L, y, false); y += 14; }
+            List<Object[]> allocs = receipt ? v.allocations() : new ArrayList<>();
+            if (allocs.size() > 1) {
+                double onAccount = amount;
+                for (Object[] a : allocs) { String[] s2 = invoiceSummary((String) a[0]); onAccount -= (Double) a[1]; text(c, pt, clipText(pt, "Knocked off " + money((Double) a[1]) + " against " + (s2 == null ? "invoice " + a[0] : s2[1]), W), L, y, false); y += 12; }
+                if (onAccount > 0.005) { text(c, pt, money(onAccount) + " kept on account of " + v.party, L, y, false); y += 12; }
+            }
             if (receipt) text(c, pt, "Received with thanks. Subject to realisation of cheque / transfer where applicable.", L, y, false);
             float signY = y + 70; pt.setTextSize(10.5f); text(c, pt, "For " + sellerNameStr, R, signY, true, true, false);
             Bitmap sig = loadSignature();
@@ -8365,6 +8436,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     // first entry creates a new party or account without leaving the journal entry.
     private class AccountPicker extends androidx.appcompat.widget.AppCompatTextView {
         private String value = "";
+        Runnable onChanged;
         AccountPicker(String initial) {
             super(MainActivity.this);
             setTextSize(14); setTextColor(0xFF212121); setMinHeight(dp(48)); setGravity(Gravity.CENTER_VERTICAL);
@@ -8374,7 +8446,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             setOnClickListener(v -> open());
         }
         String value() { return value; }
-        void set(String v) { value = v; setText(v.isEmpty() ? "Tap to choose account" : v); setTextColor(v.isEmpty() ? 0xFF90A4AE : 0xFF212121); }
+        void set(String v) { value = v; setText(v.isEmpty() ? "Tap to choose account" : v); setTextColor(v.isEmpty() ? 0xFF90A4AE : 0xFF212121); if (onChanged != null) onChanged.run(); }
         private void open() {
             List<Ledger.Account> accounts = Ledger.accounts(dbHelper.getReadableDatabase());
             List<String> labels = new ArrayList<>();
@@ -8594,10 +8666,10 @@ public class MainActivity extends Activity implements Sync.Listener {
     private boolean inCompany() { return companyInfo != null; }
     private String role() { return inCompany() && !companyInfo[2].isEmpty() ? companyInfo[2] : "owner"; }
     private long accountId() { return accountsDb.accountOf(userId); }
-    private static final String[] ROLES = {"owner", "admin", "accountant", "sales", "viewer"};
-    private static final String[] ROLE_LABELS = {"Owner", "Admin", "Accountant", "Sales", "Viewer"};
+    private static final String[] ROLES = {"owner", "admin", "accountant", "sales", "hr", "viewer"};
+    private static final String[] ROLE_LABELS = {"Owner", "Admin", "Accountant", "Sales", "HR", "Viewer"};
     private static final String[] ROLE_HELP = {"Everything, including members, the subscription and deleting the company", "Everything in the books, the company profile and the members",
-            "Every record of the books; not the company profile or members", "Sales invoices, delivery challans, credit / debit notes, receipts, customers and items", "Looks at everything, changes nothing"};
+            "Every record of the books; not the company profile or members", "Sales invoices, delivery challans, credit / debit notes, receipts, customers and items", "Employees, attendance, payroll and HR settings only (in the web portal); sees nothing of the books", "Looks at everything, changes nothing"};
     private static String roleLabel(String r) { for (int i = 0; i < ROLES.length; i++) if (ROLES[i].equals(r)) return ROLE_LABELS[i]; return r; }
     /** Whether the role may change records of a kind: invoices, challans, notes, contacts, items, receipts, purchases, expenses, journal, accounts, company. */
     private boolean canWrite(String what) {
@@ -8633,6 +8705,8 @@ public class MainActivity extends Activity implements Sync.Listener {
             if (inCompany() && t.title.equals("AI Access")) continue;
             if (role().equals("sales") && !(t.title.equals("Invoice") || t.title.equals("Sales") || t.title.equals("Customer") || t.title.equals("Stock") || t.title.equals("Reports") || t.title.equals("Sales Report") || t.title.equals("Credit Notes") || t.title.equals("Debit Notes") || t.title.equals("Company Profile") || t.title.equals("Companies") || t.title.equals("Subscription"))) continue;
             if (role().equals("viewer") && (t.title.equals("Export / Import"))) continue;
+            // The HR role works in the web portal (employees, attendance, payroll); here it only switches company
+            if (role().equals("hr") && !(t.title.equals("Companies") || t.title.equals("Subscription"))) continue;
             out.add(t);
         }
         return out.toArray(new DashboardTile[0]);
@@ -8859,7 +8933,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             eId = edit("Mobile number or email of a BlitzBook account", false); eId.setSingleLine(true);
             sRole = new Spinner(this);
             sRole.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, java.util.Arrays.copyOfRange(ROLE_LABELS, 1, ROLE_LABELS.length)));
-            sRole.setSelection(3);
+            sRole.setSelection(4);
             box.addView(field("Add a member", eId)); box.addView(field("Role", sRole));
             TextView hint = new TextView(this); hint.setText("They must have a BlitzBook account already. The company then appears under Companies in their login, and they work in it on your subscription."); hint.setTextSize(11.5f); hint.setPadding(0, dp(4), 0, 0);
             box.addView(hint);
@@ -8888,13 +8962,13 @@ public class MainActivity extends Activity implements Sync.Listener {
                     r.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
                     if (manage && !owner) {
                         Button more = new Button(this); more.setText("\u22ee"); more.setAllCaps(false); styleButton(more, 0xFF607D8B); more.setMinWidth(dp(48)); more.setMinimumWidth(dp(48));
-                        more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(m.optString("name")).setItems(new String[]{"Make admin", "Make accountant", "Make sales", "Make viewer", "Remove from company"}, (d, w) -> {
+                        more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(m.optString("name")).setItems(new String[]{"Make admin", "Make accountant", "Make sales", "Make HR", "Make viewer", "Remove from company"}, (d, w) -> {
                             String identity = m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone");
                             new Thread(() -> {
                                 String e2 = null;
-                                try { if (w == 4) Supabase.removeMember(this, userId, cid, m.optString("user_id")); else Supabase.setMember(this, userId, cid, identity, ROLES[w + 1]); } catch (Exception ex) { e2 = ex.getMessage(); }
+                                try { if (w == 5) Supabase.removeMember(this, userId, cid, m.optString("user_id")); else Supabase.setMember(this, userId, cid, identity, ROLES[w + 1]); } catch (Exception ex) { e2 = ex.getMessage(); }
                                 final String fe = e2;
-                                runOnUiThread(() -> { Toast.makeText(this, fe == null ? (w == 4 ? "Member removed" : "Role changed") : fe, Toast.LENGTH_LONG).show(); draw[0].run(); });
+                                runOnUiThread(() -> { Toast.makeText(this, fe == null ? (w == 5 ? "Member removed" : "Role changed") : fe, Toast.LENGTH_LONG).show(); draw[0].run(); });
                             }).start();
                         }).show());
                         r.addView(more);

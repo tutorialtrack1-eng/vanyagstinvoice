@@ -3,9 +3,9 @@
    connection: the books live in the browser's storage anyway, and sync catches up when the connection is back.
    Online, every page and script still comes from the network first, so an update is picked up on the next
    open; the cached copy is only used when the network fails. The APK is never cached. */
-const CACHE = 'blitzbook-shell-v2';
+const CACHE = 'blitzbook-shell-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './css/app.css', './js/util.js', './js/store.js', './js/subscription.js', './js/appformat.js',
-  './js/supabase.js', './js/sync.js', './js/print.js', './js/app.js', './js/invoice.js', './js/ledger.js', './js/money.js', './js/reports.js', './js/gst.js',
+  './js/supabase.js', './js/sync.js', './js/print.js', './js/app.js', './js/invoice.js', './js/ledger.js', './js/money.js', './js/reports.js', './js/gst.js', './js/companies.js', './js/hr.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

@@ -505,6 +505,15 @@ table.list td.left { text-align: left; }
 .menu-list button { justify-content: flex-start; flex-wrap: wrap; gap: 4px; }
 .menu-list button.sel::after { margin-left: auto; }
 .chip.tap { cursor: pointer; }
+table.list.alloc td, table.list.alloc th { padding: 7px 10px; }
+/* Attendance grid (hr.js): one cell per day, tap to change */
+.attgrid td.day { padding: 4px 3px; cursor: pointer; min-width: 30px; }
+.attgrid th.off { color: var(--red); }
+.attgrid .att { display: inline-block; min-width: 24px; padding: 2px 4px; border-radius: 6px; font-size: 11px; font-weight: 800; text-align: center; background: #ECFDF5; color: var(--green); }
+.attgrid .att.A { background: #FEF2F2; color: var(--red); }
+.attgrid .att.L { background: #FFF7ED; color: #C2410C; }
+.attgrid .att.HD { background: #FEFCE8; color: #A16207; }
+.attgrid .att.W, .attgrid .att.H { background: var(--tint); color: var(--brand); }
 .chip.tap:hover { background: rgba(255,255,255,.3); }
 .tablewrap.gs table.list td, .tablewrap.gs table.list th { white-space: nowrap; }
 .tablewrap.gs table.list td.left, .tablewrap.gs table.list th:first-child { text-align: left; position: sticky; left: 0; background: #fff; z-index: 1; min-width: 220px; white-space: normal; }

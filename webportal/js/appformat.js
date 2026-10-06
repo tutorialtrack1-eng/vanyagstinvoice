@@ -71,9 +71,14 @@
     // Receipts and payments are journal vouchers with a few more columns; a plain entry carries none of them
     journal(j) {
       const kind = j.vtype === 'receipt' ? 'Receipt' : j.vtype === 'payment' ? 'Payment' : '';
+      // alloc: the invoices a receipt is knocked off against, [{no, amount}] as JSON text (the app keeps it as a column)
       return clean({ date: s(j.date), narration: s(j.narration), kind: kind || null, doc_no: kind ? s(j.no) : null, party: kind ? s(j.party) : null, ref_no: kind ? s(j.ref) : null, mode: kind ? s(j.mode) : null, bank_ref: kind ? s(j.bankRef) : null,
+        alloc: kind && Array.isArray(j.alloc) && j.alloc.length ? JSON.stringify(j.alloc.map(a => ({ no: s(a.no).trim(), amount: num(a.amount) }))) : null,
         lines: (j.lines || []).map(l => ({ account: s(l.account), side: l.side === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) });
     },
+    employee(e) { return JSON.parse(JSON.stringify(e)); },
+    attendance(a) { return JSON.parse(JSON.stringify(a)); },
+    payroll(p) { return JSON.parse(JSON.stringify(p)); },
     sub(x) { return { registered_at: num(x.registered_at), valid_until: num(x.valid_until), used_codes: (x.used_codes || []).slice().sort(), inv_quota: num(x.inv_quota), inv_used: num(x.inv_used), inv_until: num(x.inv_until), yearly_until: num(x.yearly_until) }; }
   };
 
@@ -146,11 +151,18 @@
       return Object.assign({}, old, { kind: /debit/i.test(s(r.kind)) ? 'DN' : 'CN', no: s(r.note_no), date: s(r.date), party: s(r.party), partyGstin: s(r.party_gstin), ref: s(r.ref_no), reason: s(r.reason),
         taxable: num(r.taxable), rate: s(r.gst_rate) || '0', settle: s(r.settlement) || 'Credit', gst: round2(cgst + sgst + igst), cgst, sgst, igst, total: num(r.total) });
     },
+    employee(r, old) { return Object.assign({}, old, JSON.parse(JSON.stringify(r))); },
+    attendance(r, old) { return Object.assign({}, old, JSON.parse(JSON.stringify(r))); },
+    payroll(r, old) { return Object.assign({}, old, JSON.parse(JSON.stringify(r))); },
     journal(r, old) {
       const kind = /^rec/i.test(s(r.kind)) ? 'receipt' : /^pay/i.test(s(r.kind)) ? 'payment' : '';
       const j = Object.assign({}, old, { date: s(r.date), narration: s(r.narration), lines: (r.lines || []).map(l => ({ account: s(l.account), side: s(l.side) === 'Cr' ? 'Cr' : 'Dr', amount: num(l.amount) })) });
-      ['vtype', 'no', 'party', 'ref', 'mode', 'bankRef'].forEach(k => delete j[k]);
-      if (kind) Object.assign(j, { vtype: kind, no: s(r.doc_no), party: s(r.party), ref: s(r.ref_no), mode: s(r.mode), bankRef: s(r.bank_ref) });
+      ['vtype', 'no', 'party', 'ref', 'mode', 'bankRef', 'alloc'].forEach(k => delete j[k]);
+      if (kind) {
+        let alloc = []; try { const a = typeof r.alloc === 'string' ? JSON.parse(r.alloc) : r.alloc; if (Array.isArray(a)) alloc = a.map(x => ({ no: s(x.no).trim(), amount: num(x.amount) })).filter(x => x.no && x.amount > 0); } catch (e) { /* not ours */ }
+        Object.assign(j, { vtype: kind, no: s(r.doc_no), party: s(r.party), ref: s(r.ref_no), mode: s(r.mode), bankRef: s(r.bank_ref) });
+        if (alloc.length) j.alloc = alloc;
+      }
       return j;
     }
   };
@@ -166,7 +178,11 @@
     { name: 'expense', col: 'expenses', prefix: 'exp:', key: (d) => s(d.id), byId: true },
     { name: 'purchase', col: 'purchases', prefix: 'pur:', key: (d) => s(d.id), byId: true },
     { name: 'note', col: 'notes', prefix: 'note:', key: (d) => s(d.id), byId: true },
-    { name: 'journal', col: 'journal', prefix: 'jrn:', key: (d) => s(d.id), byId: true }
+    { name: 'journal', col: 'journal', prefix: 'jrn:', key: (d) => s(d.id), byId: true },
+    // HR (hr.js): employees, one attendance record per employee and month, one payroll run per month; kept as they are
+    { name: 'employee', col: 'employees', prefix: 'emp:', key: (d) => s(d.id), byId: true },
+    { name: 'attendance', col: 'attendance', prefix: 'att:', key: (d) => s(d.id), byId: true },
+    { name: 'payroll', col: 'payroll', prefix: 'pay:', key: (d) => s(d.id), byId: true }
   ];
   function subState() { return { registered_at: Store.get('registered_at', 0), valid_until: Store.get('valid_until', 0), used_codes: Store.get('used_codes', []), inv_quota: Store.get('inv_quota', 0), inv_used: Store.get('inv_used', 0), inv_until: Store.get('inv_until', 0), yearly_until: Store.get('yearly_until', 0) }; }
 
@@ -176,6 +192,7 @@
     const c = Store.get('company', null);
     if (c && s(c.name).trim()) out.company = row.company(Store.company());
     KINDS.forEach(k => Store.list(k.col).forEach(d => { const id = k.key(d); if (id) out[k.prefix + id] = row[k.name](d); }));
+    const hr = Store.get('hr', null); if (hr && Object.keys(hr).length) out.hr = JSON.parse(JSON.stringify(hr)); // HR settings (hr.js)
     out.sub = row.sub(subState());
     return out;
   }
@@ -189,6 +206,7 @@
     if (company && !company.x) { Store.saveCompany(doc.company(company.d, Store.company())); done.push('company'); }
     changes.forEach(c => {
       if (c.k === 'company') return;
+      if (c.k === 'hr') { if (!c.x) { Store.set('hr', c.d, true); done.push('hr'); } return; }
       if (c.k === 'sub') {
         if (c.x) return;
         // Trial start is the earliest seen, validity the latest, a code used anywhere is used everywhere, and the
@@ -223,7 +241,7 @@
   function k_eq(kind, d, id) { return kind.key(d) === id; }
 
   // ------------------------------------------------------------ backup files in the app's table layout
-  const TABLES = ['company_master', 'items_master', 'contacts', 'history', 'invoices', 'invoice_items', 'challans', 'challan_items', 'expenses', 'purchases', 'purchase_items', 'journal', 'journal_vouchers', 'journal_lines', 'ledger_accounts', 'notes'];
+  const TABLES = ['company_master', 'items_master', 'contacts', 'history', 'invoices', 'invoice_items', 'challans', 'challan_items', 'expenses', 'purchases', 'purchase_items', 'journal', 'journal_vouchers', 'journal_lines', 'ledger_accounts', 'notes', 'employees', 'attendance', 'payroll'];
 
   function exportTables() {
     const t = { company_master: [], items_master: [], contacts: [], history: [], invoices: [], invoice_items: [], challans: [], challan_items: [], expenses: [], purchases: [], purchase_items: [], journal_vouchers: [], journal_lines: [], ledger_accounts: [], notes: [] };
@@ -240,8 +258,9 @@
     Store.list('journal').forEach(d => children('journal_vouchers', row.journal(d), 'lines', 'journal_lines', 'voucher_id', { sync_id: s(d.id) }));
     Store.list('accounts').forEach(d => { if (s(d.name).trim()) add('ledger_accounts', row.account(d)); });
     Store.list('notes').forEach(d => add('notes', row.note(d), { sync_id: s(d.id) }));
-    // Read by the portal only; the app skips keys it does not know
-    t.blitzbook_web = { version: 2, exportedAt: new Date().toISOString(), signature: sig || '', pdfLayout: co.pdfLayout || 0, paper: co.paper || 'A4' };
+    // HR records (hr.js) go as they are; read by the portal only, the app skips tables and keys it does not know
+    t.employees = Store.list('employees'); t.attendance = Store.list('attendance'); t.payroll = Store.list('payroll');
+    t.blitzbook_web = { version: 2, exportedAt: new Date().toISOString(), signature: sig || '', pdfLayout: co.pdfLayout || 0, paper: co.paper || 'A4', hr: Store.get('hr', null) };
     return t;
   }
 
@@ -274,6 +293,8 @@
     put('purchases', 'purchases', r => mk('purchase', Object.assign({}, r, { items: purItems.get(s(r.id)) || [] }), s(r.sync_id)));
     put('accounts', 'ledger_accounts', r => s(r.name).trim() ? mk('account', r) : null);
     put('notes', 'notes', r => mk('note', r, s(r.sync_id)));
+    ['employees', 'attendance', 'payroll'].forEach(col => { if (Array.isArray(obj[col])) Store.saveList(col, obj[col]); });
+    if (web.hr) Store.set('hr', web.hr);
     if (Array.isArray(obj.journal_vouchers) || Array.isArray(obj.journal)) {
       const lines = group('journal_lines', 'voucher_id');
       const list = rows('journal_vouchers').map(r => mk('journal', Object.assign({}, r, { lines: lines.get(s(r.id)) || [] }), s(r.sync_id)));

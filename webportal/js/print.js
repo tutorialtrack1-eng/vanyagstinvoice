@@ -521,21 +521,27 @@
   // ------------------------------------------------------------ receipt / payment voucher on A4
   function voucher(v, company) {
     const receipt = v.vtype !== 'payment', amount = v.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0);
-    // The invoice the money is for, and the customer's details from it
-    const inv = receipt && v.ref && global.Store ? Store.list('invoices').find(i => i.kind === 'invoice' && i.no === String(v.ref).trim()) : null;
+    // The invoices the money is knocked off against (one for an older receipt), and the customer's details from the first
+    const alloc = receipt && Array.isArray(v.alloc) && v.alloc.length ? v.alloc : (receipt && v.ref ? [{ no: String(v.ref).trim(), amount }] : []);
+    const firstNo = alloc.length ? alloc[0].no : '';
+    const inv = firstNo && global.Store ? Store.list('invoices').find(i => i.kind === 'invoice' && i.no === firstNo) : null;
+    const dues = global.Biz && alloc.length > 1 ? new Map(Biz.outstanding().all.map(r => [r.no, r])) : null;
+    const allocRows = alloc.length > 1 ? alloc.map(a => { const r = dues.get(a.no); return '<tr><td>Invoice ' + esc(a.no) + (r ? ' dated ' + esc(r.date) + ', total ' + money(r.total) + ', balance due ' + money(r.balance) : '') + '</td><td class="r">' + indianNumber(num(a.amount)) + '</td></tr>'; }).join('') : '';
+    const onAccount = U.round2(amount - alloc.reduce((s, a) => s + num(a.amount), 0));
     const total = inv ? num(inv.totals.rounded) || num(inv.totals.grand) : 0;
     const got = inv && inv.payment === 'Credit' && global.Store ? Store.list('journal').filter(j => j.vtype === 'receipt' && String(j.ref || '').trim() === inv.no && j.id !== v.id).reduce((s, j) => s + (j.lines || []).filter(l => l.side === 'Dr').reduce((t, l) => t + num(l.amount), 0), 0) + amount : total;
     const cn = inv && global.Store ? Store.list('notes').filter(n => n.kind === 'CN' && n.settle === 'Credit' && String(n.ref || '').trim() === inv.no).reduce((s, n) => s + num(n.total), 0) : 0;
     const due = inv ? Math.max(0, U.round2(total - got - cn)) : 0;
     const who = inv ? partyLines(inv.buyer) : [];
-    const body = '<div class="doc std">' + head(receipt ? 'RECEIPT' : 'PAYMENT VOUCHER', company, [[(receipt ? 'Receipt' : 'Voucher') + ' No:', v.no || '-', 1], ['Date:', v.date, 1], [receipt ? 'Against Invoice:' : 'Against Bill:', v.ref || '-'], ['Mode:', v.mode || 'Bank Transfer']]) +
+    const body = '<div class="doc std">' + head(receipt ? 'RECEIPT' : 'PAYMENT VOUCHER', company, [[(receipt ? 'Receipt' : 'Voucher') + ' No:', v.no || '-', 1], ['Date:', v.date, 1], [receipt ? (alloc.length > 1 ? 'Against Invoices:' : 'Against Invoice:') : 'Against Bill:', alloc.length ? alloc.map(a => a.no).join(', ') : (v.ref || '-')], ['Mode:', v.mode || 'Bank Transfer']]) +
       '<table class="grid parties"><tr><th style="text-align:left">' + (receipt ? 'RECEIVED FROM' : 'PAID TO') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(v.party || '').toUpperCase()) + '</div>' +
       who.slice(1, 3).map(s => '<div>' + esc(s.toUpperCase()) + '</div>').join('') + (inv && inv.buyer.gstin ? '<div><b>GSTIN: ' + esc(inv.buyer.gstin.toUpperCase()) + '</b></div>' : '') + (inv && inv.buyer.phone ? '<div>Ph: ' + esc(inv.buyer.phone) + '</div>' : '') +
       (v.narration ? '<div>' + esc(v.narration) + '</div>' : '') + '</td></tr></table>' +
-      '<table class="grid items"><thead><tr><th>PARTICULARS</th><th style="width:125pt">AMOUNT</th></tr></thead><tbody><tr><td>' + (receipt ? 'Amount received' : 'Amount paid') + ' by ' + esc(v.mode || 'Bank Transfer') + (v.bankRef ? ' (ref ' + esc(v.bankRef) + ')' : '') + (v.ref ? ' against ' + esc(v.ref) : '') + '</td><td class="r">' + indianNumber(amount) + '</td></tr>' +
+      '<table class="grid items"><thead><tr><th>PARTICULARS</th><th style="width:125pt">AMOUNT</th></tr></thead><tbody><tr><td>' + (receipt ? 'Amount received' : 'Amount paid') + ' by ' + esc(v.mode || 'Bank Transfer') + (v.bankRef ? ' (ref ' + esc(v.bankRef) + ')' : '') + (alloc.length === 1 ? ' against ' + esc(alloc[0].no) : alloc.length ? ', knocked off against the invoices below' : v.ref ? ' against ' + esc(v.ref) : '') + '</td><td class="r">' + indianNumber(amount) + '</td></tr>' + allocRows +
+      (alloc.length > 1 && onAccount > 0.005 ? '<tr><td>Kept on account of ' + esc(v.party) + '</td><td class="r">' + indianNumber(onAccount) + '</td></tr>' : '') +
       '<tr><td class="r"><b>TOTAL</b></td><td class="r"><b>' + money(amount) + '</b></td></tr></tbody></table>' +
       '<div class="sect words">Amount in Words: ' + esc(rupeesPaiseWords(amount)) + '</div>' +
-      (inv ? '<div class="sect">Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + ': total ' + money(total) + (inv.payment === 'Credit' ? ', received ' + money(got) + (cn ? ', credit notes ' + money(cn) : '') + ', <b>balance due ' + money(due) + '</b>' : ', paid in full at the time of sale') + '</div>' : '') +
+      (inv && alloc.length === 1 ? '<div class="sect">Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + ': total ' + money(total) + (inv.payment === 'Credit' ? ', received ' + money(got) + (cn ? ', credit notes ' + money(cn) : '') + ', <b>balance due ' + money(due) + '</b>' : ', paid in full at the time of sale') + '</div>' : '') +
       (receipt ? '<div class="note" style="font-weight:normal">Received with thanks. Subject to realisation of cheque / transfer where applicable.</div>' : '') + signBlock(company) + POWERED + '</div>';
     return page(fileName(company, '', v.no || ''), PAPERS.A4.css, '12mm 10mm', body);
   }

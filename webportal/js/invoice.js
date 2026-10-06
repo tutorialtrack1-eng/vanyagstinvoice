@@ -73,7 +73,9 @@
     const at = asAt == null ? Date.now() : asAt, key = (s) => String(s || '').trim().toLowerCase();
     const amountOf = (v) => (v.lines || []).filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0);
     const receipts = Store.list('journal').filter(j => j.vtype === 'receipt' && Books.inRange(j.date, null, at));
-    const byRef = new Map(); receipts.forEach(v => { const k = key(v.ref); if (k) byRef.set(k, (byRef.get(k) || 0) + amountOf(v)); });
+    // A receipt knocked off against several invoices carries its allocations; an older one names one invoice
+    const allocs = (v) => Array.isArray(v.alloc) && v.alloc.length ? v.alloc : (key(v.ref) ? [{ no: v.ref, amount: amountOf(v) }] : []);
+    const byRef = new Map(); receipts.forEach(v => allocs(v).forEach(a => { const k = key(a.no); if (k) byRef.set(k, (byRef.get(k) || 0) + num(a.amount)); }));
     const credited = new Map(); Store.list('notes').forEach(n => { if (n.kind === 'CN' && n.settle === 'Credit' && Books.inRange(n.date, null, at)) { const k = key(n.ref); credited.set(k, (credited.get(k) || 0) + num(n.total)); } });
     const all = [];
     invoices().forEach(i => {
@@ -82,8 +84,13 @@
       const days = Math.max(0, Math.floor((at - U.dateMs(i.date)) / 86400000));
       all.push({ id: i.id, no: i.no, date: i.date, party: Books.partyName(i.buyer.name) || '(cash sale)', total, received, credited: cn, balance: U.round2(total - received - cn), days, bucket: days <= 30 ? 0 : days <= 60 ? 1 : days <= 90 ? 2 : 3 });
     });
+    // What a receipt does not knock off against a credit invoice stays on account of the party
     const nos = new Set(all.map(r => key(r.no))), onAccount = new Map();
-    receipts.forEach(v => { if (nos.has(key(v.ref))) return; const k = key(v.party); if (k) onAccount.set(k, { party: v.party, amount: (onAccount.get(k) || { amount: 0 }).amount + amountOf(v) }); });
+    receipts.forEach(v => {
+      const used = allocs(v).filter(a => nos.has(key(a.no))).reduce((s, a) => s + num(a.amount), 0), rest = U.round2(amountOf(v) - used);
+      if (rest <= 0.005) return;
+      const k = key(v.party); if (k) onAccount.set(k, { party: v.party, amount: (onAccount.get(k) || { amount: 0 }).amount + rest });
+    });
     return { all, open: all.filter(r => r.balance > 0.005), onAccount: Array.from(onAccount.values()) };
   }
   // What is still due on one credit invoice, null when it is not a credit invoice

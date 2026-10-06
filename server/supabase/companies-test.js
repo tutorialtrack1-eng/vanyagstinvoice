@@ -126,6 +126,20 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
   const lm = await A.Companies.rpc('list_members', { cid: beta });
   check('members listed, owner first', lm.length === 2 && lm[0].role === 'owner' && lm[0].name === 'Asha' && lm[1].role === 'sales' && lm[1].phone === '9876543211', lm);
 
+  console.log('the HR role');
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'hr' });
+  list = await B.Companies.load();
+  check('role changed to hr', r.role === 'hr' && list[1].role === 'hr' && B.Companies.role() === 'hr' && B.Companies.mayWrite('employees') && !B.Companies.mayWrite('invoices') && B.Companies.mayOpen('payroll') && !B.Companies.mayOpen('sales'), [r, list[1]]);
+  B.Store.add('employees', { code: 'EMP001', name: 'Ravi', doj: '01/04/2026', basic: 20000, hra: 8000, da: 0, conveyance: 1600, special: 2400, pf: true, esi: false, pt: true, tds: 0, active: true });
+  check('hr may save an employee', await B.Sync.run() && books.some(b => b.user_id === beta && b.k.startsWith('emp:')), B.Sync.lastError);
+  r = await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: '', since: 0, changes: [], company: beta, owner: ua.id });
+  check('hr reads the HR records, the profile and the subscription, nothing of the books', r.changes.every(c => c.k === 'company' || c.k === 'sub' || c.k === 'hr' || /^(emp|att|pay):/.test(c.k)) && r.changes.some(c => c.k.startsWith('emp:')) && !r.changes.some(c => c.k.startsWith('inv:')), r.changes.map(c => c.k));
+  err = null; try { await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'inv:0007', d: { invoice_no: '0007' } }], company: beta, owner: ua.id }); } catch (e) { err = e; }
+  check('and may not write an invoice', err && err.status === 403);
+  A.enter(beta); await A.Sync.run();
+  check('the owner sees the employee', A.Store.list('employees').some(e => e.name === 'Ravi'));
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'sales' }); await B.Companies.load();
+
   console.log('leaving, removing and deleting');
   r = await B.Companies.rpc('remove_member', { cid: beta, member: ub.id });
   check('a member may leave', r.ok && (await B.Companies.load()).length === 1);

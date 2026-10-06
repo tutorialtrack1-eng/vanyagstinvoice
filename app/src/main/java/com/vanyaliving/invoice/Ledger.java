@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.TreeMap;
 
 /**
@@ -125,7 +126,7 @@ final class Ledger {
             addColumn(db, "expenses", col);
         addColumn(db, "invoices", "rcm INTEGER DEFAULT 0");
         // Receipts and payments are journal vouchers with a few more details (entered in the web portal)
-        for (String col : new String[]{"kind TEXT", "doc_no TEXT", "party TEXT", "ref_no TEXT", "mode TEXT", "bank_ref TEXT"}) addColumn(db, "journal_vouchers", col);
+        for (String col : new String[]{"kind TEXT", "doc_no TEXT", "party TEXT", "ref_no TEXT", "mode TEXT", "bank_ref TEXT", "alloc TEXT"}) addColumn(db, "journal_vouchers", col);
         for (String col : new String[]{"tds_applicable INTEGER DEFAULT 0", "tds_section TEXT", "tds_rate REAL DEFAULT 0"}) addColumn(db, "contacts", col);
         migrateJournal(db);
     }
@@ -194,7 +195,27 @@ final class Ledger {
         // Receipt / Payment vouchers (made in the web portal) carry who paid or was paid, the bill they settle,
         // the mode and the bank reference; a plain journal entry leaves these empty
         String kind = "", docNo = "", party = "", refNo = "", mode = "", bankRef = "";
+        // A receipt knocked off against several invoices (payment advice): [{"no": ..., "amount": ...}] as JSON text,
+        // the same field the portal keeps; refNo then lists the invoice numbers. An older receipt names one invoice in refNo.
+        String alloc = "";
         final List<JournalLine> lines = new ArrayList<>();
+        /** The invoices this voucher is knocked off against with the amounts: the allocations, else the one invoice named. */
+        List<Object[]> allocations() {
+            List<Object[]> out = new ArrayList<>();
+            try {
+                org.json.JSONArray a = new org.json.JSONArray(alloc.isEmpty() ? "[]" : alloc);
+                for (int i = 0; i < a.length(); i++) { org.json.JSONObject o = a.getJSONObject(i); String no = o.optString("no", "").trim(); double amt = o.optDouble("amount", 0); if (!no.isEmpty() && amt > 0) out.add(new Object[]{no, amt}); }
+            } catch (Exception ignored) { out.clear(); }
+            if (out.isEmpty() && !refNo.trim().isEmpty() && !refNo.contains(",")) out.add(new Object[]{refNo.trim(), debitTotal()});
+            return out;
+        }
+        void setAllocations(List<Object[]> list) {
+            org.json.JSONArray a = new org.json.JSONArray();
+            StringBuilder nos = new StringBuilder();
+            try { for (Object[] x : list) { a.put(new org.json.JSONObject().put("no", x[0]).put("amount", x[1])); nos.append(nos.length() == 0 ? "" : ", ").append(x[0]); } } catch (Exception ignored) {}
+            alloc = list.isEmpty() ? "" : a.toString();
+            if (!list.isEmpty()) refNo = nos.toString();
+        }
         boolean isReceipt() { return "Receipt".equalsIgnoreCase(kind); }
         boolean isPayment() { return "Payment".equalsIgnoreCase(kind); }
         double debitTotal() { double t = 0; for (JournalLine l : lines) if (l.debit) t += l.amount; return t; }
@@ -209,7 +230,7 @@ final class Ledger {
             JournalVoucher v = new JournalVoucher();
             v.id = c.getLong(c.getColumnIndexOrThrow("id"));
             v.date = str(c, "date"); v.narration = str(c, "narration");
-            v.kind = str(c, "kind"); v.docNo = str(c, "doc_no"); v.party = str(c, "party"); v.refNo = str(c, "ref_no"); v.mode = str(c, "mode"); v.bankRef = str(c, "bank_ref");
+            v.kind = str(c, "kind"); v.docNo = str(c, "doc_no"); v.party = str(c, "party"); v.refNo = str(c, "ref_no"); v.mode = str(c, "mode"); v.bankRef = str(c, "bank_ref"); v.alloc = str(c, "alloc");
             byId.put(v.id, v);
         }
         c.close();
@@ -222,12 +243,41 @@ final class Ledger {
         return new ArrayList<>(byId.values());
     }
 
+    /** What has been received against each invoice number: the receipts' allocations (an older receipt counts in full
+     *  against the one invoice it names). */
+    static Map<String, Double> receivedByInvoice(SQLiteDatabase db) {
+        Map<String, Double> out = new HashMap<>();
+        for (JournalVoucher v : journal(db)) if (v.isReceipt()) for (Object[] a : v.allocations()) add(out, ((String) a[0]).toLowerCase(Locale.ROOT), (Double) a[1]);
+        return out;
+    }
+
+    /** Every credit invoice with what is still due on it: [invoice no, date, buyer, total, due], oldest first. Due = the
+     *  invoice total less the receipts knocked off against it and the credit notes adjusted to it on account. */
+    static List<Object[]> outstanding(SQLiteDatabase db) {
+        Map<String, Double> got = receivedByInvoice(db);
+        Cursor n = db.query("notes", new String[]{"ref_no", "total"}, "kind=? AND settlement='Credit'", new String[]{NOTE_CREDIT}, null, null, null);
+        while (n.moveToNext()) if (!n.isNull(0)) add(got, n.getString(0).trim().toLowerCase(Locale.ROOT), n.getDouble(1));
+        n.close();
+        List<Object[]> out = new ArrayList<>();
+        Cursor c = db.query("invoices", new String[]{"invoice_no", "date", "buyer_name_addr", "rounded_total", "grand_total"}, "payment_mode='Credit'", null, null, null, null);
+        while (c.moveToNext()) {
+            String no = c.isNull(0) ? "" : c.getString(0).trim(); if (no.isEmpty()) continue;
+            double total = c.isNull(3) || c.getDouble(3) == 0 ? c.getDouble(4) : c.getDouble(3);
+            Double g = got.get(no.toLowerCase(Locale.ROOT));
+            double due = Math.max(0, Math.round((total - (g == null ? 0 : g)) * 100) / 100.0);
+            out.add(new Object[]{no, c.isNull(1) ? "" : c.getString(1), (c.isNull(2) ? "" : c.getString(2)).split("\n")[0].trim(), total, due});
+        }
+        c.close();
+        java.util.Collections.sort(out, (a, b) -> { Date da = parseDate((String) a[1]), dbb = parseDate((String) b[1]); long x = da == null ? 0 : da.getTime(), y = dbb == null ? 0 : dbb.getTime(); return x != y ? Long.compare(x, y) : ((String) a[0]).compareTo((String) b[0]); });
+        return out;
+    }
+
     static void saveJournal(SQLiteDatabase db, JournalVoucher v) {
         ContentValues cv = new ContentValues();
         cv.put("date", v.date); cv.put("narration", v.narration);
         boolean voucher = v.isReceipt() || v.isPayment();
         cv.put("kind", voucher ? v.kind : null); cv.put("doc_no", voucher ? v.docNo : null); cv.put("party", voucher ? v.party : null);
-        cv.put("ref_no", voucher ? v.refNo : null); cv.put("mode", voucher ? v.mode : null); cv.put("bank_ref", voucher ? v.bankRef : null);
+        cv.put("ref_no", voucher ? v.refNo : null); cv.put("mode", voucher ? v.mode : null); cv.put("bank_ref", voucher ? v.bankRef : null); cv.put("alloc", voucher && !v.alloc.isEmpty() ? v.alloc : null);
         db.beginTransaction();
         try {
             if (v.id < 0 || db.update("journal_vouchers", cv, "id=?", new String[]{String.valueOf(v.id)}) == 0) v.id = db.insert("journal_vouchers", null, cv);

@@ -37,6 +37,7 @@ here and vice versa, and the trial and activation are shared.
 | `js/money.js` | Receipts & Payments (kept as journal vouchers), receipt / payment voucher printout, bank statement upload |
 | `js/reports.js` | Sales report, Profit & Loss, Balance sheet, period picker, Excel export |
 | `js/gst.js` | GST returns: fetches a return period from the books and writes the GSTR-1 and GSTR-3B JSON files for the GST portal's offline tool (yearly plan or longer) |
+| `js/hr.js` | HR & payroll: employees, attendance (days, hours, overtime, leave, holidays), monthly payroll with PF / ESI / professional tax / TDS, payslips, statutory summaries, PF ECR sheet, bank advice, posting of a finalised month into the books; HR Settings |
 | `js/companies.js` | Companies: several companies under one login (each in its own storage namespace with its own sync), company groups, members with roles (owner, admin, accountant, sales, viewer) and what each role may open and change, the company switcher, and Group Statements (consolidated Profit & Loss / Balance Sheet with inter-company eliminations) |
 
 ## Screens
@@ -48,7 +49,8 @@ Everything the app has:
   Dashboard and four groups that drop down on hover (or a tap on a phone): Sales (New Invoice, Sales,
   Delivery Challans, Credit / Debit Notes, Customers, Sales Report, Outstanding & Ageing), Purchases
   (Purchases & Quotations, Suppliers, Expenses, Stock & Items, Stock in Hand), Books (Receipts & Payments,
-  Journal, Party Ledger, Profit & Loss, Balance Sheet, Group Statements) and Company (Company Profile,
+  Journal, Party Ledger, Profit & Loss, Balance Sheet, Group Statements), HR (Employees, Attendance, Payroll,
+  HR Settings) and Company (Company Profile,
   Companies, GST Returns, Export / Import, AI Access, Subscription); the company chip, dark mode and Logout
   sit on the right. An invoice pack and a role in another company trim the groups to what they may open.
 - Invoice editor: number with step buttons and owner-defined format, date, payment mode, RCM for service
@@ -117,9 +119,10 @@ Everything the app has:
   drops a company one was invited to. The company chip in the top bar (and *Switch company* on the dashboard)
   switches between companies; the chip shows the role in another owner's company.
 - Roles: **Owner** everything, members, subscription, deleting the company; **Admin** everything in the books,
-  the profile and the members; **Accountant** every record of the books, not the profile or members; **Sales**
-  sales invoices, delivery challans, credit / debit notes, receipts, customers and items; **Viewer** looks at
-  everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
+  the profile and the members; **Accountant** every record of the books and HR, not the profile or members;
+  **Sales** sales invoices, delivery challans, credit / debit notes, receipts, customers and items; **HR**
+  employees, attendance, payroll and HR settings only, and nothing of the books (the server shows an HR login
+  only those records); **Viewer** looks at everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
   is refused with a note, and the server refuses it as well.
 - Each company has its own storage namespace in the browser and its own sync; the account's own first company
   is the one it always had. Making companies, grouping them, adding members and the group statements come
@@ -131,6 +134,38 @@ Everything the app has:
   company, an Eliminations column when the companies dealt with each other (sales, purchases, credit / debit
   notes and balances between them, parties matched to companies by name) and the group total, with group
   ratios, Excel and PDF. Each company's GST stays its own.
+
+## Receipts knocked off against invoices
+
+A receipt names the invoices it settles. The receipt form lists the customer's open credit invoices oldest
+first with what is due on each; *Auto: oldest first* spreads the amount received over them in that order
+(8,000 against 2,999 + 3,999 + 2,599 clears the first two and puts 1,002 on the third), and any line can be
+typed by hand. What is not knocked off stays on account of the customer and shows under Outstanding & Ageing.
+The receipt voucher lists the invoices with the amounts set against them and the balance still due. Credit
+notes adjusted on account reduce the invoice they are against, so Outstanding, the dashboard and the party
+ledger all show what is really due.
+
+## HR & payroll
+
+- **Employees**: code, designation, department, dates, PAN / Aadhaar / UAN / ESI number, bank account, the
+  salary structure (basic, DA, HRA, conveyance, special), whether PF, ESI and PT apply, the monthly TDS and the
+  paid leave a year.
+- **Attendance**: a grid of the month, one cell per day: P present, A absent (loss of pay), L paid leave, HD half
+  day, W weekly off, H holiday (weekly offs and holidays from HR Settings). Hours = hours per day worked plus the
+  overtime hours typed for the month. Attendance locks once the month's payroll is finalised.
+- **Payroll**: computed from the structure and the attendance: earned per paid day; overtime at gross / (26 x
+  hours per day) x the multiplier; PF 12% of basic + DA up to the 15,000 ceiling with the employer's 12% split
+  8.33% EPS / 3.67% EPF plus EDLI and administration charges; ESI 0.75% / 3.25% when the gross is within 21,000;
+  professional tax by the state's monthly slabs (or custom slabs); TDS as set on the employee; advances and other
+  deductions typed per line. Payslips (one or all), the payroll register, the statutory summary with the PF ECR
+  sheet, and a bank advice CSV. *Finalise* locks the month and posts one journal voucher: Salaries & Wages and
+  Employer PF & ESI as expenses, PF / ESI / Professional Tax / TDS Payable and Salary Payable as liabilities,
+  Staff Advances for advances recovered; the salaries are then paid with a Payment voucher against Salary
+  Payable. *Reopen* removes the voucher until the month is finalised again.
+- **HR Settings**: the rates and ceilings, the PT state or custom slabs, hours per day, the overtime multiplier,
+  weekly offs, paid leave and the holiday list. Figures are 2026 defaults and can be changed.
+- Tests: `node tools/hr-calc.js` (the arithmetic and the posting) and
+  `PLAYWRIGHT_CORE=... node tools/hr.js` (the screens and the receipt knock-off in Chromium).
 
 ## Sync with the app
 

@@ -38,6 +38,16 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   side with the group total, after fetching each company's latest books. Dealings between companies of the group
   (an invoice of A on B, B's purchase from A, what they owe each other; parties matched to companies by name) go
   in an Eliminations column and out of the total. Excel and PDF.
+- Receipts knock off against invoices (payment advice): a receipt of 8,000 from a customer with invoices of 2,999,
+  3,999 and 2,599 open is set against the first two in full and 1,002 against the third (oldest first, or as
+  typed); anything not knocked off stays on account of the customer. The receipt voucher lists the invoices and
+  what is still due on each. Credit notes adjusted on account reduce the invoice they are against; the
+  dashboard's credit outstanding and the Sales list show what is really due.
+- HR & payroll (web portal; the HR role of a company opens only these): employees with salary structure, PF /
+  ESI / PT / TDS and bank details; attendance by day with hours and overtime, paid leave and holidays; monthly
+  payroll with PF (12% to the ceiling, EPS / EPF split, EDLI and admin charges), ESI, professional tax by state,
+  TDS, advances; payslips, payroll register, PF ECR sheet, ESI / PT summaries and a bank advice; finalising posts
+  one journal voucher (salaries, employer PF / ESI, the payables) into the books.
 - Upload PO (Sales): a CSV / Excel file of customer purchase orders in the BlitzBook template (Template button;
   one row per item with the PO Number on each row) previews what each PO will do, then every PO becomes one
   Credit invoice: a PO number already on an invoice updates that invoice, the rest are inserted in bulk;

@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
-  "versionName": "1.9",
+  "versionCode": 11,
+  "versionName": "1.10",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "Companies, groups, members and Group Statements now come with the yearly plan and longer (an invoice pack keeps to invoicing); a company you were given a role in can always be opened. The yearly plan is recognised on every device."
+  "notes": "Receipts: knock off one payment against several invoices (payment advice), oldest first or as you choose; the rest stays on account. The dashboard and Sales show what is really due after receipts and credit notes. HR role for members: employees, attendance, payroll with PF / ESI / PT / TDS, payslips, in the web portal."
 }

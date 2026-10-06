@@ -176,7 +176,8 @@
     { key: 'journal', t: 'Journal', ic: 'book', a: '#6D28D9', b: '#8B5CF6' },
     { key: 'customers', t: 'Customer', ic: 'user', a: '#7E22CE', b: '#A855F7' },
     { key: 'suppliers', t: 'Supplier', ic: 'truck', a: '#C2410C', b: '#F97316' },
-    { key: 'reports', t: 'Reports', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
+    { key: 'reports', t: 'Reports', ic: 'chart', a: '#0369A1', b: '#0EA5E9' },
+    { key: 'hr', t: 'HR & Payroll', ic: 'users', a: '#4D7C0F', b: '#84CC16' }
   ];
   // The tiles in this account's order; tiles added since are appended, tiles that no longer exist are dropped
   function tileList() {
@@ -235,6 +236,8 @@
     { t: 'Books', ic: 'book', items: [
       { key: 'money', t: 'Receipts & Payments' }, { key: 'journal', t: 'Journal' }, { key: 'ledger', t: 'Party Ledger' },
       { key: 'pnl', t: 'Profit & Loss' }, { key: 'balance', t: 'Balance Sheet' }, { key: 'group', t: 'Group Statements' }] },
+    { t: 'HR', ic: 'users', items: [
+      { key: 'employees', t: 'Employees' }, { key: 'attendance', t: 'Attendance' }, { key: 'payroll', t: 'Payroll' }, { key: 'hrsettings', t: 'HR Settings' }] },
     { t: 'Company', ic: 'building', items: [
       { key: 'company', t: 'Company Profile' }, { key: 'companies', t: 'Companies' }, { key: 'gst', t: 'GST Returns' }, { key: 'backup', t: 'Export / Import' },
       // API keys for the MCP server: an AI assistant working with these books (server/supabase/functions/mcp)
@@ -730,11 +733,11 @@
       (recent.length ? '<div class="section-title">Recent products</div><div class="recent">' + recent.map(r => '<button data-item="' + esc(r) + '">' + esc(r) + '</button>').join('') + '</div>' : '') +
       '<div class="section-title">What would you like to do?<span class="tilehint"><button class="link small" id="tileArrange">Arrange</button>' + ((Store.get('tile_order', []) || []).length ? ' · <button class="link small" id="tileReset">Reset order</button>' : '') + '</span></div><div class="tiles dash" id="tiles">' +
       tileList().map(t => '<button class="tile" data-go="' + t.key + '" style="--a:' + t.a + ';--b:' + t.b + '"><span class="badge">' + icon(t.ic) + '</span><span class="tx"><span class="t">' + esc(t.t) + '</span></span><span class="go">' + icon('arrow') + '</span></button>').join('') + '</div>' +
-      // The month's figures close the page
-      '<div class="section-title">At a glance</div><div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
+      // The month's figures close the page (not for an HR member, who sees nothing of the books)
+      (Companies.role() === 'hr' ? '' : '<div class="section-title">At a glance</div><div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
       stat('stCount', 'receipt', '#059669', '#34D399', 'Invoices', month.length, 'Raised this month') +
       (Sub.isLite() ? stat('stPack', 'star', '#B45309', '#F59E0B', 'Invoices left', Sub.invoicesLeft() + ' of ' + Sub.invoiceQuota(), (Sub.packUntil() ? 'Use by ' + U.pad(new Date(Sub.packUntil()).getDate()) + '/' + U.pad(new Date(Sub.packUntil()).getMonth() + 1) + '/' + new Date(Sub.packUntil()).getFullYear() : 'In your invoice pack') + ' · credit and debit notes count · tap to buy more', 'subscription')
-        : stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging')) + '</div>');
+        : stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging')) + '</div>'));
     countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
     if ($('#coSwitch')) $('#coSwitch').onclick = () => Companies.switcher();
     $$('[data-go]', root).forEach(el => el.onclick = () => {
@@ -750,6 +753,7 @@
       else if (k === 'suppliers') App.go('contacts', { type: 'Supplier' });
       else if (k === 'receipts') App.go('money', { kind: 'receipt' });
       else if (k === 'payments') App.go('money', { kind: 'payment' });
+      else if (k === 'hr') UI.menu('HR & Payroll', ['Employees', 'Attendance', 'Payroll', 'HR Settings'], (i) => App.go(['employees', 'attendance', 'payroll', 'hrsettings'][i]));
       else App.go(k);
     });
     // Dragging the tiles into another order; the order belongs to this account on this device
