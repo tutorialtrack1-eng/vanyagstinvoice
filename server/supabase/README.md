@@ -189,6 +189,8 @@ by `user_id`; the rules on `books` check the role per record:
 
 `node server/supabase/companies-test.js` exercises the portal's side of this against a stand-in that applies
 the same rules (`standin.js`); `node server/supabase/standin.js 8096` runs that stand-in for the app or a browser.
+`SUPABASE_TOKEN=sbp_... node server/supabase/companies-live-test.js` runs the same flow on the real project with two
+throwaway accounts (made with the service key, deleted afterwards); run it after changing `companies.sql`.
 
 ## How it is used
 

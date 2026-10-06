@@ -98,6 +98,13 @@ begin
 end $$;
 grant execute on function public.company_role(uuid) to authenticated;
 
+-- The owner of a company (clients have no direct access to the companies table, so the rules look it up here)
+create or replace function public.company_owner(cid uuid) returns uuid
+language sql stable security definer set search_path = public as $$
+  select owner_id from public.companies where id = cid
+$$;
+grant execute on function public.company_owner(uuid) to authenticated;
+
 -- Whether the signed-in account may write record k (with content d, null for a deletion) in company cid
 create or replace function public.books_may_write(cid uuid, k text, d jsonb) returns boolean
 language plpgsql stable security definer set search_path = public as $$
@@ -122,7 +129,7 @@ create policy "books select" on public.books for select to authenticated using (
   user_id = auth.uid()
   or (user_id = public.current_company() and public.company_role(user_id) is not null)
   or (k = 'sub' and public.company_role(public.current_company()) is not null
-      and user_id = (select owner_id from public.companies where id = public.current_company()))
+      and user_id = public.company_owner(public.current_company()))
 );
 create policy "books insert" on public.books for insert to authenticated with check (
   user_id = auth.uid() or (user_id = public.current_company() and public.books_may_write(user_id, k, d))
