@@ -40,6 +40,8 @@ const admin = async (service, method, p, body) => { const r = await fetch(URL_ +
     const A = browser(); A.signIn({ name: 'Live Asha', phone: ua.user_metadata.phone, email: ua.email, password: pwHash('Test@123'), createdAt: Date.now() });
     console.log('own company');
     check('A signs in and syncs its own books', await A.Sync.run(), A.Sync.lastError);
+    const nope = await A.Companies.rpc('create_company', { name_in: 'Nope', group_in: '' });
+    check('on the trial the server refuses a company', /yearly/.test(nope.error || ''), nope);
     A.Store.saveCompany(Object.assign(A.Store.company(), { name: 'Live Alpha', gstin: '36AAOFT3399K1ZB', address: 'X', phone: '9876543210', email: ua.email, gstType: 'Regular' }));
     A.Store.set('valid_until', Date.now() + 400 * 86400000);
     A.Store.add('invoices', inv('0001', 'Live Beta\nGuntur', 1000, 'Credit'));
