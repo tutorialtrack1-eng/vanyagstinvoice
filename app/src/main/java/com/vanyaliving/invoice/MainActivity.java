@@ -1913,10 +1913,11 @@ public class MainActivity extends Activity implements Sync.Listener {
         } catch (Exception ignored) {}
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
-        r.addView(statCard("Sales this month", money(sales), 0xFF1E88E5), weightLp());
-        r.addView(statCard("Invoices", String.valueOf(count), 0xFF43A047), weightLp());
-        if (Subscription.isLite(this, userId)) r.addView(statCard("Invoices left", Subscription.invoicesLeft(this, userId) + " of " + Subscription.invoiceQuota(this, userId), 0xFFF9A825), weightLp());
-        else r.addView(statCard("Credit outstanding", money(credit), 0xFFFB8C00), weightLp());
+        // The amounts need the room; the invoice count is short, so its card is narrower
+        r.addView(statCard("Sales this month", money(sales), 0xFF1E88E5), weightLp(1.25f));
+        r.addView(statCard("Invoices", String.valueOf(count), 0xFF43A047), weightLp(0.7f));
+        if (Subscription.isLite(this, userId)) r.addView(statCard("Invoices left", Subscription.invoicesLeft(this, userId) + " of " + Subscription.invoiceQuota(this, userId), 0xFFF9A825), weightLp(1.25f));
+        else r.addView(statCard("Credit outstanding", money(credit), 0xFFFB8C00), weightLp(1.25f));
         return r;
     }
 
@@ -2776,8 +2777,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         return r;
     }
 
-    private LinearLayout.LayoutParams weightLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+    private LinearLayout.LayoutParams weightLp() { return weightLp(1f); }
+    private LinearLayout.LayoutParams weightLp(float weight) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, weight);
         lp.setMargins(dp(2), 0, dp(2), 0);
         return lp;
     }

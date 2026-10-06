@@ -1,6 +1,6 @@
 {
-  "versionCode": 12,
-  "versionName": "1.11",
-  "apk": "https://blitzbook.co.in/BlitzBook-1.11.apk",
-  "notes": "Companies: a Manager role for members (the HR screens of the web portal, approves timesheets and reimbursements). HR in the web portal: hourly employees with weekly timesheets, reimbursements, offer letters, redesigned payslips, HRA from basic and the Code on Wages rule."
+  "versionCode": 13,
+  "versionName": "1.12",
+  "apk": "https://blitzbook.co.in/BlitzBook-1.12.apk",
+  "notes": "Dashboard: the Sales this month and Credit outstanding cards are a little wider, the Invoices card narrower, so the amounts have room."
 }
