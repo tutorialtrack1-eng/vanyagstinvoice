@@ -81,6 +81,17 @@ const admin = async (service, method, p, body) => { const r = await fetch(URL_ +
     err = null; try { await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: '', since: 0, changes: [], company: ua.id, owner: ua.id }); } catch (e) { err = e; }
     const peek = err ? null : await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: '', since: 0, changes: [], company: ua.id, owner: ua.id });
     check('a member cannot read the owner\'s own first company', peek && peek.changes.length === 0, peek && peek.changes.map(c => c.k));
+    // The HR role: writes HR records, reads nothing else of the books
+    s = await A.Companies.rpc('set_member', { cid: beta, identity: ub.email, role_in: 'hr' });
+    check('Bala made HR', s.ok && s.role === 'hr', s);
+    await B.Companies.load();
+    const hrRead = await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: '', since: 0, changes: [], company: beta, owner: ua.id });
+    check('an HR login reads the profile and subscription only, none of the invoices', hrRead.changes.every(c => ['company', 'sub', 'hr'].includes(c.k) || /^(emp|att|pay):/.test(c.k)) && !hrRead.changes.some(c => c.k.startsWith('inv:')), hrRead.changes.map(c => c.k));
+    const hrWrite = await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'emp:live1', d: { id: 'live1', name: 'Ravi', basic: 20000 } }], company: beta, owner: ua.id });
+    check('and may save an employee', !!hrWrite.epoch);
+    err = null; try { await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'inv:0008', d: { invoice_no: '0008' } }], company: beta, owner: ua.id }); } catch (e) { err = e; }
+    check('but not an invoice', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
+    s = await A.Companies.rpc('set_member', { cid: beta, identity: ub.email, role_in: 'sales' }); await B.Companies.load();
     const lm = await A.Companies.rpc('list_members', { cid: beta });
     check('members listed', Array.isArray(lm) && lm.length === 2 && lm[0].role === 'owner', lm);
     console.log('group statements');
