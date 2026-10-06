@@ -1860,9 +1860,9 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Reports", R.drawable.ic_stock, 0xFF546E7A, 0xFFECEFF1, v -> showReportsMenu()),
         };
         DashboardTile[] tiles = menuForRole(Subscription.isLite(this, userId) ? liteTiles : fullTiles);
-        if (role().equals("hr")) {
+        if (role().equals("hr") || role().equals("manager")) {
             TextView note = new TextView(this);
-            note.setText("Your role in this company is HR. Employees, attendance, payroll and the HR settings are in the BlitzBook web portal (blitzbook.co.in), with the same login; switch company above for your own books.");
+            note.setText("Your role in this company is " + roleLabel(role()) + ". Employees, attendance, timesheets, reimbursements, payroll and the HR settings are in the BlitzBook web portal (blitzbook.co.in), with the same login; switch company above for your own books.");
             note.setTextSize(13.5f); note.setPadding(dp(14), dp(14), dp(14), dp(14)); note.setTextColor(0xFF263238);
             GradientDrawable nbg = new GradientDrawable(); nbg.setColor(0xFFF1F8E9); nbg.setCornerRadius(dp(12)); nbg.setStroke(dp(1), 0xFFC5E1A5);
             note.setBackground(nbg); root.addView(note);
@@ -8666,10 +8666,10 @@ public class MainActivity extends Activity implements Sync.Listener {
     private boolean inCompany() { return companyInfo != null; }
     private String role() { return inCompany() && !companyInfo[2].isEmpty() ? companyInfo[2] : "owner"; }
     private long accountId() { return accountsDb.accountOf(userId); }
-    private static final String[] ROLES = {"owner", "admin", "accountant", "sales", "hr", "viewer"};
-    private static final String[] ROLE_LABELS = {"Owner", "Admin", "Accountant", "Sales", "HR", "Viewer"};
+    private static final String[] ROLES = {"owner", "admin", "accountant", "sales", "manager", "hr", "viewer"};
+    private static final String[] ROLE_LABELS = {"Owner", "Admin", "Accountant", "Sales", "Manager", "HR", "Viewer"};
     private static final String[] ROLE_HELP = {"Everything, including members, the subscription and deleting the company", "Everything in the books, the company profile and the members",
-            "Every record of the books; not the company profile or members", "Sales invoices, delivery challans, credit / debit notes, receipts, customers and items", "Employees, attendance, payroll and HR settings only (in the web portal); sees nothing of the books", "Looks at everything, changes nothing"};
+            "Every record of the books; not the company profile or members", "Sales invoices, delivery challans, credit / debit notes, receipts, customers and items", "The HR screens in the web portal and approves timesheets and reimbursements; sees nothing of the books", "Employees, attendance, timesheets, reimbursements, payroll and HR settings (in the web portal); sees nothing of the books", "Looks at everything, changes nothing"};
     private static String roleLabel(String r) { for (int i = 0; i < ROLES.length; i++) if (ROLES[i].equals(r)) return ROLE_LABELS[i]; return r; }
     /** Whether the role may change records of a kind: invoices, challans, notes, contacts, items, receipts, purchases, expenses, journal, accounts, company. */
     private boolean canWrite(String what) {
@@ -8706,7 +8706,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             if (role().equals("sales") && !(t.title.equals("Invoice") || t.title.equals("Sales") || t.title.equals("Customer") || t.title.equals("Stock") || t.title.equals("Reports") || t.title.equals("Sales Report") || t.title.equals("Credit Notes") || t.title.equals("Debit Notes") || t.title.equals("Company Profile") || t.title.equals("Companies") || t.title.equals("Subscription"))) continue;
             if (role().equals("viewer") && (t.title.equals("Export / Import"))) continue;
             // The HR role works in the web portal (employees, attendance, payroll); here it only switches company
-            if (role().equals("hr") && !(t.title.equals("Companies") || t.title.equals("Subscription"))) continue;
+            if ((role().equals("hr") || role().equals("manager")) && !(t.title.equals("Companies") || t.title.equals("Subscription"))) continue;
             out.add(t);
         }
         return out.toArray(new DashboardTile[0]);
@@ -8933,7 +8933,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             eId = edit("Mobile number or email of a BlitzBook account", false); eId.setSingleLine(true);
             sRole = new Spinner(this);
             sRole.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, java.util.Arrays.copyOfRange(ROLE_LABELS, 1, ROLE_LABELS.length)));
-            sRole.setSelection(4);
+            sRole.setSelection(5);
             box.addView(field("Add a member", eId)); box.addView(field("Role", sRole));
             TextView hint = new TextView(this); hint.setText("They must have a BlitzBook account already. The company then appears under Companies in their login, and they work in it on your subscription."); hint.setTextSize(11.5f); hint.setPadding(0, dp(4), 0, 0);
             box.addView(hint);
@@ -8962,13 +8962,13 @@ public class MainActivity extends Activity implements Sync.Listener {
                     r.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
                     if (manage && !owner) {
                         Button more = new Button(this); more.setText("\u22ee"); more.setAllCaps(false); styleButton(more, 0xFF607D8B); more.setMinWidth(dp(48)); more.setMinimumWidth(dp(48));
-                        more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(m.optString("name")).setItems(new String[]{"Make admin", "Make accountant", "Make sales", "Make HR", "Make viewer", "Remove from company"}, (d, w) -> {
+                        more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(m.optString("name")).setItems(new String[]{"Make admin", "Make accountant", "Make sales", "Make manager", "Make HR", "Make viewer", "Remove from company"}, (d, w) -> {
                             String identity = m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone");
                             new Thread(() -> {
                                 String e2 = null;
-                                try { if (w == 5) Supabase.removeMember(this, userId, cid, m.optString("user_id")); else Supabase.setMember(this, userId, cid, identity, ROLES[w + 1]); } catch (Exception ex) { e2 = ex.getMessage(); }
+                                try { if (w == 6) Supabase.removeMember(this, userId, cid, m.optString("user_id")); else Supabase.setMember(this, userId, cid, identity, ROLES[w + 1]); } catch (Exception ex) { e2 = ex.getMessage(); }
                                 final String fe = e2;
-                                runOnUiThread(() -> { Toast.makeText(this, fe == null ? (w == 5 ? "Member removed" : "Role changed") : fe, Toast.LENGTH_LONG).show(); draw[0].run(); });
+                                runOnUiThread(() -> { Toast.makeText(this, fe == null ? (w == 6 ? "Member removed" : "Role changed") : fe, Toast.LENGTH_LONG).show(); draw[0].run(); });
                             }).start();
                         }).show());
                         r.addView(more);

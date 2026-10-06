@@ -19,14 +19,14 @@ function mayWrite(uid, cid, k, d) {
   const r = roleOf(uid, cid); if (!r || k === 'sub') return false;
   if (r === 'owner' || r === 'admin') return true;
   if (r === 'accountant') return k !== 'company';
-  if (r === 'hr') return /^(emp|att|pay):/.test(k) || k === 'hr';
+  if (r === 'hr' || r === 'manager') return /^(emp|att|ts|rb|pay):/.test(k) || k === 'hr';
   if (r === 'sales') return /^(inv|dc|note|contact|item):/.test(k) || (k.startsWith('jrn:') && (d == null || String((d && d.kind) || '') === 'Receipt'));
   return false;
 }
 function maySelect(uid, hdr, row) {
   if (row.user_id === uid) return true;
   const r = hdr && row.user_id === hdr ? roleOf(uid, hdr) : null;
-  if (r === 'hr') return ['company', 'sub', 'hr'].includes(row.k) || /^(emp|att|pay):/.test(row.k);
+  if (r === 'hr' || r === 'manager') return ['company', 'sub', 'hr'].includes(row.k) || /^(emp|att|ts|rb|pay):/.test(row.k);
   if (r) return true;
   const c = hdr ? companies.get(hdr) : null;
   return row.k === 'sub' && !!c && !!roleOf(uid, hdr) && row.user_id === c.owner_id;
@@ -53,7 +53,7 @@ const rpc = {
   list_members(uid, b) { if (!roleOf(uid, b.cid)) return [200, { error: 'Not a member of this company' }]; const c = companies.get(b.cid), own = c ? c.owner_id : b.cid, p = profiles.get(own) || {}; const out = [{ user_id: own, name: p.name || '', phone: p.phone || '', email: p.email || '', role: 'owner' }]; for (const [k, m] of members) if (k.startsWith(b.cid + '|')) { const q = profiles.get(m.user_id) || {}; out.push({ user_id: m.user_id, name: q.name || '', phone: q.phone || '', email: q.email || '', role: m.role }); } return [200, out]; },
   set_member(uid, b) {
     if (!['owner', 'admin'].includes(roleOf(uid, b.cid))) return [200, { error: 'Only the owner or an admin can manage members' }];
-    const r = String(b.role_in || '').toLowerCase(); if (!['admin', 'accountant', 'sales', 'hr', 'viewer'].includes(r)) return [200, { error: 'Role must be admin, accountant, sales, hr or viewer' }];
+    const r = String(b.role_in || '').toLowerCase(); if (!['admin', 'accountant', 'sales', 'manager', 'hr', 'viewer'].includes(r)) return [200, { error: 'Role must be admin, accountant, sales, manager, hr or viewer' }];
     const co = companies.get(b.cid); if (!isYearly(co ? co.owner_id : b.cid)) return [200, { error: 'Members come with the yearly plan and longer (the owner of the company has to be on it)' }];
     const id = String(b.identity || '').trim().toLowerCase(), p = Array.from(profiles.values()).find(x => x.phone === id || (x.email || '').toLowerCase() === id);
     if (!p) return [200, { error: 'No BlitzBook account with that mobile number or email. Ask them to register first.' }];

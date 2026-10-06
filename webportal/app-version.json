@@ -1,6 +1,6 @@
 {
-  "versionCode": 11,
-  "versionName": "1.10",
+  "versionCode": 12,
+  "versionName": "1.11",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "Receipts: knock off one payment against several invoices (payment advice), oldest first or as you choose; the rest stays on account. The dashboard and Sales show what is really due after receipts and credit notes. HR role for members: employees, attendance, payroll with PF / ESI / PT / TDS, payslips, in the web portal."
+  "notes": "Companies: a Manager role for members (the HR screens of the web portal, approves timesheets and reimbursements). HR in the web portal: hourly employees with weekly timesheets, reimbursements, offer letters, redesigned payslips, HRA from basic and the Code on Wages rule."
 }

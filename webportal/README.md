@@ -37,7 +37,7 @@ here and vice versa, and the trial and activation are shared.
 | `js/money.js` | Receipts & Payments (kept as journal vouchers), receipt / payment voucher printout, bank statement upload |
 | `js/reports.js` | Sales report, Profit & Loss, Balance sheet, period picker, Excel export |
 | `js/gst.js` | GST returns: fetches a return period from the books and writes the GSTR-1 and GSTR-3B JSON files for the GST portal's offline tool (yearly plan or longer) |
-| `js/hr.js` | HR & payroll: employees, attendance (days, hours, overtime, leave, holidays), monthly payroll with PF / ESI / professional tax / TDS, payslips, statutory summaries, PF ECR sheet, bank advice, posting of a finalised month into the books; HR Settings |
+| `js/hr.js` | HR & payroll: employees (monthly or hourly), attendance, weekly timesheets with manager approval, reimbursements, monthly payroll with PF / ESI / professional tax / TDS, payslips, offer letters, statutory summaries, PF ECR sheet, bank advice, posting of a finalised month into the books; HR Settings |
 | `js/companies.js` | Companies: several companies under one login (each in its own storage namespace with its own sync), company groups, members with roles (owner, admin, accountant, sales, viewer) and what each role may open and change, the company switcher, and Group Statements (consolidated Profit & Loss / Balance Sheet with inter-company eliminations) |
 
 ## Screens
@@ -49,8 +49,8 @@ Everything the app has:
   Dashboard and four groups that drop down on hover (or a tap on a phone): Sales (New Invoice, Sales,
   Delivery Challans, Credit / Debit Notes, Customers, Sales Report, Outstanding & Ageing), Purchases
   (Purchases & Quotations, Suppliers, Expenses, Stock & Items, Stock in Hand), Books (Receipts & Payments,
-  Journal, Party Ledger, Profit & Loss, Balance Sheet, Group Statements), HR (Employees, Attendance, Payroll,
-  HR Settings) and Company (Company Profile,
+  Journal, Party Ledger, Profit & Loss, Balance Sheet, Group Statements), HR (Employees, Attendance, Timesheets,
+  Reimbursements, Payroll, HR Settings) and Company (Company Profile,
   Companies, GST Returns, Export / Import, AI Access, Subscription); the company chip, dark mode and Logout
   sit on the right. An invoice pack and a role in another company trim the groups to what they may open.
 - Invoice editor: number with step buttons and owner-defined format, date, payment mode, RCM for service
@@ -120,9 +120,10 @@ Everything the app has:
   switches between companies; the chip shows the role in another owner's company.
 - Roles: **Owner** everything, members, subscription, deleting the company; **Admin** everything in the books,
   the profile and the members; **Accountant** every record of the books and HR, not the profile or members;
-  **Sales** sales invoices, delivery challans, credit / debit notes, receipts, customers and items; **HR**
-  employees, attendance, payroll and HR settings only, and nothing of the books (the server shows an HR login
-  only those records); **Viewer** looks at everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
+  **Sales** sales invoices, delivery challans, credit / debit notes, receipts, customers and items; **Manager** the HR
+  screens, and approves timesheets and reimbursements; **HR** the HR screens only (employees, attendance,
+  timesheets, reimbursements, payroll, HR settings) without approving, and nothing of the books (the server shows
+  an HR or manager login only those records); **Viewer** looks at everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
   is refused with a note, and the server refuses it as well.
 - Each company has its own storage namespace in the browser and its own sync; the account's own first company
   is the one it always had. Making companies, grouping them, adding members and the group statements come
@@ -147,23 +148,40 @@ ledger all show what is really due.
 
 ## HR & payroll
 
-- **Employees**: code, designation, department, dates, PAN / Aadhaar / UAN / ESI number, bank account, the
+- **Employees**: code, designation, department, dates, reporting manager, PAN / Aadhaar / UAN / ESI number, bank
+  account, the pay type (a monthly salary from the attendance, or a rate per hour from the weekly timesheets), the
   salary structure (basic, DA, HRA, conveyance, special), whether PF, ESI and PT apply, the monthly TDS and the
-  paid leave a year.
+  paid leave a year. HRA is filled from basic (40% of basic, 50% with the metro tick, or the % in HR Settings)
+  until typed. Under the Code on Wages basic + DA must be at least 50% of the pay: a structure below that gets a
+  note, and payroll counts the shortfall as wages for PF. *Offer letter* prints a letter per employee (date,
+  place, probation, notice period, working hours, reporting manager, extra terms) with the pay and CTC breakup.
+- **Timesheets**: a week per screen (Monday to Sunday), hours worked a day per employee, total and overtime; a
+  manager, an admin or the owner ticks *Approved*, which locks the hours (HR enters, a manager approves). An
+  hourly employee is paid from the timesheets: hours above the weekly limit (40) at 1.5x, holidays of the list on
+  working days paid at the hours of a day; payroll flags the weeks of the month still to be approved. *Copy last
+  week* fills the sheet from the previous week.
+- **Reimbursements**: claims per employee (date, category, amount, description, bill number) as pending /
+  approved / rejected / paid; a manager, an admin or the owner approves. Approved claims are paid with the next
+  payroll (on the payslip under Reimbursements, in the books as Staff Reimbursements), marked paid when the month
+  is finalised and freed again if it is reopened.
 - **Attendance**: a grid of the month, one cell per day: P present, A absent (loss of pay), L paid leave, HD half
   day, W weekly off, H holiday (weekly offs and holidays from HR Settings). Hours = hours per day worked plus the
   overtime hours typed for the month. Attendance locks once the month's payroll is finalised.
 - **Payroll**: computed from the structure and the attendance: earned per paid day; overtime at gross / (26 x
-  hours per day) x the multiplier; PF 12% of basic + DA up to the 15,000 ceiling with the employer's 12% split
+  hours per day) x the multiplier (twice the wages under the labour codes); an hourly employee's hours at the rate
+  with the weekly overtime at 1.5x; approved reimbursements; PF 12% of wages (basic + DA, at least half the pay)
+  up to the 15,000 ceiling with the employer's 12% split
   8.33% EPS / 3.67% EPF plus EDLI and administration charges; ESI 0.75% / 3.25% when the gross is within 21,000;
   professional tax by the state's monthly slabs (or custom slabs); TDS as set on the employee; advances and other
   deductions typed per line. Payslips (one or all), the payroll register, the statutory summary with the PF ECR
-  sheet, and a bank advice CSV. *Finalise* locks the month and posts one journal voucher: Salaries & Wages and
-  Employer PF & ESI as expenses, PF / ESI / Professional Tax / TDS Payable and Salary Payable as liabilities,
+  sheet, and a bank advice CSV. A payslip shows the employee's details on top, the earnings on the left and the
+  deductions on the right, the net pay and its amount in words at the foot (no row count). *Finalise* locks the
+  month and posts one journal voucher: Salaries & Wages, Staff Reimbursements and Employer PF & ESI as expenses, PF / ESI / Professional Tax / TDS Payable and Salary Payable as liabilities,
   Staff Advances for advances recovered; the salaries are then paid with a Payment voucher against Salary
   Payable. *Reopen* removes the voucher until the month is finalised again.
-- **HR Settings**: the rates and ceilings, the PT state or custom slabs, hours per day, the overtime multiplier,
-  weekly offs, paid leave and the holiday list. Figures are 2026 defaults and can be changed.
+- **HR Settings**: the rates and ceilings, the PT state or custom slabs, the wages floor (50%) and the HRA % of
+  basic with the metro tick, hours per day, the overtime multipliers (monthly and hourly), the weekly hours before
+  overtime, weekly offs, paid leave, whether hourly employees are paid for holidays, and the holiday list. Figures are 2026 defaults and can be changed.
 - Tests: `node tools/hr-calc.js` (the arithmetic and the posting) and
   `PLAYWRIGHT_CORE=... node tools/hr.js` (the screens and the receipt knock-off in Chromium).
 

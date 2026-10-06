@@ -13,27 +13,29 @@
 (function (global) {
   'use strict';
   const { esc, money } = U;
-  const ROLES = ['owner', 'admin', 'accountant', 'sales', 'hr', 'viewer'];
-  const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', accountant: 'Accountant', sales: 'Sales', hr: 'HR', viewer: 'Viewer' };
+  const ROLES = ['owner', 'admin', 'accountant', 'sales', 'manager', 'hr', 'viewer'];
+  const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', accountant: 'Accountant', sales: 'Sales', manager: 'Manager', hr: 'HR', viewer: 'Viewer' };
   const ROLE_HELP = {
     owner: 'Everything, including members, the subscription and deleting the company',
     admin: 'Everything in the books, the company profile and the members',
     accountant: 'Every record of the books: invoices, purchases, expenses, journal, receipts, payments, parties, items. Not the company profile or members',
     sales: 'Sales invoices, delivery challans, credit / debit notes, receipts, customers and items',
-    hr: 'Employees, attendance, payroll and HR settings only; sees nothing of the books',
+    manager: 'The HR screens, and approves timesheets and reimbursements; sees nothing of the books',
+    hr: 'Employees, attendance, timesheets, reimbursements, payroll and HR settings; cannot approve; sees nothing of the books',
     viewer: 'Looks at everything, changes nothing'
   };
   // The collections a role may change (null = all); the server applies the same rule to every record
-  const WRITES = { owner: null, admin: null, accountant: ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'employees', 'attendance', 'payroll', 'hr'], sales: ['invoices', 'challans', 'notes', 'contacts', 'items', 'journal'], hr: ['employees', 'attendance', 'payroll', 'hr'], viewer: [] };
+  const WRITES = { owner: null, admin: null, accountant: ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hr'], sales: ['invoices', 'challans', 'notes', 'contacts', 'items', 'journal'], manager: ['employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hr'], hr: ['employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hr'], viewer: [] };
   // The screens a role may open (null = all)
   const OPENS = { owner: null, admin: null,
-    accountant: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'stock', 'purchases', 'expenses', 'journal', 'money', 'salesReport', 'aging', 'ledger', 'pnl', 'balance', 'backup', 'gst', 'companies', 'group', 'sync', 'company', 'subscription', 'employees', 'attendance', 'payroll', 'hrsettings'],
-    hr: ['dashboard', 'employees', 'attendance', 'payroll', 'hrsettings', 'companies', 'sync', 'company', 'subscription'],
+    accountant: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'stock', 'purchases', 'expenses', 'journal', 'money', 'salesReport', 'aging', 'ledger', 'pnl', 'balance', 'backup', 'gst', 'companies', 'group', 'sync', 'company', 'subscription', 'employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hrsettings'],
+    manager: ['dashboard', 'employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hrsettings', 'companies', 'sync', 'company', 'subscription'],
+    hr: ['dashboard', 'employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hrsettings', 'companies', 'sync', 'company', 'subscription'],
     sales: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'money', 'salesReport', 'aging', 'ledger', 'companies', 'sync', 'company', 'subscription'],
     viewer: ['dashboard', 'invoice', 'sales', 'challans', 'notes', 'contacts', 'items', 'stock', 'purchases', 'expenses', 'journal', 'money', 'salesReport', 'aging', 'ledger', 'pnl', 'balance', 'companies', 'group', 'sync', 'company', 'subscription'] };
   // The dashboard tiles a role gets (null = all)
-  const TILES = { owner: null, admin: null, accountant: null, sales: ['invoice', 'sales', 'items', 'receipts', 'customers', 'reports'], hr: ['hr'], viewer: ['invoice', 'purchases', 'sales', 'items', 'expenses', 'receipts', 'payments', 'journal', 'customers', 'suppliers', 'reports'] };
-  const COLLECTIONS = ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'company', 'employees', 'attendance', 'payroll', 'hr'];
+  const TILES = { owner: null, admin: null, accountant: null, sales: ['invoice', 'sales', 'items', 'receipts', 'customers', 'reports'], manager: ['hr'], hr: ['hr'], viewer: ['invoice', 'purchases', 'sales', 'items', 'expenses', 'receipts', 'payments', 'journal', 'customers', 'suppliers', 'reports'] };
+  const COLLECTIONS = ['contacts', 'items', 'invoices', 'challans', 'purchases', 'expenses', 'journal', 'notes', 'accounts', 'company', 'employees', 'attendance', 'timesheets', 'reimbursements', 'payroll', 'hr'];
   const SUB_KEYS = ['registered_at', 'valid_until', 'used_codes', 'inv_quota', 'inv_used', 'inv_until', 'yearly_until'];
   const lower = (s) => String(s == null ? '' : s).trim().toLowerCase();
 

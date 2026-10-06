@@ -8,7 +8,7 @@ function check(name, cond, detail) { if (cond) console.log('  ok   ' + name); el
 const store = new Map();
 const localStorage = { getItem: (k) => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
 const ctx = { localStorage, console, setTimeout, clearTimeout, Blob: class {}, Response: class {} };
-ctx.window = ctx; ctx.globalThis = ctx; ctx.App = { routes: {}, user: { id: 1 } }; ctx.UI = {}; ctx.Biz = { chargesGst: () => true }; ctx.Print = { table: () => '', show: () => {} }; ctx.$ = () => null; ctx.$$ = () => []; ctx.icon = () => '';
+ctx.window = ctx; ctx.globalThis = ctx; ctx.App = { routes: {}, user: { id: 1 } }; ctx.UI = {}; ctx.Biz = { chargesGst: () => true }; ctx.Print = { table: () => '', show: () => {}, page: (t, c, m, body) => body, head: (t) => '<div>' + t + '</div>', signBlock: () => '', POWERED: '', PAPERS: { A4: { css: '' } } }; ctx.$ = () => null; ctx.$$ = () => []; ctx.icon = () => '';
 vm.createContext(ctx);
 ['util.js', 'store.js', 'subscription.js', 'appformat.js', 'ledger.js', 'companies.js', 'hr.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(WEB, f), 'utf8'), ctx, { filename: f }));
 const { Store, HR, Books } = ctx;
@@ -44,23 +44,50 @@ check('PT 150 in the 15,001-20,000 slab', m.pt === 150);
 check('PT of a custom slab list', (HR.saveSettings(Object.assign(HR.settings(), { ptState: 'Custom slabs', ptSlabs: '10000:0, 20000:100, *:300' })), HR.ptOf(25000, HR.settings()) === 300 && HR.ptOf(15000, HR.settings()) === 100 && HR.ptOf(9000, HR.settings()) === 0));
 HR.saveSettings(Object.assign(HR.settings(), { ptState: 'Telangana' }));
 
+console.log('HRA and the Code on Wages');
+check('HRA from basic: 40% outside a metro, 50% in one', HR.hraOf(20000, false) === 8000 && HR.hraOf(20000, true) === 10000);
+const low = Store.add('employees', { code: 'EMP010', name: 'Low Basic', doj: '01/04/2026', basic: 10000, da: 0, hra: 12000, conveyance: 0, special: 8000, pf: true, esi: false, pt: false, tds: 0, active: true });
+const lb = HR.compute(low, '2026-10');
+check('basic + DA below half the pay: the shortfall counts as wages for PF', lb.wagesAdded === 5000 && lb.pfWage === 15000 && lb.pfEmp === 1800, lb);
+Store.delete('employees', low.id);
+
+console.log('hourly pay from timesheets');
+const hourlyEmp = Store.add('employees', { code: 'EMP020', name: 'Hourly Hank', doj: '01/09/2026', payType: 'hourly', hourlyRate: 500, pf: false, esi: false, pt: true, tds: 0, active: true });
+Store.add('timesheets', { id: hourlyEmp.id + ':2026-10-05', empId: hourlyEmp.id, week: '2026-10-05', hours: { 0: 9, 1: 9, 2: 9, 3: 9, 4: 9 }, approved: true });
+Store.add('timesheets', { id: hourlyEmp.id + ':2026-09-28', empId: hourlyEmp.id, week: '2026-09-28', hours: { 0: 8, 1: 8, 2: 8, 3: 8 }, approved: false });
+const hh = HR.hoursOf(hourlyEmp, '2026-10');
+check('45 hours in a week: 40 regular + 5 overtime; a week starting in September counts its October day; the holiday on the 2nd pays 8 hours', hh.regular === 48 && hh.ot === 5 && hh.holiday === 8 && hh.unapproved === 1, hh);
+Store.delete('timesheets', hourlyEmp.id + ':2026-09-28');
+const hp = HR.compute(hourlyEmp, '2026-10');
+check('pay = 48 h x 500 + 5 h x 500 x 1.5, PT on it, no PF / ESI', hp.basic === 24000 && hp.ot === 3750 && hp.pt === 200 && hp.pfEmp === 0 && hp.net === 24000 + 3750 - 200, hp);
+
+console.log('reimbursements');
+const rb = Store.add('reimbursements', { empId: ravi.id, date: '03/10/2026', category: 'Travel', amount: 1500, description: 'Taxi', status: 'approved' });
+Store.add('reimbursements', { empId: ravi.id, date: '04/10/2026', category: 'Food', amount: 700, description: 'Lunch', status: 'pending' });
+check('an approved claim is paid with the month, a pending one is not', HR.compute(ravi, '2026-10').reimb === 1500 && Math.abs(HR.compute(ravi, '2026-10').net - (r.net + 1500)) < 0.01);
+
 console.log('the run and the posting');
 let run = HR.computeRun('2026-10');
-check('a run has a row per employee and the totals', run.rows.length === 2 && run.totals.net === Math.round((r.net + m.net) * 100) / 100 && run.status === 'draft', run.totals);
+check('a run has a row per employee and the totals', run.rows.length === 3 && run.totals.net === Math.round((r.net + 1500 + m.net + hp.net) * 100) / 100 && run.status === 'draft', run.totals);
 run.rows[1].advance = 1000; Store.add('payroll', run);
 run = HR.computeRun('2026-10');
 check('a recompute keeps the advance typed on a line', run.rows[1].advance === 1000 && run.rows[1].net === m.net - 1000, run.rows[1].net);
-check('an employee who joined later is left out', (Store.add('employees', { code: 'EMP003', name: 'New', doj: '15/11/2026', basic: 5000, active: true }), HR.computeRun('2026-10').rows.length === 2));
-run = HR.computeRun('2026-10'); run.status = 'final'; run.voucherId = HR.post(run); Store.update('payroll', run);
+check('an employee who joined later is left out', (Store.add('employees', { code: 'EMP003', name: 'New', doj: '15/11/2026', basic: 5000, active: true }), HR.computeRun('2026-10').rows.length === 3));
+run = HR.computeRun('2026-10'); run.status = 'final'; run.voucherId = HR.post(run); Store.update('payroll', run); HR.settleReimbursements(run, true);
+check('the paid claim is marked paid with the month, the pending one stays', Store.find('reimbursements', rb.id).status === 'paid' && Store.find('reimbursements', rb.id).paidMonth === '2026-10' && Store.list('reimbursements').some(x => x.status === 'pending'));
 const v = Store.find('journal', run.voucherId), t = run.totals;
 const line = (a) => v.lines.find(l => l.account === a);
 check('the voucher balances', Math.abs(v.lines.filter(l => l.side === 'Dr').reduce((x, l) => x + l.amount, 0) - v.lines.filter(l => l.side === 'Cr').reduce((x, l) => x + l.amount, 0)) < 0.01, v.lines);
-check('salaries, employer share, the payables and the advance recovered', line('Salaries & Wages').amount === Math.round((t.gross + t.ot) * 100) / 100 && line('PF Payable').amount === t.pfEmp + t.pfEmployer + t.edli + t.pfAdmin && line('ESI Payable').amount === t.esiEmp + t.esiEmployer && line('Professional Tax Payable').amount === t.pt && line('TDS Payable').amount === t.tds && line('Staff Advances').amount === 1000 && line('Salary Payable').amount === t.net, v.lines);
+check('salaries, reimbursements, employer share, the payables and the advance recovered', line('Salaries & Wages').amount === Math.round((t.gross + t.ot) * 100) / 100 && line('Staff Reimbursements').amount === 1500 && line('PF Payable').amount === t.pfEmp + t.pfEmployer + t.edli + t.pfAdmin && line('ESI Payable').amount === t.esiEmp + t.esiEmployer && line('Professional Tax Payable').amount === t.pt && line('TDS Payable').amount === t.tds && line('Staff Advances').amount === 1000 && line('Salary Payable').amount === t.net, v.lines);
 check('the accounts were made with the right nature', Books.accounts().some(a => a.name === 'Salary Payable' && a.nature === Books.N.LIABILITY) && Books.accounts().some(a => a.name === 'Salaries & Wages' && a.nature === Books.N.EXPENSE));
 const pl = Books.profitLoss(new Date(2026, 9, 1).getTime(), new Date(2026, 9, 31).getTime()), bs = Books.balanceSheet(new Date(2026, 9, 31).getTime());
-check('salaries reach the Profit & Loss as expenses', Math.abs(pl.expenses - (t.gross + t.ot + t.pfEmployer + t.edli + t.pfAdmin + t.esiEmployer)) < 0.01, pl.expenses);
+check('salaries and reimbursements reach the Profit & Loss as expenses', Math.abs(pl.expenses - (t.gross + t.ot + t.reimb + t.pfEmployer + t.edli + t.pfAdmin + t.esiEmployer)) < 0.01, pl.expenses);
 check('the payables sit on the Balance Sheet', bs.liabilities.some(l => l[0] === 'Salary Payable' && Math.abs(l[1] - t.net) < 0.01), bs.liabilities);
-check('the records sync as HR rows', Object.keys(ctx.AppFormat.snapshot()).filter(k => /^(emp|att|pay):|^hr$/.test(k)).length === 3 + 1 + 1 + 1);
+check('the records sync as HR rows', Object.keys(ctx.AppFormat.snapshot()).filter(k => /^(emp|att|ts|rb|pay):|^hr$/.test(k)).length === 4 + 1 + 1 + 2 + 1 + 1);
+const slip = HR.payslipHtml(run, run.rows[0]);
+check('the payslip has the employee details, earnings and deductions side by side, the words at the foot and no row count', slip.includes('EARNINGS') && slip.includes('DEDUCTIONS') && slip.includes('Net pay in words') && slip.includes('UAN') && slip.includes('Reimbursements') && !/\d+ rows?\./.test(slip));
+const offer = HR.offerLetterHtml(ravi, { date: '07/10/2026', place: 'Hyderabad', probation: 6, notice: 30, hours: '8 hours a day', manager: 'Asha', terms: ['Laptop provided.'] });
+check('the offer letter carries the designation, the pay and the terms', offer.includes('OFFER OF EMPLOYMENT') && offer.includes('position of <b>Employee</b>') && offer.includes('Cost to company') && offer.includes('Laptop provided.') && offer.includes('probation of 6 months'));
 
 console.log(failures ? '\n' + failures + ' FAILED' : '\nall passed');
 process.exit(failures ? 1 : 0);

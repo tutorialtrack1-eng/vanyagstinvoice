@@ -43,11 +43,15 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   typed); anything not knocked off stays on account of the customer. The receipt voucher lists the invoices and
   what is still due on each. Credit notes adjusted on account reduce the invoice they are against; the
   dashboard's credit outstanding and the Sales list show what is really due.
-- HR & payroll (web portal; the HR role of a company opens only these): employees with salary structure, PF /
-  ESI / PT / TDS and bank details; attendance by day with hours and overtime, paid leave and holidays; monthly
-  payroll with PF (12% to the ceiling, EPS / EPF split, EDLI and admin charges), ESI, professional tax by state,
-  TDS, advances; payslips, payroll register, PF ECR sheet, ESI / PT summaries and a bank advice; finalising posts
-  one journal voucher (salaries, employer PF / ESI, the payables) into the books.
+- HR & payroll (web portal; the HR and Manager roles of a company open only these): employees on a monthly
+  salary or a rate per hour, with PF / ESI / PT / TDS and bank details, HRA set from basic (40%, 50% in a metro)
+  and the Code on Wages rule (basic + DA at least half the pay, the shortfall counted as wages for PF); attendance
+  by day with hours and overtime, paid leave and a holiday list; weekly timesheets (hours a day, overtime above
+  40 h a week at 1.5x, paid holidays) ticked as approved by a manager; reimbursement claims approved by a manager
+  and paid with the payroll; monthly payroll with PF (12% to the ceiling, EPS / EPF split, EDLI and admin
+  charges), ESI, professional tax by state, TDS, advances; payslips (employee details, earnings and deductions
+  side by side, net pay in words), offer letters, payroll register, PF ECR sheet, ESI / PT summaries and a bank
+  advice; finalising posts one journal voucher (salaries, reimbursements, employer PF / ESI, the payables).
 - Upload PO (Sales): a CSV / Excel file of customer purchase orders in the BlitzBook template (Template button;
   one row per item with the PO Number on each row) previews what each PO will do, then every PO becomes one
   Credit invoice: a PO number already on an invoice updates that invoice, the rest are inserted in bulk;

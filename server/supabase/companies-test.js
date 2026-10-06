@@ -22,7 +22,8 @@ function browser(url) {
   ctx.window = ctx; ctx.globalThis = ctx; ctx.App = { routes: {}, user: null, current: null }; ctx.UI = { toast: (m) => { ctx.toasts.push(m); } }; ctx.toasts = [];
   ctx.Biz = { chargesGst: () => ctx.Store.company().gstType === 'Regular' }; ctx.$ = () => null; ctx.$$ = () => []; ctx.icon = () => '';
   vm.createContext(ctx);
-  ['util.js', 'store.js', 'subscription.js', 'appformat.js', 'supabase.js', 'sync.js', 'ledger.js', 'companies.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(WEB, f), 'utf8'), ctx, { filename: f }));
+  ctx.Print = { table: () => '', show: () => {}, page: () => '', head: () => '', signBlock: () => '', POWERED: '', PAPERS: { A4: { css: '' } } };
+  ['util.js', 'store.js', 'subscription.js', 'appformat.js', 'supabase.js', 'sync.js', 'ledger.js', 'companies.js', 'hr.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(WEB, f), 'utf8'), ctx, { filename: f }));
   ctx.Sync.setServerUrl(url); ctx.Sync.setSupabaseKey(ANON);
   ctx.signIn = (u) => { ctx.Store.saveUsers([Object.assign({ id: 1 }, u)]); ctx.App.user = ctx.Store.users()[0]; ctx.Store.open(1, ''); ctx.Sync.user = ctx.App.user; ctx.Store.onChange = null; ctx.Sub.markRegistered(); };
   // Switch company the way App does it, without the screens
@@ -138,6 +139,11 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
   check('and may not write an invoice', err && err.status === 403);
   A.enter(beta); await A.Sync.run();
   check('the owner sees the employee', A.Store.list('employees').some(e => e.name === 'Ravi'));
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'manager' }); await B.Companies.load();
+  check('a manager writes HR records too and approves', r.role === 'manager' && B.Companies.role() === 'manager' && B.Companies.mayWrite('timesheets') && B.HR.canApprove() && !B.Companies.mayWrite('invoices'));
+  check('a manager may save a timesheet on the server', !!(await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'ts:x:2026-10-05', d: { id: 'x:2026-10-05', empId: 'x', week: '2026-10-05', hours: { 0: 8 }, approved: true } }], company: beta, owner: ua.id })).epoch);
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'hr' }); await B.Companies.load();
+  check('hr enters but does not approve', B.Companies.role() === 'hr' && !B.HR.canApprove());
   r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'sales' }); await B.Companies.load();
 
   console.log('leaving, removing and deleting');

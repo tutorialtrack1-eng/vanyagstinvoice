@@ -514,6 +514,8 @@ table.list.alloc td, table.list.alloc th { padding: 7px 10px; }
 .attgrid .att.L { background: #FFF7ED; color: #C2410C; }
 .attgrid .att.HD { background: #FEFCE8; color: #A16207; }
 .attgrid .att.W, .attgrid .att.H { background: var(--tint); color: var(--brand); }
+.tsgrid th.off { color: var(--red); }
+.tsgrid td { padding: 4px 4px; }
 .chip.tap:hover { background: rgba(255,255,255,.3); }
 .tablewrap.gs table.list td, .tablewrap.gs table.list th { white-space: nowrap; }
 .tablewrap.gs table.list td.left, .tablewrap.gs table.list th:first-child { text-align: left; position: sticky; left: 0; background: #fff; z-index: 1; min-width: 220px; white-space: normal; }

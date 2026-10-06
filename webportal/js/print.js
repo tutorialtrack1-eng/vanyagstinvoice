@@ -546,5 +546,5 @@
     return page(fileName(company, '', v.no || ''), PAPERS.A4.css, '12mm 10mm', body);
   }
 
-  global.Print = { PAPERS, SHEETS, LAYOUTS, html, open, show, preview, docTitle, envelope, purchase, note, voucher, table };
+  global.Print = { PAPERS, SHEETS, LAYOUTS, html, open, show, preview, docTitle, envelope, purchase, note, voucher, table, page, head, signBlock, POWERED };
 })(window);

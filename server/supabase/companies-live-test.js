@@ -91,6 +91,14 @@ const admin = async (service, method, p, body) => { const r = await fetch(URL_ +
     check('and may save an employee', !!hrWrite.epoch);
     err = null; try { await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'inv:0008', d: { invoice_no: '0008' } }], company: beta, owner: ua.id }); } catch (e) { err = e; }
     check('but not an invoice', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
+    // The Manager role: the HR records too, with timesheets and reimbursements
+    s = await A.Companies.rpc('set_member', { cid: beta, identity: ub.email, role_in: 'manager' });
+    check('Bala made manager', s.ok && s.role === 'manager', s);
+    await B.Companies.load();
+    const mgWrite = await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'ts:live1:2026-10-05', d: { id: 'live1:2026-10-05', empId: 'live1', week: '2026-10-05', hours: { 0: 8 }, approved: true } }, { k: 'rb:live1', d: { id: 'live1', empId: 'live1', amount: 500, status: 'approved' } }], company: beta, owner: ua.id });
+    check('a manager saves an approved timesheet and a reimbursement', !!mgWrite.epoch);
+    err = null; try { await B.Supabase.call('sync', { token: B.Sync.state().token, epoch: B.Sync.state().epoch, since: B.Sync.state().since, changes: [{ k: 'pur:live', d: { doc_no: 'x' } }], company: beta, owner: ua.id }); } catch (e) { err = e; }
+    check('but not a purchase', err && (err.status === 403 || err.status === 401), err && [err.status, err.message]);
     s = await A.Companies.rpc('set_member', { cid: beta, identity: ub.email, role_in: 'sales' }); await B.Companies.load();
     const lm = await A.Companies.rpc('list_members', { cid: beta });
     check('members listed', Array.isArray(lm) && lm.length === 2 && lm[0].role === 'owner', lm);
