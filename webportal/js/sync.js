@@ -93,7 +93,7 @@
 
     // ---- per-user state: token, the server's data generation and revision, and a fingerprint of every
     // record as the server last had it
-    state() { return Object.assign({ token: '', epoch: '', since: 0, last: 0, base: {} }, Store.get('sync', {})); },
+    state() { return Object.assign({ token: '', epoch: '', since: 0, last: 0, base: {}, subSince: 0 }, Store.get('sync', {})); },
     save(st) { Store.set('sync', st, true); },
     setToken(token) { const st = this.state(); st.token = token || ''; this.save(st); },
 
@@ -160,21 +160,24 @@
         const st = this.state();
         if (!st.token) await this.link(st);
         const snap = AppFormat.snapshot(), sent = {}, changes = [];
+        // Another company's books: the subscription is the owner's and is never sent from here
+        const cid = Store.cid || '', owner = cid && global.Companies ? Companies.ownerOf(cid) : '';
         // The first meeting with the server only listens: what is already there is taken in (so a party or item
         // entered on both sides becomes one record), and what is new here goes up in the next round
         if (st.epoch) {
-          Object.keys(snap).forEach(k => { const h = hash(snap[k]); if (st.base[k] !== h) { changes.push({ k, d: snap[k] }); sent[k] = h; } });
+          Object.keys(snap).forEach(k => { if (cid && k === 'sub') return; const h = hash(snap[k]); if (st.base[k] !== h) { changes.push({ k, d: snap[k] }); sent[k] = h; } });
           Object.keys(st.base).forEach(k => { if (!(k in snap) && k !== 'company' && k !== 'sub') { changes.push({ k, x: 1 }); sent[k] = null; } });
         }
+        const body = () => ({ token: st.token, epoch: st.epoch, since: st.since, changes, company: cid, owner, sub_since: st.subSince });
         let resp;
-        try { resp = await this.call('sync', { token: st.token, epoch: st.epoch, since: st.since, changes }); }
+        try { resp = await this.call('sync', body()); }
         catch (e) {
           if (e.status !== 401) throw e;
           st.token = ''; this.save(st); await this.link(st); // signed out by a password change: try the password this browser has
-          resp = await this.call('sync', { token: st.token, epoch: st.epoch, since: st.since, changes });
+          resp = await this.call('sync', body());
         }
         if (Store.uid !== uid || !this.user) return false;
-        if (resp.reset) { st.epoch = ''; st.since = 0; st.base = {}; this.save(st); this.again = true; return false; }
+        if (resp.reset) { st.epoch = ''; st.since = 0; st.base = {}; st.subSince = 0; this.save(st); this.again = true; return false; }
         Object.keys(sent).forEach(k => { if (sent[k] == null) delete st.base[k]; else st.base[k] = sent[k]; });
         let applied = [];
         if (resp.changes.length) {
@@ -190,6 +193,7 @@
         }
         if (!st.epoch) this.again = true;
         st.epoch = resp.epoch; st.since = resp.rev; st.last = Date.now();
+        if (resp.sub_rev) st.subSince = resp.sub_rev;
         this.save(st);
         this.setStatus('idle');
         if (applied.length && this.onApplied) this.onApplied(applied);

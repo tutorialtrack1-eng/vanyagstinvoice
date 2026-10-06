@@ -130,20 +130,24 @@
 
     // One sync round on the books table: push what changed here, then read everything newer than the last
     // revision seen, leaving out the rows we just pushed. Deleted records are rows whose d is null.
+    // b.company names another company whose books are opened (companies.js): its id goes in the rows and in the
+    // X-Company header the server's rules look at, and the owner's subscription record (b.owner) is read as
+    // this company's "sub" whenever it changed since b.sub_since (answered as sub_rev).
     async sync(b) {
       const token = b.token, uid = jwtSub(token);
       if (!uid) throw new SbError(401, 'Signed out');
       const epoch = 'sb:' + this.url;
       if (b.epoch && b.epoch !== epoch) return { epoch, reset: true };
       const since = b.epoch ? Math.max(0, parseInt(b.since, 10) || 0) : 0;
+      const cid = String(b.company || '') || uid, hdr = cid === uid ? {} : { 'X-Company': cid };
       const changes = Array.isArray(b.changes) ? b.changes : [], pushed = new Map();
       if (changes.length) {
-        const rows = changes.map(c => { const d = c.x ? null : c.d; pushed.set(c.k, canon(d)); return { user_id: uid, k: c.k, d }; });
-        for (let i = 0; i < rows.length; i += 200) await this.http('POST', '/rest/v1/books?on_conflict=user_id,k', rows.slice(i, i + 200), token, { Prefer: 'resolution=merge-duplicates,return=minimal' });
+        const rows = changes.map(c => { const d = c.x ? null : c.d; pushed.set(c.k, canon(d)); return { user_id: cid, k: c.k, d }; });
+        for (let i = 0; i < rows.length; i += 200) await this.http('POST', '/rest/v1/books?on_conflict=user_id,k', rows.slice(i, i + 200), token, Object.assign({ Prefer: 'resolution=merge-duplicates,return=minimal' }, hdr));
       }
       const out = []; let rev = since;
       for (let from = since; ;) {
-        const page = await this.http('GET', '/rest/v1/books?select=k,d,r&r=gt.' + from + '&order=r.asc&limit=1000', undefined, token) || [];
+        const page = await this.http('GET', '/rest/v1/books?select=k,d,r&user_id=eq.' + cid + '&r=gt.' + from + '&order=r.asc&limit=1000', undefined, token, hdr) || [];
         page.forEach(r => {
           rev = Math.max(rev, r.r); from = r.r;
           if (pushed.has(r.k) && pushed.get(r.k) === canon(r.d)) return;
@@ -151,7 +155,15 @@
         });
         if (page.length < 1000) break;
       }
-      return { epoch, rev, changes: out };
+      const res = { epoch, rev, changes: out };
+      if (cid !== uid) {
+        const owner = String(b.owner || ''), subSince = Math.max(0, parseInt(b.sub_since, 10) || 0);
+        if (owner) {
+          const rows = await this.http('GET', '/rest/v1/books?select=d,r&user_id=eq.' + owner + '&k=eq.sub&r=gt.' + subSince + '&limit=1', undefined, token, hdr) || [];
+          if (rows.length && rows[0].d) { res.changes = res.changes.filter(c => c.k !== 'sub').concat([{ k: 'sub', d: rows[0].d }]); res.sub_rev = rows[0].r; }
+        }
+      }
+      return res;
     },
     SbError
   };

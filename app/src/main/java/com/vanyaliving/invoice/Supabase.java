@@ -246,7 +246,10 @@ final class Supabase {
         } catch (Exception e) { return ""; }
     }
 
-    /** One round on the books table: push the changes, then read everything newer than since, less what was just pushed. */
+    /** One round on the books table: push the changes, then read everything newer than since, less what was just pushed.
+     *  b.company names another company whose books are open (companies.sql): its id goes in the rows and in the X-Company
+     *  header the server's rules look at, and the owner's (b.owner) subscription record is answered as this company's
+     *  "sub" whenever it changed since b.sub_since (the answer carries sub_rev). */
     private static JSONObject sync(Context c, JSONObject b) throws Sync.SyncException, JSONException {
         String token = b.optString("token"), uid = jwtSub(token);
         if (uid.isEmpty()) throw new Sync.SyncException(401, "Signed out");
@@ -254,23 +257,27 @@ final class Supabase {
         String theirEpoch = b.optString("epoch", "");
         if (!theirEpoch.isEmpty() && !theirEpoch.equals(epoch)) return new JSONObject().put("epoch", epoch).put("reset", true);
         long since = theirEpoch.isEmpty() ? 0 : Math.max(0, b.optLong("since", 0));
+        String cid = b.optString("company", "").trim();
+        if (cid.isEmpty()) cid = uid;
+        Map<String, String> hdr = new HashMap<>();
+        if (!cid.equals(uid)) hdr.put("X-Company", cid);
         JSONArray changes = b.optJSONArray("changes");
         Map<String, String> pushed = new HashMap<>();
         if (changes != null && changes.length() > 0) {
-            Map<String, String> prefer = new HashMap<>(); prefer.put("Prefer", "resolution=merge-duplicates,return=minimal");
+            Map<String, String> prefer = new HashMap<>(hdr); prefer.put("Prefer", "resolution=merge-duplicates,return=minimal");
             JSONArray rows = new JSONArray();
             for (int i = 0; i < changes.length(); i++) {
                 JSONObject ch = changes.getJSONObject(i);
                 Object d = ch.has("x") ? JSONObject.NULL : ch.get("d");
                 pushed.put(ch.getString("k"), canon(d));
-                rows.put(new JSONObject().put("user_id", uid).put("k", ch.getString("k")).put("d", d));
+                rows.put(new JSONObject().put("user_id", cid).put("k", ch.getString("k")).put("d", d));
                 if (rows.length() == 200 || i == changes.length() - 1) { http(c, "POST", "/rest/v1/books?on_conflict=user_id,k", rows, token, prefer); rows = new JSONArray(); }
             }
         }
         JSONArray out = new JSONArray();
         long rev = since, from = since;
         for (;;) {
-            Object page = http(c, "GET", "/rest/v1/books?select=k,d,r&r=gt." + from + "&order=r.asc&limit=1000", null, token, null);
+            Object page = http(c, "GET", "/rest/v1/books?select=k,d,r&user_id=eq." + cid + "&r=gt." + from + "&order=r.asc&limit=1000", null, token, hdr);
             JSONArray a = page instanceof JSONArray ? (JSONArray) page : new JSONArray();
             for (int i = 0; i < a.length(); i++) {
                 JSONObject r = a.getJSONObject(i);
@@ -283,8 +290,52 @@ final class Supabase {
             }
             if (a.length() < 1000) break;
         }
-        return new JSONObject().put("epoch", epoch).put("rev", rev).put("changes", out);
+        JSONObject res = new JSONObject().put("epoch", epoch).put("rev", rev).put("changes", out);
+        String owner = b.optString("owner", "").trim();
+        if (!cid.equals(uid) && !owner.isEmpty()) {
+            long subSince = Math.max(0, b.optLong("sub_since", 0));
+            Object page = http(c, "GET", "/rest/v1/books?select=d,r&user_id=eq." + owner + "&k=eq.sub&r=gt." + subSince + "&limit=1", null, token, hdr);
+            JSONArray a = page instanceof JSONArray ? (JSONArray) page : new JSONArray();
+            if (a.length() > 0 && !a.getJSONObject(0).isNull("d")) {
+                JSONArray kept = new JSONArray();
+                for (int i = 0; i < out.length(); i++) if (!"sub".equals(out.getJSONObject(i).optString("k"))) kept.put(out.getJSONObject(i));
+                kept.put(new JSONObject().put("k", "sub").put("d", a.getJSONObject(0).get("d")));
+                res.put("changes", kept).put("sub_rev", a.getJSONObject(0).optLong("r", subSince));
+            }
+        }
+        return res;
     }
+
+    // ---------------------------------------------------------------- companies, groups and members (companies.sql)
+
+    private static Object rpc(Context c, long userId, String name, JSONObject args) throws Exception {
+        Object[] out = new Object[1];
+        withToken(c, userId, token -> { out[0] = http(c, "POST", "/rest/v1/rpc/" + name, args == null ? new JSONObject() : args, token, null); return new JSONObject(); });
+        return out[0];
+    }
+    private static JSONObject checked(Object r, String what) throws Exception {
+        JSONObject o = r instanceof JSONObject ? (JSONObject) r : new JSONObject(String.valueOf(r));
+        if (o.has("error")) throw new Sync.SyncException(400, o.optString("error", what + " failed"));
+        return o;
+    }
+    /** Every company the account owns or is a member of: [{id, name, group_name, owner_id, owner_name, role, primary, members}]. */
+    static JSONArray myCompanies(Context c, long userId) throws Exception {
+        Object r = rpc(c, userId, "my_companies", null);
+        return r instanceof JSONArray ? (JSONArray) r : new JSONArray(String.valueOf(r));
+    }
+    static JSONObject createCompany(Context c, long userId, String name, String group) throws Exception { return checked(rpc(c, userId, "create_company", json("name_in", name, "group_in", group)), "Create"); }
+    static JSONObject updateCompany(Context c, long userId, String cid, String name, String group) throws Exception { return checked(rpc(c, userId, "update_company", json("cid", cid, "name_in", name, "group_in", group)), "Save"); }
+    static JSONObject deleteCompany(Context c, long userId, String cid) throws Exception { return checked(rpc(c, userId, "delete_company", json("cid", cid)), "Delete"); }
+    /** The people with access to a company: [{user_id, name, phone, email, role}], the owner first. */
+    static JSONArray listMembers(Context c, long userId, String cid) throws Exception {
+        Object r = rpc(c, userId, "list_members", json("cid", cid));
+        if (r instanceof JSONObject) checked(r, "Members");
+        return r instanceof JSONArray ? (JSONArray) r : new JSONArray(String.valueOf(r));
+    }
+    static JSONObject setMember(Context c, long userId, String cid, String identity, String role) throws Exception { return checked(rpc(c, userId, "set_member", json("cid", cid, "identity", identity, "role_in", role)), "Add member"); }
+    static JSONObject removeMember(Context c, long userId, String cid, String member) throws Exception { return checked(rpc(c, userId, "remove_member", json("cid", cid, "member", member)), "Remove member"); }
+    /** The account's own id on the server, from the token it holds (blank when signed out). */
+    static String myUid(Context c, long userId) { String t = Sync.token(c, userId); return t.isEmpty() ? "" : jwtSub(t); }
 
     /** Redeems an activation code issued in Supabase for the signed-in account: {days, invoices, pack days} of the plan or pack,
      *  or one value: -1 unknown code, -2 already used, -3 not reachable / not signed in. redeem_code_v2 knows both

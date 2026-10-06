@@ -161,6 +161,35 @@ What it does and does not do:
 - `node server/supabase/mcp-test.js` runs the function against a stand-in for the database and reads what it saved
   back through the portal's `appformat.js` (Node 23.6 or newer). Run it after changing either.
 
+## 8. Companies, groups and members with roles
+
+`companies.sql` lets one account keep the books of several companies, put them in groups, and give other
+accounts a role in a company. Run it in the SQL Editor after `schema.sql` (safe to run again). It is needed by
+app 1.8 / the portal's Companies and Group Statements screens; without it those screens say so and everything
+else works as before.
+
+How it fits the books table: `books.user_id` becomes the id of the **company** a row belongs to. An account's
+first company keeps the account's own id, so nothing that exists changes and older apps carry on. Further
+companies get a row in `companies` (id, owner, name, group name); members and their role are in
+`company_members`. A client working on another company sends the header `X-Company: <company id>` and filters
+by `user_id`; the rules on `books` check the role per record:
+
+- owner / admin: every record; accountant: every record but the company profile; sales: `inv:`, `dc:`, `note:`,
+  `contact:`, `item:` and receipt vouchers (`jrn:` with kind Receipt); viewer: nothing. The subscription record
+  `sub` is never written in another company: everybody there runs on the owner's subscription, which a member
+  may read (`k = 'sub'` of the owner) while the header names one of the owner's companies.
+- Functions: `my_companies()` (also makes the account's first company row), `create_company(name, group)`
+  (25 per owner), `update_company(id, name, group)`, `delete_company(id)` (owner, never the first company; the
+  books go with it), `list_members(id)`, `set_member(id, mobile or email, role)` (owner / admin; the account must
+  be registered already; 50 per company), `remove_member(id, user)` (owner / admin, or oneself).
+- The company name in `companies` follows the company profile record (`books_company_name` trigger).
+- The foreign key from `books.user_id` to `auth.users` is dropped (a company id is not a user); triggers delete a
+  company's books with the company and an account's books with the account.
+- The MCP server (AI access) keeps working on the key's own account books; it does not open other companies.
+
+`node server/supabase/companies-test.js` exercises the portal's side of this against a stand-in that applies
+the same rules (`standin.js`); `node server/supabase/standin.js 8096` runs that stand-in for the app or a browser.
+
 ## How it is used
 
 - Registration: the portal / app asks Supabase to email an OTP (`/auth/v1/otp`), verifies it

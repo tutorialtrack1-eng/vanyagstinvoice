@@ -27,13 +27,22 @@
     session() { return read('session', null); },
     setSession(s) { if (s) write('session', s); else remove('session'); },
 
-    // ---- per-user namespace
+    // ---- per-user namespace. One account may keep the books of several companies (companies.js): each company
+    // has a namespace of its own, "<account id>:<company id>", the account's own first company simply "<account id>".
     uid: null,
+    cid: '',          // the company whose books are open ('' = the account's own first company)
+    account: null,    // the signed-in account's local id
     onChange: null,   // set by sync.js: called after every change to the signed-in user's data
     quiet: false,     // true while sync.js stores records that came from another device
+    ns(accountId, cid) { return cid ? accountId + ':' + cid : String(accountId); },
+    open(accountId, cid) { this.account = accountId; this.cid = cid || ''; this.uid = this.ns(accountId, cid); },
     key(k) { return 'u' + (this.uid || 0) + '.' + k; },
     get(k, fallback) { return read(this.key(k), fallback); },
-    set(k, v, quiet) { const ok = write(this.key(k), v); if (!quiet && !this.quiet && this.onChange) this.onChange(k); return ok; },
+    set(k, v, quiet) {
+      // In another company the role decides what may be changed; the server refuses the rest anyway
+      if (!quiet && !this.quiet && global.Companies && !Companies.mayWrite(k)) { if (global.UI && UI.toast) { UI.toast(Companies.readOnlyText(k), 4500); UI.hold = Date.now() + 2500; } return false; }
+      const ok = write(this.key(k), v); if (!quiet && !this.quiet && this.onChange) this.onChange(k); return ok;
+    },
     // Another user's value, e.g. the sync token of an account that is not signed in right now
     peek(uid, k, fallback) { return read('u' + uid + '.' + k, fallback); },
     poke(uid, k, v) { return write('u' + uid + '.' + k, v); },

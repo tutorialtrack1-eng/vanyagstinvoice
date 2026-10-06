@@ -169,6 +169,14 @@ final class Subscription {
     /** One invoice, credit note or debit note saved: on a pack it uses one of the invoices. */
     static void useInvoice(Context c, long userId) { if (isLite(c, userId)) prefs(c).edit().putInt("inv_used_" + userId, invoicesUsed(c, userId) + 1).apply(); }
     /** The pack counters as another device knows them (sync): the highest seen wins. */
+    /** A company the account owns starts on the account's own subscription (the owner's plan reaches it by sync afterwards). */
+    static void copy(Context c, long from, long to) {
+        SharedPreferences p = prefs(c);
+        p.edit().putLong("registered_at_" + to, p.getLong("registered_at_" + from, 0)).putLong("valid_until_" + to, p.getLong("valid_until_" + from, 0))
+                .putStringSet("used_codes_" + to, new HashSet<>(p.getStringSet("used_codes_" + from, new HashSet<>())))
+                .putInt("inv_quota_" + to, p.getInt("inv_quota_" + from, 0)).putInt("inv_used_" + to, p.getInt("inv_used_" + from, 0)).putLong("inv_until_" + to, p.getLong("inv_until_" + from, 0)).apply();
+    }
+
     static void mergePack(Context c, long userId, int quota, int used) {
         prefs(c).edit().putInt("inv_quota_" + userId, Math.max(invoiceQuota(c, userId), quota)).putInt("inv_used_" + userId, Math.max(invoicesUsed(c, userId), used)).apply();
     }

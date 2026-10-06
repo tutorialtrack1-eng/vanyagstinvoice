@@ -259,7 +259,9 @@ final class Sync {
 
     private final Map<String, String> base = new HashMap<>(); // key -> fingerprint of the record as the server last had it
     private String epoch = "", lastError = "";
-    private long since, lastSync;
+    private long since, lastSync, subSince;
+    // Another company's books (companies.sql): its id and its owner's, read from the users row; blank for the account's own
+    private String companyId = "", ownerId = "";
     private boolean loaded, running, busy, again, pendingWrite;
     private int streak; // rounds started straight after another, so a record that never settles cannot spin forever
     private int status = OFF;
@@ -275,6 +277,29 @@ final class Sync {
         this.ctx = ctx.getApplicationContext(); this.books = books; this.userId = userId; this.listener = listener;
         this.accounts = new DatabaseHelper(this.ctx);
         this.prefs = this.ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String[] co = this.accounts.companyInfo(userId);
+        if (co != null) { companyId = co[0]; ownerId = co[4]; }
+    }
+
+    /** True while the books of another company (not the account's own first company) are open. */
+    boolean isCompany() { return !companyId.isEmpty(); }
+
+    /** One listening round for a company's books on its own row, then done (used by the group statements). */
+    static void pullOnce(Context ctx, long rowId, Runnable done) {
+        DatabaseHelper books = DatabaseHelper.forUser(ctx, rowId);
+        Ledger.createTables(books.quietDatabase()); prepare(books.quietDatabase());
+        final Sync[] holder = new Sync[1];
+        final boolean[] finished = {false};
+        holder[0] = new Sync(ctx, books, rowId, new Listener() {
+            @Override public void onSyncApplied(Set<String> keys) {}
+            @Override public void onSyncStatus() {
+                Sync s = holder[0];
+                if (s == null || s.busy || finished[0]) return;
+                finished[0] = true; s.stop(); done.run();
+            }
+            @Override public void onSyncAuthLost(String message) { onSyncStatus(); }
+        });
+        holder[0].start();
     }
 
     /** True once this phone has exchanged data with the server for this account. */
@@ -341,6 +366,7 @@ final class Sync {
             String k = m.getString(0), v = m.isNull(1) ? "" : m.getString(1);
             if ("epoch".equals(k)) epoch = v;
             else if ("since".equals(k)) since = parseLong(v);
+            else if ("sub_since".equals(k)) subSince = parseLong(v);
             else if ("last".equals(k)) lastSync = parseLong(v);
         }
         m.close();
@@ -365,6 +391,7 @@ final class Sync {
             // item entered on both sides becomes one record), and what is new here goes up in the next round
             if (!epoch.isEmpty()) {
                 for (Map.Entry<String, JSONObject> e : snap.entrySet()) {
+                    if (isCompany() && e.getKey().equals("sub")) continue; // the subscription is the owner's, never sent from here
                     String h = hash(e.getValue());
                     if (h.equals(base.get(e.getKey()))) continue;
                     changes.put(new JSONObject().put("k", e.getKey()).put("d", e.getValue()));
@@ -378,13 +405,14 @@ final class Sync {
             }
             final String[] user = accounts.userRecord(userId); // name, phone, email, password
             final String token0 = token(ctx, userId), epoch0 = epoch;
-            final long since0 = since;
+            final long since0 = since, subSince0 = subSince;
             setStatus(SYNCING, "");
             new Thread(() -> {
                 JSONObject resp = null; SyncException error = null; String token = token0;
                 try {
                     if (token.isEmpty()) token = link(user);
-                    JSONObject body = new JSONObject().put("token", token).put("epoch", epoch0).put("since", since0).put("changes", changes).put("device", "app");
+                    JSONObject body = new JSONObject().put("token", token).put("epoch", epoch0).put("since", since0).put("changes", changes).put("device", "app")
+                            .put("company", companyId).put("owner", ownerId).put("sub_since", subSince0);
                     try { resp = post(ctx, "sync", body); }
                     catch (SyncException e) {
                         if (e.status != 401) throw e;
@@ -432,9 +460,9 @@ final class Sync {
         try {
             if (resp.optBoolean("reset", false)) {
                 // The server holds other data than the last time (restored or replaced): start over
-                base.clear(); epoch = ""; since = 0;
+                base.clear(); epoch = ""; since = 0; subSince = 0;
                 db.delete("sync_state", null, null);
-                meta(db, "epoch", ""); meta(db, "since", "0");
+                meta(db, "epoch", ""); meta(db, "since", "0"); meta(db, "sub_since", "0");
                 setStatus(IDLE, "");
                 main.post(this::round);
                 return;
@@ -479,12 +507,12 @@ final class Sync {
                 }
                 boolean first = epoch.isEmpty();
                 String newEpoch = resp.optString("epoch", "");
-                long newSince = resp.optLong("rev", since);
+                long newSince = resp.optLong("rev", since), newSubSince = resp.optLong("sub_rev", subSince);
                 lastSync = System.currentTimeMillis();
                 // A quiet round (nothing new either way) writes nothing to the database
-                if (first || !newEpoch.equals(epoch) || newSince != since || !touched.isEmpty()) {
-                    epoch = newEpoch; since = newSince;
-                    meta(db, "epoch", epoch); meta(db, "since", String.valueOf(since)); meta(db, "last", String.valueOf(lastSync));
+                if (first || !newEpoch.equals(epoch) || newSince != since || newSubSince != subSince || !touched.isEmpty()) {
+                    epoch = newEpoch; since = newSince; subSince = newSubSince;
+                    meta(db, "epoch", epoch); meta(db, "since", String.valueOf(since)); meta(db, "sub_since", String.valueOf(subSince)); meta(db, "last", String.valueOf(lastSync));
                 }
                 db.setTransactionSuccessful();
                 if (first) again = true;
@@ -492,7 +520,7 @@ final class Sync {
             seenTick = DatabaseHelper.writeTick; // our own writes are not news
             if (!applied.isEmpty()) listener.onSyncApplied(applied);
             setStatus(IDLE, "");
-            if ((again || !hash(subDoc()).equals(base.get("sub"))) && streak < 4) { streak++; again = false; main.post(this::round); }
+            if ((again || (!isCompany() && !hash(subDoc()).equals(base.get("sub")))) && streak < 4) { streak++; again = false; main.post(this::round); }
             else streak = 0;
         } catch (Exception e) {
             setStatus(OFFLINE, "Sync failed: " + e.getMessage());

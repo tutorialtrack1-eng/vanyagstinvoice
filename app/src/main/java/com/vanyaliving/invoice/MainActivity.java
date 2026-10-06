@@ -79,6 +79,7 @@ import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -426,8 +427,10 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
         Subscription.markRegistered(this, userId); // trial clock starts the first time this account opens the app
         accountsDb = new DatabaseHelper(this);
+        companyInfo = accountsDb.companyInfo(userId);
         dbHelper = DatabaseHelper.forUser(this, userId); ensureInvoiceColumns(); loadHsnMapFromAsset(); applyRandomPastelTheme(); buildUi(); loadCompanyMaster();
         sync = new Sync(this, dbHelper, userId, this);
+        if (Supabase.enabled(this)) { final int had = cachedCompanies().length(); loadCompanies((l, e) -> { if (onDashboard && (l.length() > 1) != (had > 1)) showDashboardView(); }); }
 
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         Cursor c = db.query("company_master", null, null, null, null, null, null);
@@ -597,6 +600,17 @@ public class MainActivity extends Activity implements Sync.Listener {
     // locked = validity over: the dialog cannot be dismissed, only Activate or Logout
     private void showSubscriptionDialog(boolean locked) {
         if (subscriptionDialog != null && subscriptionDialog.isShowing()) return;
+        if (inCompany()) {
+            boolean own = role().equals("owner");
+            String ownerName = ownerNameOf(companyInfo[0]);
+            AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle(locked ? "Subscription Required" : "Subscription")
+                    .setMessage(Subscription.statusText(this, userId) + ".\n\n" + (own ? "This company runs on your own subscription: renew it from your first company (switch company, then Subscription)." : "This company runs on the subscription of its owner" + (ownerName.isEmpty() ? "" : ", " + ownerName) + ". Ask them to renew it."))
+                    .setPositiveButton("Switch company", (d, w) -> showCompanySwitcher());
+            if (locked) b.setNegativeButton("Logout", (d, w) -> { prefs.edit().putBoolean("is_logged_in", false).remove("user_id").apply(); startActivity(new Intent(this, LoginActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK)); finish(); }).setCancelable(false);
+            else b.setNegativeButton("Close", null);
+            subscriptionDialog = b.show(); subscriptionDialogLocked = locked;
+            return;
+        }
         String identity = accountsDb.userIdentity(userId);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -1249,6 +1263,7 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     // Inserts or updates one items_master row by name without dropping its other columns
     private void upsertMasterItem(SQLiteDatabase db, String name, ContentValues cv) {
+        if (!requireWrite("items")) return;
         cv.put("item_name", name);
         if (db.update("items_master", cv, "item_name=?", new String[]{name}) == 0) db.insert("items_master", null, cv);
         itemSuggestionCache = null;
@@ -1779,6 +1794,18 @@ public class MainActivity extends Activity implements Sync.Listener {
         chips.addView(chip(sellerGstinStr.isEmpty() ? "No GSTIN" : "GSTIN " + sellerGstinStr, 0x33FFFFFF, Color.WHITE));
         chips.addView(chip(lineOfActivityStr.isEmpty() || lineOfActivityStr.startsWith("Select") ? "General" : lineOfActivityStr, 0x33FFFFFF, Color.WHITE));
         banner.addView(chips);
+        // Which company of the account is open, its group and the role here; the last chip switches companies
+        if (inCompany() || cachedCompanies().length() > 1) {
+            LinearLayout chips2 = new LinearLayout(this);
+            chips2.setOrientation(LinearLayout.HORIZONTAL);
+            String group = inCompany() ? companyInfo[3] : groupOfPrimary();
+            if (!group.isEmpty()) chips2.addView(chip(group, 0x33FFFFFF, Color.WHITE));
+            if (inCompany()) chips2.addView(chip(roleLabel(role()), 0x33FFFFFF, Color.WHITE));
+            TextView sw = chip("Switch company \u25be", 0xFFFFFFFF, NAVY);
+            sw.setOnClickListener(v -> showCompanySwitcher());
+            chips2.addView(sw);
+            banner.addView(chips2);
+        }
         root.addView(banner);
 
         // Right after registration: one green note that fades away on its own
@@ -1832,7 +1859,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Journal", R.drawable.ic_journal, 0xFF5E35B1, 0xFFEDE7F6, v -> showJournalDialog()),
                 new DashboardTile("Reports", R.drawable.ic_stock, 0xFF546E7A, 0xFFECEFF1, v -> showReportsMenu()),
         };
-        DashboardTile[] tiles = Subscription.isLite(this, userId) ? liteTiles : fullTiles;
+        DashboardTile[] tiles = menuForRole(Subscription.isLite(this, userId) ? liteTiles : fullTiles);
         root.addView(tileGrid(tiles, 3, 13f, 11));
 
         // At-a-glance figures for the month, under the tiles
@@ -2157,13 +2184,15 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     private void showReportsMenu() {
         if (Subscription.isLite(this, userId)) { showSalesReport(); return; }
-        String[] opts = {"Sales Report", "Party Ledger", "Profit & Loss", "Balance Sheet", "Stock in Hand"};
+        // A sales member gets the sales side of the reports
+        String[] opts = role().equals("sales") ? new String[]{"Sales Report", "Party Ledger"} : new String[]{"Sales Report", "Party Ledger", "Profit & Loss", "Balance Sheet", "Stock in Hand", "Group Statements"};
         new AlertDialog.Builder(this).setTitle("Reports").setItems(opts, (d, w) -> {
             if (w == 0) showSalesReport();
             else if (w == 1) showPartyLedger(null, null, null, null);
             else if (w == 2) showProfitAndLoss();
             else if (w == 3) showBalanceSheet();
-            else showStockDialog();
+            else if (w == 4) showStockDialog();
+            else showGroupStatements();
         }).show();
     }
 
@@ -2668,7 +2697,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         appTv.setText("BlitzBook"); appTv.setTextSize(20); appTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD); appTv.setTextColor(Color.WHITE);
         head.addView(appTv);
         sideCompanyTv = new TextView(this);
-        sideCompanyTv.setText(sellerNameStr.isEmpty() ? "Set up your company profile" : sellerNameStr);
+        sideCompanyTv.setText((sellerNameStr.isEmpty() ? (inCompany() ? companyInfo[1] : "Set up your company profile") : sellerNameStr) + (inCompany() ? "  \u00b7  " + roleLabel(role()) : ""));
         sideCompanyTv.setTextSize(12.5f); sideCompanyTv.setTextColor(0xE6FFFFFF); sideCompanyTv.setPadding(0, dp(2), 0, 0);
         sideCompanyTv.setSingleLine(true); sideCompanyTv.setEllipsize(TextUtils.TruncateAt.END);
         head.addView(sideCompanyTv);
@@ -2690,6 +2719,8 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new DashboardTile("Balance Sheet", R.drawable.ic_expense, 0xFFFB8C00, 0xFFFFF3E0, v -> { drawer.closeDrawers(); showBalanceSheet(); }),
                 new DashboardTile("Stock in Hand", R.drawable.ic_stock, 0xFF00ACC1, 0xFFE0F7FA, v -> { drawer.closeDrawers(); showStockDialog(); }),
                 new DashboardTile("Export / Import", R.drawable.ic_backup, 0xFF546E7A, 0xFFECEFF1, v -> { drawer.closeDrawers(); showBackupDialog(); }),
+                new DashboardTile("Companies", R.drawable.ic_customer, 0xFF6D4C41, 0xFFEFEBE9, v -> { drawer.closeDrawers(); showCompaniesDialog(); }),
+                new DashboardTile("Group Statements", R.drawable.ic_reports, 0xFF00695C, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showGroupStatements(); }),
                 new DashboardTile("AI Access", R.drawable.ic_ai, 0xFF3949AB, 0xFFE8EAF6, v -> { drawer.closeDrawers(); showAiAccessDialog(); }),
                 new DashboardTile("Subscription", R.drawable.ic_key, 0xFF00897B, 0xFFE0F2F1, v -> { drawer.closeDrawers(); showSubscriptionDialog(false); }),
         };
@@ -2698,7 +2729,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         LinearLayout menuBox = new LinearLayout(this);
         menuBox.setOrientation(LinearLayout.VERTICAL);
         menuBox.setPadding(dp(8), dp(10), dp(8), dp(4));
-        DashboardTile[] menu = Subscription.isLite(this, userId) ? liteMenu : fullMenu;
+        DashboardTile[] menu = menuForRole(Subscription.isLite(this, userId) ? liteMenu : fullMenu);
         menuBox.addView(tileGrid(menu, 3, 10.5f, 10));
         menuScroll.addView(menuBox);
         side.addView(menuScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
@@ -3479,8 +3510,10 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
     }
 
-    private void ensureInvoiceColumns() {
-        SQLiteDatabase db = dbHelper.getWritableDatabase();
+    private void ensureInvoiceColumns() { prepareBooks(dbHelper.getWritableDatabase()); }
+
+    /** Every table and column this version keeps, on any books file (also one fetched for the group statements). */
+    static void prepareBooks(SQLiteDatabase db) {
         addColumnIfMissing(db, "invoices", "buyer_email", "TEXT");
         addColumnIfMissing(db, "invoices", "consignee_email", "TEXT");
         addColumnIfMissing(db, "invoice_items", "sub_serial_no", "TEXT");
@@ -3517,7 +3550,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         Sync.prepare(db);
     }
 
-    private void addColumnIfMissing(SQLiteDatabase db, String table, String column, String type) {
+    private static void addColumnIfMissing(SQLiteDatabase db, String table, String column, String type) {
         Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null);
         boolean exists = false;
         while (c.moveToNext()) {
@@ -3963,6 +3996,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     private void deleteCurrentChallan() {
+        if (!requireWrite("challans")) return;
         String no = invoiceNo.getText().toString().trim();
         if (no.isEmpty()) { Toast.makeText(this, "Enter/select a challan number first", Toast.LENGTH_SHORT).show(); return; }
         SQLiteDatabase db = dbHelper.getWritableDatabase();
@@ -4042,7 +4076,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private boolean invoiceSavedOnPack(String no) { return prefs.getBoolean("pack_inv_" + userId + "_" + no, true); }
 
     private void deleteCurrentInvoice() {
-        if (packLocked("invoice")) return;
+        if (!requireWrite("invoices") || packLocked("invoice")) return;
         String no = invoiceNo.getText().toString().trim();
         if (no.isEmpty()) {
             Toast.makeText(this, "Enter/select an invoice number first", Toast.LENGTH_SHORT).show();
@@ -4088,6 +4122,7 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     /** Stores the invoice on screen. False when an invoice pack forbids it (a saved invoice is final, or the pack is used up). */
     private boolean saveFullInvoice() {
+        if (!requireWrite("invoices")) return false;
         String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return false;
         SQLiteDatabase db = dbHelper.getWritableDatabase();
         // Invoice pack (running or used up): a saved invoice is final, a new one needs an invoice left
@@ -4165,6 +4200,7 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     /** Stores the delivery challan on screen. It uses no invoice of a pack, but needs a running subscription or pack. */
     private boolean saveChallan() {
+        if (!requireWrite("challans")) return false;
         String no = invoiceNo.getText().toString().trim(); if (no.isEmpty()) return false;
         if (!Subscription.isActive(this, userId)) { Toast.makeText(this, "Your subscription has ended. Renew to continue.", Toast.LENGTH_LONG).show(); showSubscriptionDialog(false); return false; }
         SQLiteDatabase db = dbHelper.getWritableDatabase();
@@ -5104,6 +5140,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 cv.put("tds_section", tdsCb.isChecked() ? (String) sTds.getSelectedItem() : "");
                 cv.put("tds_rate", tdsRate);
 
+                if (!requireWrite("contacts")) return;
                 if (editId < 0 || db.update("contacts", cv, "id=?", new String[]{String.valueOf(editId)}) == 0) db.insert("contacts", null, cv);
                 Toast.makeText(this, type + " contact saved", Toast.LENGTH_SHORT).show();
                 if (buyerBillTo != null) { setupAutoComplete(buyerBillTo); setupAutoComplete(consignee); }
@@ -5267,6 +5304,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new AlertDialog.Builder(this).setTitle("Delete Contacts").setMessage("Delete " + selectedContactIds.size() + " selected contacts?")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Delete", (d, w) -> {
+                            if (!requireWrite("contacts")) return;
                             SQLiteDatabase wdb = dbHelper.getWritableDatabase();
                             for (long id : selectedContactIds) wdb.delete("contacts", "id=?", new String[]{String.valueOf(id)});
                             selectedContactIds.clear();
@@ -5553,6 +5591,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 cv.put("line_of_activity", (String) sActivity.getSelectedItem());
                 cv.put("invoice_format", invoiceFormatStr);
 
+                if (!requireWrite("company")) return;
                 db.delete("company_master", null, null);
                 db.insert("company_master", null, cv);
                 Toast.makeText(MainActivity.this, "Company Profile Saved Successfully!", Toast.LENGTH_SHORT).show();
@@ -5693,6 +5732,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 new AlertDialog.Builder(this).setTitle("Delete Items").setMessage("Delete " + selectedItemIds.size() + " selected items from the item master?")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Delete", (d, w) -> {
+                            if (!requireWrite("items")) return;
                             SQLiteDatabase wdb = dbHelper.getWritableDatabase();
                             for (long id : selectedItemIds) wdb.delete("items_master", "id=?", new String[]{String.valueOf(id)});
                             itemSuggestionCache = null; selectedItemIds.clear();
@@ -6472,7 +6512,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             delBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete Expense")
                     .setMessage("Delete this " + e.category + " expense of " + money(e.amount) + "?")
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete", (d, w) -> { Ledger.deleteExpense(dbHelper.getWritableDatabase(), e.id); showExpensesDialog(); }).show());
+                    .setPositiveButton("Delete", (d, w) -> { if (!requireWrite("expenses")) return; Ledger.deleteExpense(dbHelper.getWritableDatabase(), e.id); showExpensesDialog(); }).show());
             row.addView(delBtn, iconLp(36, 4));
             listContainer.addView(row);
             listContainer.addView(divider());
@@ -6620,6 +6660,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             }
             e.date = eDate.getText().toString().trim(); e.category = cat;
             e.paymentMode = (String) sMode.getSelectedItem(); e.description = eDesc.getText().toString().trim();
+            if (!requireWrite("expenses")) return;
             Ledger.saveExpense(dbHelper.getWritableDatabase(), e);
             Toast.makeText(this, "Expense saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
@@ -6688,6 +6729,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                         .setMessage("Record " + p.docNo + " as a purchase? It will then count in stock, profit & loss and the balance sheet.")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Convert", (d, w) -> {
+                            if (!requireWrite("purchases")) return;
                             p.kind = Ledger.KIND_PURCHASE;
                             p.docNo = Ledger.nextDocNo(dbHelper.getReadableDatabase(), Ledger.KIND_PURCHASE);
                             Ledger.savePurchase(dbHelper.getWritableDatabase(), p);
@@ -6708,7 +6750,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             delBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete " + p.kind)
                     .setMessage("Delete " + p.docNo + "? This cannot be undone.")
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete", (d, w) -> { Ledger.deletePurchase(dbHelper.getWritableDatabase(), p.id); showPurchasesDialog(); }).show());
+                    .setPositiveButton("Delete", (d, w) -> { if (!requireWrite("purchases")) return; Ledger.deletePurchase(dbHelper.getWritableDatabase(), p.id); showPurchasesDialog(); }).show());
             row.addView(delBtn, iconLp(36, 4));
             listContainer.addView(row);
             listContainer.addView(divider());
@@ -6980,6 +7022,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             p.tdsRate = tdsBox.isChecked() ? tdsRate[0] : 0;
             p.interState = isInterStateGstin(p.supplierGstin);
             p.items.clear(); p.items.addAll(items);
+            if (!requireWrite("purchases")) return;
             Ledger.savePurchase(dbHelper.getWritableDatabase(), p);
             addStockItemsToMaster(p);
             Toast.makeText(this, (quotation ? "Quotation " : "Purchase ") + p.docNo + " saved", Toast.LENGTH_SHORT).show();
@@ -7265,6 +7308,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                         .setMessage("Delete invoice " + no + "? This cannot be undone.")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Delete", (d, w) -> {
+                            if (!requireWrite("invoices")) return;
                             SQLiteDatabase wdb = dbHelper.getWritableDatabase();
                             Cursor idc = wdb.query("invoices", new String[]{"id"}, "invoice_no=?", new String[]{no}, null, null, null);
                             while (idc.moveToNext()) wdb.delete("invoice_items", "invoice_id=?", new String[]{String.valueOf(idc.getLong(0))});
@@ -7367,6 +7411,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                     new AlertDialog.Builder(this).setTitle("Delete Delivery Challan").setMessage("Delete delivery challan " + no + "? This cannot be undone.")
                         .setNegativeButton("Cancel", null)
                         .setPositiveButton("Delete", (dd, w) -> {
+                            if (!requireWrite("challans")) return;
                             SQLiteDatabase wdb = dbHelper.getWritableDatabase();
                             Cursor idc = wdb.query("challans", new String[]{"id"}, "challan_no=?", new String[]{no}, null, null, null);
                             while (idc.moveToNext()) wdb.delete("challan_items", "challan_id=?", new String[]{String.valueOf(idc.getLong(0))});
@@ -7413,6 +7458,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     private void showPoUploadDialog() {
+        if (!requireWrite("invoices")) return;
         new AlertDialog.Builder(this)
                 .setTitle("Upload Purchase Orders")
                 .setMessage("Upload a CSV or Excel file of customer purchase orders in the BlitzBook template and every purchase order becomes a sales invoice.\n\n" +
@@ -7695,7 +7741,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + n.noteNo);
                 delBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete " + kind)
                         .setMessage("Delete " + n.noteNo + "?").setNegativeButton("Cancel", null)
-                        .setPositiveButton("Delete", (d, w) -> { Ledger.deleteNote(dbHelper.getWritableDatabase(), n.id); showNotesDialog(kind); }).show());
+                        .setPositiveButton("Delete", (d, w) -> { if (!requireWrite("notes")) return; Ledger.deleteNote(dbHelper.getWritableDatabase(), n.id); showNotesDialog(kind); }).show());
                 row.addView(delBtn, iconLp(36, 4));
             }
             listContainer.addView(row);
@@ -7833,6 +7879,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             boolean fresh = n.id < 0;
             if (!fresh && packLocked(kind.toLowerCase(Locale.ROOT))) return;
             if (fresh && !packAllows()) return;
+            if (!requireWrite("notes")) return;
             Ledger.saveNote(dbHelper.getWritableDatabase(), n);
             if (fresh) Subscription.useInvoice(this, userId);
             Toast.makeText(this, kind + " " + n.noteNo + " saved", Toast.LENGTH_SHORT).show();
@@ -8010,6 +8057,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             j.refNo = eRef.getText().toString().trim(); j.mode = md; j.bankRef = eBank.getText().toString().trim(); j.narration = eNarr.getText().toString().trim();
             j.lines.add(new Ledger.JournalLine("Cash".equals(md) ? "Cash" : "Bank", true, amt));
             j.lines.add(new Ledger.JournalLine(who, false, amt));
+            if (!requireWrite("receipts")) return;
             Ledger.saveJournal(db, j);
             Toast.makeText(this, "Receipt " + j.docNo + " saved", Toast.LENGTH_SHORT).show();
             dlg.dismiss();
@@ -8157,7 +8205,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             delBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete Journal Entry")
                     .setMessage("Delete this entry of " + money(j.debitTotal()) + "?")
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete", (d, w) -> { Ledger.deleteJournal(dbHelper.getWritableDatabase(), j.id); showJournalDialog(); }).show());
+                    .setPositiveButton("Delete", (d, w) -> { if (!requireWrite("Receipt".equals(j.kind) ? "receipts" : "journal")) return; Ledger.deleteJournal(dbHelper.getWritableDatabase(), j.id); showJournalDialog(); }).show());
             row.addView(delBtn, iconLp(36, 4));
             listContainer.addView(row);
             listContainer.addView(divider());
@@ -8304,6 +8352,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             if (!draft.balanced()) { Toast.makeText(this, "Debit and credit totals must be equal", Toast.LENGTH_SHORT).show(); return; }
             j.date = eDate.getText().toString().trim(); j.narration = eNarration.getText().toString().trim();
             j.lines.clear(); j.lines.addAll(draft.lines);
+            if (!requireWrite("journal")) return;
             Ledger.saveJournal(dbHelper.getWritableDatabase(), j);
             Toast.makeText(this, "Journal entry saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
@@ -8341,6 +8390,7 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     // Parties are saved as contacts so they also appear in the customer / supplier lists and invoice suggestions
     private void showCreateAccountDialog(AccountCreated cb) {
+        if (!requireWrite("accounts")) return;
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(8), dp(16), dp(8));
@@ -8532,6 +8582,530 @@ public class MainActivity extends Activity implements Sync.Listener {
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> exportRowsAsPdf(fileTag, title, subtitle, new String[]{"Particulars", "Amount"}, pdfRows, 1));
         });
         dialog.show();
+    }
+
+    // ------------------------------------------------------------------ companies, groups and members (server/supabase/companies.sql)
+    /* One account can keep the books of several companies. Each company opened here is a row of the users table of its
+       own (DatabaseHelper.companyRow): its books file, sync state, last screen and subscription prefs follow from that
+       row id exactly as an account's do, while its login, token and identity are the account's. The account's first
+       company is the account row itself. A member of another owner's company gets a role (owner, admin, accountant,
+       sales, viewer): the server refuses what the role may not do, and requireWrite() says so before trying. */
+    private String[] companyInfo;   // {company id, name, role, group, owner id} while another company's books are open, else null
+    private boolean inCompany() { return companyInfo != null; }
+    private String role() { return inCompany() && !companyInfo[2].isEmpty() ? companyInfo[2] : "owner"; }
+    private long accountId() { return accountsDb.accountOf(userId); }
+    private static final String[] ROLES = {"owner", "admin", "accountant", "sales", "viewer"};
+    private static final String[] ROLE_LABELS = {"Owner", "Admin", "Accountant", "Sales", "Viewer"};
+    private static final String[] ROLE_HELP = {"Everything, including members, the subscription and deleting the company", "Everything in the books, the company profile and the members",
+            "Every record of the books; not the company profile or members", "Sales invoices, delivery challans, credit / debit notes, receipts, customers and items", "Looks at everything, changes nothing"};
+    private static String roleLabel(String r) { for (int i = 0; i < ROLES.length; i++) if (ROLES[i].equals(r)) return ROLE_LABELS[i]; return r; }
+    /** Whether the role may change records of a kind: invoices, challans, notes, contacts, items, receipts, purchases, expenses, journal, accounts, company. */
+    private boolean canWrite(String what) {
+        String r = role();
+        if (r.equals("owner") || r.equals("admin")) return true;
+        if (r.equals("accountant")) return !what.equals("company");
+        if (r.equals("sales")) return what.equals("invoices") || what.equals("challans") || what.equals("notes") || what.equals("contacts") || what.equals("items") || what.equals("receipts");
+        return false;
+    }
+    private boolean requireWrite(String what) {
+        if (canWrite(what)) return true;
+        Toast.makeText(this, what.equals("company") ? "Only the owner or an admin can change the company profile (your role here: " + roleLabel(role()) + ")"
+                : role().equals("viewer") ? "Read-only access: a viewer cannot save changes in this company" : "Your role here (" + roleLabel(role()) + ") cannot change " + what, Toast.LENGTH_LONG).show();
+        return false;
+    }
+    // The tiles and menu entries a role gets: a sales member the sales side, account matters only in the account's own company
+    private DashboardTile[] menuForRole(DashboardTile[] all) {
+        List<DashboardTile> out = new ArrayList<>();
+        for (DashboardTile t : all) {
+            if (inCompany() && t.title.equals("AI Access")) continue;
+            if (role().equals("sales") && !(t.title.equals("Invoice") || t.title.equals("Sales") || t.title.equals("Customer") || t.title.equals("Stock") || t.title.equals("Reports") || t.title.equals("Sales Report") || t.title.equals("Credit Notes") || t.title.equals("Debit Notes") || t.title.equals("Company Profile") || t.title.equals("Companies") || t.title.equals("Subscription"))) continue;
+            if (role().equals("viewer") && (t.title.equals("Export / Import"))) continue;
+            out.add(t);
+        }
+        return out.toArray(new DashboardTile[0]);
+    }
+    /** The companies as last fetched from the server, kept so the switcher works offline. */
+    private JSONArray cachedCompanies() {
+        try { return new JSONArray(prefs.getString("companies_" + accountId(), "[]")); } catch (Exception e) { return new JSONArray(); }
+    }
+    private void cacheCompanies(JSONArray list) { prefs.edit().putString("companies_" + accountId(), list.toString()).apply(); }
+    private String groupOfPrimary() { JSONArray l = cachedCompanies(); for (int i = 0; i < l.length(); i++) { JSONObject c = l.optJSONObject(i); if (c != null && c.optBoolean("primary") && "owner".equals(c.optString("role"))) return c.optString("group_name", ""); } return ""; }
+    private String ownerNameOf(String cid) { JSONArray l = cachedCompanies(); for (int i = 0; i < l.length(); i++) { JSONObject c = l.optJSONObject(i); if (c != null && cid.equals(c.optString("id"))) return c.optString("owner_name", ""); } return ""; }
+    private boolean isOwnFirst(JSONObject c) { return c.optBoolean("primary") && "owner".equals(c.optString("role")); }
+    private interface CompaniesCallback { void run(JSONArray list, String error); }
+    /** Fetches the account's companies from the server (the cached list on failure, with the error). */
+    private void loadCompanies(CompaniesCallback cb) {
+        if (!Supabase.enabled(this)) { cb.run(cachedCompanies(), "Companies live in your BlitzBook account on the server, and this app is not connected to it."); return; }
+        new Thread(() -> {
+            JSONArray list = null; String err = null;
+            try { list = Supabase.myCompanies(this, userId); }
+            catch (Sync.SyncException e) { err = e.status == 404 ? "Companies are not set up on the server yet (run server/supabase/companies.sql)." : e.getMessage(); }
+            catch (Exception e) { err = "The companies could not be loaded: " + e.getMessage(); }
+            final JSONArray fList = list; final String fErr = err;
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                if (fList != null) {
+                    cacheCompanies(fList);
+                    java.util.Set<String> ids = new HashSet<>();
+                    for (int i = 0; i < fList.length(); i++) { JSONObject c = fList.optJSONObject(i); if (c != null) ids.add(c.optString("id")); }
+                    accountsDb.dropCompanyRows(accountId(), ids);
+                    if (inCompany() && !ids.contains(companyInfo[0])) { Toast.makeText(this, "You no longer have access to this company", Toast.LENGTH_LONG).show(); switchToRow(accountId()); return; }
+                    // The role or group may have changed on the server
+                    for (int i = 0; i < fList.length(); i++) { JSONObject c = fList.optJSONObject(i); if (c != null && !isOwnFirst(c) && accountsDb.companyRows(accountId()).containsKey(c.optString("id"))) accountsDb.companyRow(accountId(), c.optString("id"), c.optString("name"), c.optString("role"), c.optString("group_name"), c.optString("owner_id")); }
+                    if (inCompany()) companyInfo = accountsDb.companyInfo(userId);
+                }
+                cb.run(fList != null ? fList : cachedCompanies(), fErr);
+            });
+        }).start();
+    }
+    private static String groupLabel(JSONObject c) { String g = c.optString("group_name", "").trim(); return g.isEmpty() ? "No group" : g; }
+    private static List<String> groupNames(JSONArray list) {
+        java.util.TreeSet<String> out = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (int i = 0; i < list.length(); i++) { JSONObject c = list.optJSONObject(i); if (c != null && !c.optString("group_name", "").trim().isEmpty()) out.add(c.optString("group_name").trim()); }
+        return new ArrayList<>(out);
+    }
+
+    /** Switches to a company's books (a users row of its own, made the first time), or back to the account's own. */
+    private void switchCompany(JSONObject c) {
+        long account = accountId(), target;
+        if (isOwnFirst(c)) target = account;
+        else {
+            String cid = c.optString("id");
+            boolean fresh = !accountsDb.companyRows(account).containsKey(cid);
+            target = accountsDb.companyRow(account, cid, c.optString("name"), c.optString("role"), c.optString("group_name"), c.optString("owner_id"));
+            if (target < 0) { Toast.makeText(this, "Could not open the company on this phone", Toast.LENGTH_LONG).show(); return; }
+            // A company the account owns runs on the account's own subscription: start it from there, so nothing is
+            // locked while the first sync round is on its way. Another owner's company gets the owner's plan by sync.
+            if (fresh && "owner".equals(c.optString("role"))) Subscription.copy(this, account, target);
+        }
+        switchToRow(target);
+    }
+    private void switchToRow(long target) {
+        if (target == userId) { showDashboardView(); return; }
+        if (sync != null) sync.stop();
+        prefs.edit().putLong("user_id", target).apply();
+        Toast.makeText(this, "Opening the company...", Toast.LENGTH_SHORT).show();
+        startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK));
+        finish();
+    }
+    private String currentCompanyId() { return inCompany() ? companyInfo[0] : Supabase.myUid(this, userId); }
+
+    // The quick list from the dashboard: tap a company to open it
+    private void showCompanySwitcher() {
+        JSONArray list = cachedCompanies();
+        if (list.length() == 0) { showCompaniesDialog(); return; }
+        List<String> labels = new ArrayList<>(); List<JSONObject> items = new ArrayList<>();
+        String cur = currentCompanyId();
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject c = list.optJSONObject(i); if (c == null) continue;
+            items.add(c);
+            labels.add((c.optString("id").equals(cur) ? "\u2713 " : "") + (c.optString("name").isEmpty() ? "Unnamed company" : c.optString("name")) + "  \u00b7  " + roleLabel(c.optString("role")) + (c.optString("group_name").trim().isEmpty() ? "" : "  \u00b7  " + c.optString("group_name").trim()));
+        }
+        new AlertDialog.Builder(this).setTitle("Switch company").setItems(labels.toArray(new String[0]), (d, w) -> switchCompany(items.get(w)))
+                .setNeutralButton("Manage", (d, w) -> showCompaniesDialog()).setNegativeButton("Cancel", null).show();
+        loadCompanies((l, err) -> {}); // bring the list up to date for next time
+    }
+
+    // Drawer entry: every company of the account, grouped; new company, members, group, delete, leave
+    private void showCompaniesDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(4));
+        TextView info = new TextView(this);
+        info.setText("Keep the books of several companies under one login, put companies in a group for consolidated statements, and give other BlitzBook accounts a role in a company. Everyone working in a company runs on its owner's subscription.");
+        info.setTextSize(12.5f); info.setPadding(0, 0, 0, dp(8));
+        box.addView(info);
+        LinearLayout listBox = new LinearLayout(this);
+        listBox.setOrientation(LinearLayout.VERTICAL);
+        TextView loading = new TextView(this); loading.setText("Loading..."); loading.setTextSize(13); loading.setPadding(dp(4), dp(8), dp(4), dp(8));
+        listBox.addView(loading);
+        box.addView(boundedScroll(listBox, 0.55), new LinearLayout.LayoutParams(-1, -2));
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Companies").setView(box)
+                .setPositiveButton("New company", null).setNeutralButton("Group statements", (d, w) -> showGroupStatements()).setNegativeButton("Close", null).create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> showNewCompanyDialog(dialog)));
+        dialog.show();
+        loadCompanies((list, err) -> {
+            if (!dialog.isShowing()) return;
+            listBox.removeAllViews();
+            if (err != null) { TextView e = new TextView(this); e.setText(err); e.setTextSize(13); e.setTextColor(RED); e.setPadding(dp(4), dp(4), dp(4), dp(8)); listBox.addView(e); }
+            String cur = currentCompanyId(), me = Supabase.myUid(this, userId);
+            String lastGroup = null;
+            // Own companies first, then by group and name (the server's order)
+            for (int i = 0; i < list.length(); i++) {
+                JSONObject c = list.optJSONObject(i); if (c == null) continue;
+                String g = groupLabel(c);
+                if (!g.equals(lastGroup)) {
+                    lastGroup = g;
+                    TextView h = new TextView(this); h.setText(g.toUpperCase(Locale.ROOT)); h.setTextSize(11); h.setTypeface(Typeface.DEFAULT, Typeface.BOLD); h.setTextColor(0xFF4338CA); h.setPadding(dp(4), dp(12), dp(4), dp(4));
+                    listBox.addView(h);
+                }
+                boolean own = "owner".equals(c.optString("role")), open = c.optString("id").equals(cur), mine = c.optString("owner_id").equals(me);
+                LinearLayout r = row(); r.setPadding(dp(4), dp(8), dp(4), dp(8));
+                LinearLayout txt = new LinearLayout(this); txt.setOrientation(LinearLayout.VERTICAL);
+                TextView nm = new TextView(this); nm.setText(c.optString("name").isEmpty() ? "Unnamed company" : c.optString("name")); nm.setTextSize(14); nm.setTypeface(Typeface.DEFAULT, Typeface.BOLD); nm.setTextColor(0xFF263238);
+                TextView sub = new TextView(this);
+                sub.setText(roleLabel(c.optString("role")) + (mine ? (c.optBoolean("primary") ? "  \u00b7  your first company" : "") : "  \u00b7  owner: " + c.optString("owner_name")) + "  \u00b7  " + (1 + c.optInt("members", 0)) + (c.optInt("members", 0) == 0 ? " member" : " members") + (open ? "  \u00b7  OPEN NOW" : ""));
+                sub.setTextSize(11.5f); sub.setTextColor(open ? GREEN : 0xFF607D8B);
+                txt.addView(nm); txt.addView(sub);
+                r.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
+                Button more = new Button(this); more.setText(open ? "\u22ee" : "Open"); more.setAllCaps(false); more.setTextSize(13); styleButton(more, open ? 0xFF607D8B : NAVY); more.setMinWidth(dp(64)); more.setMinimumWidth(dp(64));
+                more.setOnClickListener(v -> {
+                    List<String> opts = new ArrayList<>(); List<Runnable> acts = new ArrayList<>();
+                    if (!open) { opts.add("Open"); acts.add(() -> { dialog.dismiss(); switchCompany(c); }); }
+                    opts.add("Members"); acts.add(() -> showMembersDialog(c));
+                    if (own || "admin".equals(c.optString("role"))) { opts.add("Group / name"); acts.add(() -> showCompanyGroupDialog(c, dialog)); }
+                    if (own && !c.optBoolean("primary")) { opts.add("Delete company"); acts.add(() -> new AlertDialog.Builder(this).setTitle("Delete Company").setMessage("Delete \"" + c.optString("name") + "\" and all its books (invoices, parties, purchases, everything) for every member? This cannot be undone.\n\nTip: open the company and take an Export first.")
+                            .setNegativeButton("Cancel", null).setPositiveButton("Delete", (d2, w2) -> companyAction(dialog, () -> Supabase.deleteCompany(this, userId, c.optString("id")), "Company deleted", c.optString("id"))).show()); }
+                    if (!own) { opts.add("Leave company"); acts.add(() -> new AlertDialog.Builder(this).setTitle("Leave Company").setMessage("Leave \"" + c.optString("name") + "\"? You will no longer see its books unless the owner adds you again.")
+                            .setNegativeButton("Cancel", null).setPositiveButton("Leave", (d2, w2) -> companyAction(dialog, () -> Supabase.removeMember(this, userId, c.optString("id"), me), "You left " + c.optString("name"), c.optString("id"))).show()); }
+                    new AlertDialog.Builder(this).setTitle(c.optString("name")).setItems(opts.toArray(new String[0]), (d2, w2) -> acts.get(w2).run()).show();
+                });
+                r.addView(more);
+                listBox.addView(r); listBox.addView(divider());
+            }
+            TextView roles = new TextView(this);
+            StringBuilder sb = new StringBuilder("Roles\n");
+            for (int i = 0; i < ROLES.length; i++) sb.append("\u2022 ").append(ROLE_LABELS[i]).append(": ").append(ROLE_HELP[i]).append(i < ROLES.length - 1 ? "\n" : "");
+            roles.setText(sb); roles.setTextSize(11.5f); roles.setTextColor(0xFF607D8B); roles.setPadding(dp(4), dp(12), dp(4), dp(8));
+            listBox.addView(roles);
+        });
+    }
+    // A list that grows with its content up to a share of the screen, then scrolls
+    private ScrollView boundedScroll(View child, double share) {
+        final int max = (int) (getResources().getDisplayMetrics().heightPixels * share);
+        ScrollView sc = new ScrollView(this) {
+            @Override protected void onMeasure(int w, int h) { super.onMeasure(w, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST)); }
+        };
+        sc.addView(child);
+        return sc;
+    }
+    private interface ServerCall { void run() throws Exception; }
+    // Runs a company call off the main thread, then redraws the Companies dialog; leaving the open company goes back to the account's own
+    private void companyAction(AlertDialog dialog, ServerCall call, String done, String leftCid) {
+        new Thread(() -> {
+            String err = null;
+            try { call.run(); } catch (Exception e) { err = e.getMessage(); }
+            final String fErr = err;
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                Toast.makeText(this, fErr == null ? done : fErr, Toast.LENGTH_LONG).show();
+                if (fErr == null && leftCid != null && inCompany() && companyInfo[0].equals(leftCid)) { dialog.dismiss(); switchToRow(accountId()); return; }
+                if (dialog.isShowing()) { dialog.dismiss(); showCompaniesDialog(); }
+            });
+        }).start();
+    }
+    private void showNewCompanyDialog(AlertDialog parent) {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        EditText eName = edit("Company name", false); eName.setSingleLine(true);
+        AutoCompleteTextView eGroup = new AutoCompleteTextView(this); eGroup.setHint("e.g. Sharma Group (optional)"); eGroup.setSingleLine(true); applyBoxBackground(eGroup);
+        eGroup.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_dropdown_item_1line, groupNames(cachedCompanies()))); eGroup.setThreshold(1);
+        box.addView(field("Company name", eName)); box.addView(field("Group (companies in a group appear together in the consolidated statements)", eGroup));
+        TextView hint = new TextView(this); hint.setText("The full profile (GSTIN, address, bank) is filled in under Company Profile once the company is open."); hint.setTextSize(12); hint.setPadding(0, dp(6), 0, 0);
+        box.addView(hint);
+        new AlertDialog.Builder(this).setTitle("New Company").setView(box).setNegativeButton("Cancel", null).setPositiveButton("Create", (d, w) -> {
+            String name = eName.getText().toString().trim(), group = eGroup.getText().toString().trim();
+            if (name.isEmpty()) { Toast.makeText(this, "Enter the company name", Toast.LENGTH_SHORT).show(); return; }
+            new Thread(() -> {
+                JSONObject r = null; String err = null;
+                try { r = Supabase.createCompany(this, userId, name, group); } catch (Sync.SyncException e) { err = e.status == 404 ? "Companies are not set up on the server yet" : e.getMessage(); } catch (Exception e) { err = e.getMessage(); }
+                final JSONObject fr = r; final String fErr = err;
+                runOnUiThread(() -> {
+                    if (isFinishing()) return;
+                    if (fr == null) { Toast.makeText(this, fErr, Toast.LENGTH_LONG).show(); return; }
+                    Toast.makeText(this, "Company created", Toast.LENGTH_SHORT).show();
+                    if (parent.isShowing()) parent.dismiss();
+                    loadCompanies((list, e2) -> new AlertDialog.Builder(this).setTitle("Open " + name + "?").setMessage("Open the new company now to set up its profile? You can switch back any time from the dashboard (Switch company).")
+                            .setNegativeButton("Later", (d2, w2) -> showCompaniesDialog()).setPositiveButton("Open", (d2, w2) -> {
+                                for (int i = 0; i < list.length(); i++) { JSONObject c = list.optJSONObject(i); if (c != null && c.optString("id").equals(fr.optString("id"))) { switchCompany(c); return; } }
+                                showCompaniesDialog();
+                            }).show());
+                });
+            }).start();
+        }).show();
+    }
+    private void showCompanyGroupDialog(JSONObject c, AlertDialog parent) {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        AutoCompleteTextView eGroup = new AutoCompleteTextView(this); eGroup.setHint("e.g. Sharma Group"); eGroup.setSingleLine(true); eGroup.setText(c.optString("group_name")); applyBoxBackground(eGroup);
+        eGroup.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_dropdown_item_1line, groupNames(cachedCompanies()))); eGroup.setThreshold(1);
+        box.addView(field("Group (blank takes the company out of every group)", eGroup));
+        TextView hint = new TextView(this); hint.setText("The company's name comes from its company profile; change it there."); hint.setTextSize(12); hint.setPadding(0, dp(6), 0, 0);
+        box.addView(hint);
+        new AlertDialog.Builder(this).setTitle(c.optString("name")).setView(box).setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", (d, w) -> companyAction(parent, () -> Supabase.updateCompany(this, userId, c.optString("id"), c.optString("name"), eGroup.getText().toString().trim()), "Saved", null)).show();
+    }
+    // The people with access to a company; the owner and admins add, change and remove them
+    private void showMembersDialog(JSONObject c) {
+        boolean manage = "owner".equals(c.optString("role")) || "admin".equals(c.optString("role"));
+        String cid = c.optString("id"), me = Supabase.myUid(this, userId);
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(16), dp(8), dp(16), dp(4));
+        LinearLayout listBox = new LinearLayout(this); listBox.setOrientation(LinearLayout.VERTICAL);
+        TextView loading = new TextView(this); loading.setText("Loading..."); loading.setTextSize(13); loading.setPadding(dp(4), dp(8), dp(4), dp(8)); listBox.addView(loading);
+        box.addView(boundedScroll(listBox, manage ? 0.35 : 0.55), new LinearLayout.LayoutParams(-1, -2));
+        EditText eId = null; Spinner sRole = null;
+        if (manage) {
+            eId = edit("Mobile number or email of a BlitzBook account", false); eId.setSingleLine(true);
+            sRole = new Spinner(this);
+            sRole.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, java.util.Arrays.copyOfRange(ROLE_LABELS, 1, ROLE_LABELS.length)));
+            sRole.setSelection(3);
+            box.addView(field("Add a member", eId)); box.addView(field("Role", sRole));
+            TextView hint = new TextView(this); hint.setText("They must have a BlitzBook account already. The company then appears under Companies in their login, and they work in it on your subscription."); hint.setTextSize(11.5f); hint.setPadding(0, dp(4), 0, 0);
+            box.addView(hint);
+        }
+        final EditText fId = eId; final Spinner fRole = sRole;
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("Members of " + c.optString("name")).setView(box).setNegativeButton("Close", null);
+        if (manage) b.setPositiveButton("Add", null);
+        AlertDialog dialog = b.create();
+        Runnable[] draw = new Runnable[1];
+        draw[0] = () -> new Thread(() -> {
+            JSONArray list = null; String err = null;
+            try { list = Supabase.listMembers(this, userId, cid); } catch (Exception e) { err = e.getMessage(); }
+            final JSONArray fList = list; final String fErr = err;
+            runOnUiThread(() -> {
+                if (!dialog.isShowing()) return;
+                listBox.removeAllViews();
+                if (fList == null) { TextView e = new TextView(this); e.setText(fErr); e.setTextSize(13); e.setTextColor(RED); listBox.addView(e); return; }
+                for (int i = 0; i < fList.length(); i++) {
+                    JSONObject m = fList.optJSONObject(i); if (m == null) continue;
+                    boolean owner = "owner".equals(m.optString("role"));
+                    LinearLayout r = row(); r.setPadding(dp(4), dp(8), dp(4), dp(8));
+                    LinearLayout txt = new LinearLayout(this); txt.setOrientation(LinearLayout.VERTICAL);
+                    TextView nm = new TextView(this); nm.setText((m.optString("name").isEmpty() ? "-" : m.optString("name")) + (m.optString("user_id").equals(me) ? " (you)" : "")); nm.setTextSize(14); nm.setTypeface(Typeface.DEFAULT, Typeface.BOLD); nm.setTextColor(0xFF263238);
+                    TextView sub = new TextView(this); sub.setText(roleLabel(m.optString("role")) + "  \u00b7  " + (m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone") + (m.optString("email").isEmpty() ? "" : "  \u00b7  " + m.optString("email")))); sub.setTextSize(11.5f); sub.setTextColor(0xFF607D8B);
+                    txt.addView(nm); txt.addView(sub);
+                    r.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
+                    if (manage && !owner) {
+                        Button more = new Button(this); more.setText("\u22ee"); more.setAllCaps(false); styleButton(more, 0xFF607D8B); more.setMinWidth(dp(48)); more.setMinimumWidth(dp(48));
+                        more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(m.optString("name")).setItems(new String[]{"Make admin", "Make accountant", "Make sales", "Make viewer", "Remove from company"}, (d, w) -> {
+                            String identity = m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone");
+                            new Thread(() -> {
+                                String e2 = null;
+                                try { if (w == 4) Supabase.removeMember(this, userId, cid, m.optString("user_id")); else Supabase.setMember(this, userId, cid, identity, ROLES[w + 1]); } catch (Exception ex) { e2 = ex.getMessage(); }
+                                final String fe = e2;
+                                runOnUiThread(() -> { Toast.makeText(this, fe == null ? (w == 4 ? "Member removed" : "Role changed") : fe, Toast.LENGTH_LONG).show(); draw[0].run(); });
+                            }).start();
+                        }).show());
+                        r.addView(more);
+                    }
+                    listBox.addView(r); listBox.addView(divider());
+                }
+            });
+        }).start();
+        dialog.setOnShowListener(d -> { if (manage) dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String id = fId.getText().toString().trim(); if (id.isEmpty()) { Toast.makeText(this, "Enter the mobile number or email", Toast.LENGTH_SHORT).show(); return; }
+            String role = ROLES[fRole.getSelectedItemPosition() + 1];
+            new Thread(() -> {
+                JSONObject r = null; String err = null;
+                try { r = Supabase.setMember(this, userId, cid, id, role); } catch (Exception e) { err = e.getMessage(); }
+                final JSONObject fr = r; final String fErr = err;
+                runOnUiThread(() -> { if (!dialog.isShowing()) return; if (fr == null) { Toast.makeText(this, fErr, Toast.LENGTH_LONG).show(); return; } Toast.makeText(this, (fr.optString("name").isEmpty() ? id : fr.optString("name")) + " added as " + roleLabel(role), Toast.LENGTH_LONG).show(); fId.setText(""); draw[0].run(); });
+            }).start();
+        }); });
+        dialog.show();
+        draw[0].run();
+    }
+
+    // ------------------------------------------------------------------ group (consolidated) statements
+    /* The Profit & Loss or Balance Sheet of every company in a group side by side with the group total. The latest books
+       of each company are fetched into its own books file first (one listening round of sync each). Dealings between
+       the companies of the group (an invoice of A on B, a purchase of B from A, and what they owe each other) go in an
+       Eliminations column and out of the total, so the group only counts business with outsiders; a party is matched
+       to a group company by name. Each company's GST stays its own. */
+    private void showGroupStatements() {
+        loadCompanies((list, err) -> {
+            if (err != null && list.length() == 0) { new AlertDialog.Builder(this).setTitle("Group Statements").setMessage(err).setPositiveButton("OK", null).show(); return; }
+            List<String> groups = groupNames(list);
+            if (list.length() < 2) { new AlertDialog.Builder(this).setTitle("Group Statements").setMessage("Only one company so far. Make another under Companies, or ask an owner to add you to theirs, then put the companies in a group (Companies > Group / name).").setPositiveButton("OK", null).show(); return; }
+            List<String> opts = new ArrayList<>(groups); opts.add("All my companies");
+            new AlertDialog.Builder(this).setTitle("Which group?").setItems(opts.toArray(new String[0]), (d, w) -> {
+                String group = w < groups.size() ? groups.get(w) : null;
+                List<JSONObject> members = new ArrayList<>();
+                for (int i = 0; i < list.length(); i++) { JSONObject c = list.optJSONObject(i); if (c != null && (group == null || group.equalsIgnoreCase(c.optString("group_name").trim()))) members.add(c); }
+                String title = group == null ? "All companies" : group;
+                new AlertDialog.Builder(this).setTitle(title).setItems(new String[]{"Profit & Loss", "Balance Sheet"}, (d2, w2) -> {
+                    if (w2 == 0) pickPeriod("Group Profit & Loss", (from, to) -> fetchGroup(members, 0, () -> renderGroup(members, title, true, from, to, null)));
+                    else {
+                        Calendar cal = Calendar.getInstance();
+                        DatePickerDialog dpd = new DatePickerDialog(this, (v, y, m, dd) -> { String asAt = String.format(Locale.US, "%02d/%02d/%04d", dd, m + 1, y); fetchGroup(members, 0, () -> renderGroup(members, title, false, null, null, asAt)); }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH));
+                        dpd.setTitle("Group Balance Sheet as at"); dpd.show();
+                    }
+                }).show();
+            }).show();
+        });
+    }
+    /** The local books row of a company of the account (made if needed); the account row for its own first company. */
+    private long rowOf(JSONObject c) {
+        if (isOwnFirst(c)) return accountId();
+        return accountsDb.companyRow(accountId(), c.optString("id"), c.optString("name"), c.optString("role"), c.optString("group_name"), c.optString("owner_id"));
+    }
+    private AlertDialog groupProgress;
+    // Brings the books of each company up to date, one after the other, then runs done
+    private void fetchGroup(List<JSONObject> members, int i, Runnable done) {
+        if (i >= members.size() || !Supabase.enabled(this)) { if (groupProgress != null) { groupProgress.dismiss(); groupProgress = null; } done.run(); return; }
+        JSONObject c = members.get(i);
+        if (groupProgress == null) groupProgress = new AlertDialog.Builder(this).setTitle("Group Statements").setMessage("Fetching the latest books...").setCancelable(false).show();
+        groupProgress.setMessage("Fetching the latest books of " + c.optString("name") + "...");
+        long row = rowOf(c);
+        if (row == userId) { fetchGroup(members, i + 1, done); return; } // the open company is kept in step by its own sync
+        if (row < 0) { fetchGroup(members, i + 1, done); return; }
+        DatabaseHelper h = DatabaseHelper.forUser(this, row);
+        prepareBooks(h.quietDatabase());
+        Sync.pullOnce(this, row, () -> fetchGroup(members, i + 1, done));
+    }
+    private static class GroupLine {
+        final String label; final int style; final double[] vals; final double elim; final String[] text; // text: ratio lines
+        GroupLine(String label, int style, double[] vals, double elim) { this.label = label; this.style = style; this.vals = vals; this.elim = elim; this.text = null; }
+        GroupLine(String label, String total) { this.label = label; this.style = 0; this.vals = null; this.elim = 0; this.text = new String[]{total}; }
+        double total() { double t = 0; for (double v : vals) t += v; return t - elim; }
+    }
+    private interface GroupValue { double of(int i); }
+    private static String firstLine(String s) { if (s == null) return ""; int nl = s.indexOf('\n'); return (nl < 0 ? s : s.substring(0, nl)).trim(); }
+    private void renderGroup(List<JSONObject> members, String title, boolean pnl, String from, String to, String asAt) {
+        int n = members.size();
+        String[] names = new String[n]; SQLiteDatabase[] dbs = new SQLiteDatabase[n]; boolean[] gst = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            long row = rowOf(members.get(i));
+            DatabaseHelper h = row == userId ? dbHelper : DatabaseHelper.forUser(this, row);
+            if (row != userId) prepareBooks(h.quietDatabase());
+            dbs[i] = h.getReadableDatabase();
+            names[i] = members.get(i).optString("name");
+            Cursor co = dbs[i].query("company_master", new String[]{"company_name", "gst_reg_type"}, null, null, null, null, "id DESC", "1");
+            if (co.moveToFirst()) { if (!co.isNull(0) && !co.getString(0).trim().isEmpty()) names[i] = co.getString(0).trim(); gst[i] = "Regular".equals(co.isNull(1) ? "" : co.getString(1)); }
+            co.close();
+            if (names[i].isEmpty()) names[i] = "Company " + (i + 1);
+        }
+        java.util.Set<String> groupNames = new HashSet<>();
+        for (String nm : names) groupNames.add(nm.trim().toLowerCase(Locale.ROOT));
+        Date dFrom = pnl ? Ledger.parseDate(from) : null, dTo = pnl ? Ledger.parseDate(to) : null, dAsAt = pnl ? null : Ledger.parseDate(asAt);
+        Ledger.ProfitLoss[] pls = new Ledger.ProfitLoss[n]; Ledger.BalanceSheet[] bss = new Ledger.BalanceSheet[n];
+        // Dealings with the other companies of the group, per company: sales, credit notes, purchases, debit notes; receivables, payables
+        double[] eSales = new double[n], eCn = new double[n], ePur = new double[n], eDn = new double[n], eRec = new double[n], ePay = new double[n];
+        java.util.TreeSet<String> eParties = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        boolean anyGst = false;
+        for (int i = 0; i < n; i++) {
+            anyGst |= gst[i];
+            String mine = names[i].trim().toLowerCase(Locale.ROOT);
+            if (pnl) {
+                pls[i] = Ledger.profitLoss(dbs[i], dFrom, dTo);
+                Cursor c = dbs[i].query("invoices", new String[]{"date", "buyer_name_addr", "taxable_value"}, null, null, null, null, null);
+                while (c.moveToNext()) { String p = firstLine(c.getString(1)); String k = p.toLowerCase(Locale.ROOT); if (Ledger.inRange(c.getString(0), dFrom, dTo) && groupNames.contains(k) && !k.equals(mine)) { eSales[i] += c.getDouble(2); eParties.add(p); } }
+                c.close();
+                Cursor q = dbs[i].query("purchases", new String[]{"date", "supplier", "taxable"}, "kind=?", new String[]{Ledger.KIND_PURCHASE}, null, null, null);
+                while (q.moveToNext()) { String p = q.isNull(1) ? "" : q.getString(1).trim(); String k = p.toLowerCase(Locale.ROOT); if (Ledger.inRange(q.getString(0), dFrom, dTo) && groupNames.contains(k) && !k.equals(mine)) { ePur[i] += q.getDouble(2); eParties.add(p); } }
+                q.close();
+                Cursor nt = dbs[i].query("notes", new String[]{"date", "kind", "party", "taxable"}, null, null, null, null, null);
+                while (nt.moveToNext()) { String p = nt.isNull(2) ? "" : nt.getString(2).trim(); String k = p.toLowerCase(Locale.ROOT); if (!Ledger.inRange(nt.getString(0), dFrom, dTo) || !groupNames.contains(k) || k.equals(mine)) continue; if (Ledger.NOTE_CREDIT.equals(nt.getString(1))) eCn[i] += nt.getDouble(3); else eDn[i] += nt.getDouble(3); eParties.add(p); }
+                nt.close();
+            } else {
+                bss[i] = Ledger.balanceSheet(dbs[i], dAsAt);
+                for (Map.Entry<String, Double> e : bss[i].parties.entrySet()) { String k = e.getKey().trim().toLowerCase(Locale.ROOT); if (groupNames.contains(k) && !k.equals(mine)) { if (e.getValue() > 0) eRec[i] += e.getValue(); else ePay[i] -= e.getValue(); eParties.add(e.getKey()); } }
+            }
+        }
+        List<GroupLine> L = new ArrayList<>();
+        final Ledger.ProfitLoss[] fpl = pls; final Ledger.BalanceSheet[] fbs = bss;
+        java.util.function.BiFunction<String, GroupValue, double[]> vals = (lbl, f) -> { double[] v = new double[n]; for (int i = 0; i < n; i++) v[i] = f.of(i); return v; };
+        double sum;
+        if (pnl) {
+            double tSales = 0, tCn = 0, tPur = 0, tDn = 0; for (int i = 0; i < n; i++) { tSales += eSales[i]; tCn += eCn[i]; tPur += ePur[i]; tDn += eDn[i]; }
+            double eGross = tSales - tCn - (tPur - tDn);
+            L.add(new GroupLine("INCOME", 2, new double[n], 0));
+            L.add(new GroupLine("Sales (before GST)", 0, vals.apply("", i -> fpl[i].sales), tSales));
+            L.add(new GroupLine("Less: Credit notes", 0, vals.apply("", i -> fpl[i].salesReturns), tCn));
+            L.add(new GroupLine("Other income (journal)", 0, vals.apply("", i -> fpl[i].otherIncome), 0));
+            L.add(new GroupLine("COST OF GOODS", 2, new double[n], 0));
+            L.add(new GroupLine("Purchases (before GST)", 0, vals.apply("", i -> fpl[i].purchasesValue), tPur));
+            L.add(new GroupLine("Less: Debit notes", 0, vals.apply("", i -> fpl[i].purchaseReturns), tDn));
+            L.add(new GroupLine("Gross Profit", 1, vals.apply("", i -> fpl[i].grossProfit()), eGross));
+            L.add(new GroupLine("EXPENSES", 2, new double[n], 0));
+            java.util.TreeSet<String> cats = new java.util.TreeSet<>(); for (Ledger.ProfitLoss pl : pls) cats.addAll(pl.expensesByCategory.keySet());
+            if (cats.isEmpty()) L.add(new GroupLine("No expenses recorded", 0, new double[n], 0));
+            for (String cat : cats) L.add(new GroupLine(cat, 0, vals.apply("", i -> { Double v = fpl[i].expensesByCategory.get(cat); return v == null ? 0 : v; }), 0));
+            L.add(new GroupLine("Total Expenses", 1, vals.apply("", i -> fpl[i].expenses()), 0));
+            GroupLine net = new GroupLine("Net Profit / (Loss)", 1, vals.apply("", i -> fpl[i].netProfit()), eGross); L.add(net);
+            double netSales = 0, gross = 0, exp = 0; for (int i = 0; i < n; i++) { netSales += pls[i].netSales(); gross += pls[i].grossProfit(); exp += pls[i].expenses(); }
+            netSales -= tSales - tCn; gross -= eGross;
+            L.add(new GroupLine("RATIOS (group, on sales less credit notes)", 2, new double[n], 0));
+            L.add(new GroupLine("Gross profit margin", pctText(gross, netSales)));
+            L.add(new GroupLine("Net profit margin", pctText(net.total(), netSales)));
+            L.add(new GroupLine("Expenses to sales", pctText(exp, netSales)));
+            if (anyGst) {
+                L.add(new GroupLine("GST (not part of profit; each company files its own returns)", 2, new double[n], 0));
+                L.add(new GroupLine("Total output GST on sales", 0, vals.apply("", i -> fpl[i].outputGst()), 0));
+                L.add(new GroupLine("Total input GST on purchases", 0, vals.apply("", i -> fpl[i].inputGst()), 0));
+                L.add(new GroupLine("GST payable under reverse charge", 0, vals.apply("", i -> fpl[i].rcmGst), 0));
+                L.add(new GroupLine("Net GST payable / (credit)", 1, vals.apply("", i -> fpl[i].outputGst() - fpl[i].inputGst() + fpl[i].rcmGst), 0));
+            }
+        } else {
+            double tRec = 0, tPay = 0; for (int i = 0; i < n; i++) { tRec += eRec[i]; tPay += ePay[i]; }
+            L.add(new GroupLine("ASSETS", 2, new double[n], 0));
+            L.add(new GroupLine("Cash in hand", 0, vals.apply("", i -> fbs[i].cash), 0));
+            L.add(new GroupLine("Bank (online & cheque)", 0, vals.apply("", i -> fbs[i].bank), 0));
+            L.add(new GroupLine("Receivables (credit sales & parties)", 0, vals.apply("", i -> fbs[i].receivables), tRec));
+            L.add(new GroupLine("Stock in hand", 0, vals.apply("", i -> fbs[i].stockValue), 0));
+            java.util.TreeSet<String> assets = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER); for (Ledger.BalanceSheet bs : bss) assets.addAll(bs.assets.keySet());
+            for (String a : assets) L.add(new GroupLine(a, 0, vals.apply("", i -> { Double v = fbs[i].assets.get(a); return v == null ? 0 : v; }), 0));
+            if (anyGst) L.add(new GroupLine("Input GST (CGST + SGST + IGST)", 0, vals.apply("", i -> fbs[i].inCgst + fbs[i].inSgst + fbs[i].inIgst), 0));
+            L.add(new GroupLine("Total Assets", 1, vals.apply("", i -> fbs[i].totalAssets()), tRec));
+            L.add(new GroupLine("LIABILITIES & CAPITAL", 2, new double[n], 0));
+            L.add(new GroupLine("Payables (credit purchases, expenses & parties)", 0, vals.apply("", i -> fbs[i].payables), tPay));
+            java.util.TreeSet<String> liabs = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER); for (Ledger.BalanceSheet bs : bss) liabs.addAll(bs.liabilities.keySet());
+            for (String a : liabs) L.add(new GroupLine(a, 0, vals.apply("", i -> { Double v = fbs[i].liabilities.get(a); return v == null ? 0 : v; }), 0));
+            if (anyGst) L.add(new GroupLine("Output GST (CGST + SGST + IGST)", 0, vals.apply("", i -> fbs[i].outCgst + fbs[i].outSgst + fbs[i].outIgst), 0));
+            L.add(new GroupLine("GST payable under reverse charge", 0, vals.apply("", i -> fbs[i].rcmPayable), 0));
+            L.add(new GroupLine("TDS payable", 0, vals.apply("", i -> fbs[i].tdsPayable), 0));
+            L.add(new GroupLine("Owner's capital (accumulated profit / loss)", 0, vals.apply("", i -> fbs[i].capital()), tRec - tPay));
+            L.add(new GroupLine("Total Liabilities & Capital", 1, vals.apply("", i -> fbs[i].totalLiabilitiesBeforeCapital() + fbs[i].capital()), tRec));
+            double curA = 0, curL = 0; for (int i = 0; i < n; i++) { curA += bss[i].cash + bss[i].bank + bss[i].receivables + bss[i].stockValue; curL += bss[i].payables + bss[i].rcmPayable + bss[i].tdsPayable; }
+            curA -= tRec; curL -= tPay;
+            L.add(new GroupLine("RATIOS (group)", 2, new double[n], 0));
+            L.add(new GroupLine("Current ratio (current assets : current liabilities)", ratioText(curA, curL)));
+            L.add(new GroupLine("Working capital (current assets less current liabilities)", money(curA - curL)));
+        }
+        boolean showElim = !eParties.isEmpty();
+        String subtitle = (pnl ? "Period: " + from + " to " + to : "As at " + asAt) + (showElim ? "\nInter-company dealings eliminated: " + TextUtils.join(", ", eParties) : "\nNo dealings between the companies of the group found (parties are matched to companies by name)");
+        // The table: a fixed first column, the companies, eliminations and the group total; scrolls both ways
+        List<String> headers = new ArrayList<>(); headers.add("Particulars"); headers.addAll(java.util.Arrays.asList(names)); if (showElim) headers.add("Eliminations"); headers.add("Group total");
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(12), dp(8), dp(12), dp(4));
+        TextView sub = new TextView(this); sub.setText(subtitle); sub.setTextSize(12); sub.setPadding(dp(4), dp(2), dp(4), dp(8)); box.addView(sub);
+        LinearLayout table = new LinearLayout(this); table.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout head = row(); head.setPadding(dp(4), dp(6), dp(4), dp(6)); head.setBackgroundColor(0xFFE0E7FF);
+        for (int i = 0; i < headers.size(); i++) { TextView h = new TextView(this); h.setText(headers.get(i)); h.setTextSize(11.5f); h.setTypeface(Typeface.DEFAULT, Typeface.BOLD); h.setTextColor(0xFF4338CA); h.setGravity(i == 0 ? Gravity.START : Gravity.END); h.setSingleLine(true); h.setEllipsize(TextUtils.TruncateAt.END); head.addView(h, new LinearLayout.LayoutParams(dp(i == 0 ? 170 : 120), -2)); }
+        table.addView(head);
+        List<String[]> rowsOut = new ArrayList<>();
+        for (GroupLine l : L) {
+            LinearLayout r = row(); r.setPadding(dp(4), dp(l.style == 2 ? 9 : 5), dp(4), dp(5));
+            if (l.style == 2) r.setBackgroundColor(0xFFE7EBEF);
+            String[] cells = new String[headers.size()]; cells[0] = l.label;
+            TextView lab = new TextView(this); lab.setText(l.label); lab.setTextSize(12.5f); if (l.style != 0) lab.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            r.addView(lab, new LinearLayout.LayoutParams(dp(170), -2));
+            for (int i = 1; i < headers.size(); i++) {
+                String t;
+                if (l.style == 2) t = "";
+                else if (l.text != null) t = i == headers.size() - 1 ? l.text[0] : "";
+                else if (i <= n) t = money(l.vals[i - 1]);
+                else if (showElim && i == n + 1) t = l.elim == 0 ? "" : "(" + money(l.elim) + ")";
+                else t = money(l.total());
+                cells[i] = t.replace("\u20b9 ", "");
+                TextView v = new TextView(this); v.setText(t); v.setTextSize(12.5f); v.setGravity(Gravity.END);
+                if (l.style != 0 || i == headers.size() - 1) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                if (showElim && i == n + 1) v.setTextColor(RED);
+                r.addView(v, new LinearLayout.LayoutParams(dp(120), -2));
+            }
+            rowsOut.add(cells);
+            table.addView(r);
+            if (l.style != 2) table.addView(divider());
+        }
+        HorizontalScrollView hs = new HorizontalScrollView(this); hs.addView(table);
+        ScrollView sc = new ScrollView(this); sc.addView(hs);
+        box.addView(sc, new LinearLayout.LayoutParams(-1, dp(400)));
+        String fileTag = pnl ? "Group_Profit_Loss" : "Group_Balance_Sheet", fullTitle = (pnl ? "Group Profit & Loss" : "Group Balance Sheet") + " - " + title;
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(fullTitle).setView(box)
+                .setNegativeButton("Close", null).setNeutralButton("PDF", null).setPositiveButton("Export Excel", null).create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> exportRowsAsExcel(fileTag, headers.toArray(new String[0]), rowsOut));
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> exportRowsAsPdf(fileTag, fullTitle, subtitle.replace("\n", "  \u00b7  "), headers.toArray(new String[0]), rowsOut, 1));
+        });
+        dialog.show();
+        if (dialog.getWindow() != null) dialog.getWindow().setLayout(-1, -2);
     }
 
     private abstract static class SimpleSpinnerListener implements AdapterView.OnItemSelectedListener {

@@ -10,6 +10,8 @@
   const UI = {
     // A short note at the bottom that fades out; cls "ok" makes it green (good news such as an activation)
     toast(msg, ms, cls) {
+      // A refusal (a role that may not save, Store.set) stays on screen over the "saved" note that follows it
+      if (UI.hold && Date.now() < UI.hold) return;
       $$('.toast').forEach(t => t.remove());
       const t = document.createElement('div'); t.className = 'toast' + (cls ? ' ' + cls : ''); t.textContent = msg; document.body.appendChild(t);
       setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 700); }, ms || 2600);
@@ -156,6 +158,8 @@
     file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16.5 6.5l3 3M13.5 9.5l2 2"/>',
     moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.5a5 5 0 0 1 6 4.5"/>',
+    layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
   };
   function icon(name) { return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
@@ -179,7 +183,7 @@
     const all = Sub.isLite() ? LITE_TILES : TILES;
     const byKey = new Map(all.map(t => [t.key, t])), out = (Store.get('tile_order', []) || []).map(k => byKey.get(k)).filter(Boolean);
     all.forEach(t => { if (!out.includes(t)) out.push(t); });
-    return out;
+    return out.filter(t => Companies.tileAllowed(t.key));
   }
   /* Tiles can be dragged into a new order. With a mouse a tile is dragged straight away; on a touch screen the
      page has to keep scrolling, so dragging there happens in "Arrange" mode (the link beside the heading), which
@@ -230,12 +234,17 @@
     { key: 'gst', t: 'GST', ic: 'file' },
     // API keys for the MCP server: an AI assistant working with these books (server/supabase/functions/mcp)
     { key: 'ai', t: 'AI Access', ic: 'key' },
+    // Several companies under one login, groups, members with roles, and the consolidated statements (companies.js)
+    { key: 'companies', t: 'Companies', ic: 'users' },
+    { key: 'group', t: 'Group Statements', ic: 'layers' },
     { key: 'subscription', t: 'Subscription', ic: 'star', dlg: true }
   ];
   // Routes that open a dialog over the current screen: they never become the active link or the screen to redraw
   const DIALOGS = ['company', 'subscription', 'sync'];
   // What an account on an invoice pack gets: invoicing only (Sub.isLite)
   const LITE_NAV = ['dashboard', 'salesReport', 'backup', 'gst', 'ai', 'subscription'];
+  // Screens that belong to the account rather than to a company: not offered while another company's books are open
+  const ACCOUNT_NAV = ['ai'];
   const LITE_TILES = [
     { key: 'invoice', t: 'New Invoice', ic: 'receipt', a: '#4F46E5', b: '#6366F1' },
     { key: 'sales', t: 'Sales', ic: 'rupee', a: '#0F766E', b: '#14B8A6' },
@@ -245,7 +254,7 @@
     { key: 'suppliers', t: 'Supplier', ic: 'truck', a: '#C2410C', b: '#F97316' },
     { key: 'reports', t: 'Sales Report', ic: 'chart', a: '#0369A1', b: '#0EA5E9' }
   ];
-  const navItems = () => Sub.isLite() ? NAV.filter(n => LITE_NAV.includes(n.key)) : NAV;
+  const navItems = () => (Sub.isLite() ? NAV.filter(n => LITE_NAV.includes(n.key)) : NAV).filter(n => Companies.mayOpen(n.key) && !(Store.cid && ACCOUNT_NAV.includes(n.key)));
   // The Android app, served next to the portal. The iPhone / iPad app: the App Store link once it is published
   // (ios/README.md); until then the portal itself is installed from Safari as a web app.
   const APK_URL = 'BlitzBook.apk';
@@ -265,9 +274,13 @@
       Auth.login();
     },
     login(u, token) {
-      this.user = u; Store.uid = u.id; Store.setSession({ uid: u.id });
+      this.user = u; Store.open(u.id, ''); Store.setSession({ uid: u.id });
       if (token) Sync.setToken(token);
       Sub.markRegistered();
+      // The company this browser last had open for the account (companies.js); the list itself is refreshed in the background
+      const last = Companies.lastCid();
+      if (last && Companies.find(last)) Companies.enter(u, last);
+      Companies.refresh();
       this.shell();
       // A reload or a bookmark opens the screen in the address; otherwise the dashboard
       const t = this.fromHash();
@@ -285,7 +298,7 @@
       const fresh = !Sync.state().epoch, first = Sync.start(u);
       if (fresh) first.then(() => { if (this.user === u) { this.refresh(); settle(); } }); else settle();
     },
-    logout() { clearTimeout(this.subTimer); Sync.stop(); Store.setSession(null); this.user = null; Store.uid = null; this.current = null; $('#dialogs').innerHTML = ''; this.lastHash = ''; try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* fine */ } Auth.login(); },
+    logout() { clearTimeout(this.subTimer); Sync.stop(); Store.setSession(null); this.user = null; Store.uid = null; Store.cid = ''; Store.account = null; this.current = null; $('#dialogs').innerHTML = ''; this.lastHash = ''; try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* fine */ } Auth.login(); },
     identity() { return this.user.phone || this.user.email || ''; },
     shell() {
       $('#root').innerHTML =
@@ -293,7 +306,7 @@
         '<nav class="nav" id="nav" aria-label="Main">' + navItems().map(n => '<button class="navlink" data-go="' + n.key + '">' + icon(n.ic) + '<span>' + esc(n.t) + '</span></button>').join('') + '</nav>' +
         '<div class="bar-right">' + (Native.ios ? '' : '<span class="dlgroup" id="dlApp"><button class="navlink dl" id="dlAndroid" title="Download the BlitzBook Android app (APK)">' + icon('android') + '<span>Android App</span></button>' +
           '<button class="navlink dl" id="dlIos" title="BlitzBook on iPhone / iPad">' + icon('apple') + '<span>iOS App</span></button></span>') +
-        '<button class="cochip" id="barCo" title="Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
+        '<button class="cochip" id="barCo" title="Switch company / Company Profile"><span class="avatar" id="barAv"></span><span class="nm" id="barSub"></span></button>' +
         '<button class="navlink theme" id="themeBtn" title="Dark / light mode"></button>' +
         '<button class="navlink logout" id="logoutBtn" title="Logout">' + icon('logout') + '<span>Logout</span></button></div></header>' +
         '<main class="main" id="view"></main>';
@@ -301,12 +314,17 @@
       if ($('#dlAndroid')) { $('#dlAndroid').onclick = () => GetApp.android(); $('#dlIos').onclick = () => GetApp.ios(); }
       $('#themeBtn').onclick = () => Theme.toggle();
       Theme.apply();
-      $('#barCo').onclick = () => this.go('company');
+      $('#barCo').onclick = () => Companies.switcher();
       $('#logoutBtn').onclick = () => UI.confirm('Logout', 'Do you want to logout?', () => this.logout(), 'Logout');
       $$('#nav [data-go]').forEach(el => el.onclick = () => this.go(el.dataset.go));
       this.refreshBar();
     },
-    refreshBar() { if (!this.user || !$('#barSub')) return; const c = Store.company(); $('#barSub').textContent = c.name || 'Set up company'; $('#barAv').textContent = ((c.name || this.user.name || 'B').trim()[0] || 'B').toUpperCase(); },
+    refreshBar() {
+      if (!this.user || !$('#barSub')) return;
+      const c = Store.company(), name = c.name || Companies.currentName() || '';
+      $('#barSub').textContent = (name || 'Set up company') + (Store.cid ? ' · ' + Companies.roleLabel() : '');
+      $('#barAv').textContent = ((name || this.user.name || 'B').trim()[0] || 'B').toUpperCase();
+    },
     // The top navigation follows the subscription kind (every screen, or invoicing only on an invoice pack)
     refreshNav() {
       const nav = $('#nav'); if (!nav) return;
@@ -326,6 +344,7 @@
     go(route, params) {
       const fn = this.routes[route];
       if (!fn) { UI.toast('Screen not available: ' + route); return; }
+      if (!Companies.mayOpen(route)) { UI.hold = 0; UI.toast('Your role in this company (' + Companies.roleLabel() + ') does not open this screen', 4000); if (!this.current) route = 'dashboard'; else return; }
       if (!DIALOGS.includes(route)) { window.scrollTo(0, 0); this.markNav(route); this.current = { route, params: params || {} }; this.stale = false; $('#view').classList.remove('still'); this.setHash(route, params || {}); }
       fn(params || {});
       this.refreshBar();
@@ -642,7 +661,7 @@
     requestAnimationFrame(step);
   }
   App.routes.dashboard = function () {
-    const c = Store.company(), invs = Biz.invoices();
+    const c = Store.company(), invs = Biz.invoices(), co = Companies.current();
     const now = new Date(), h = now.getHours();
     const greet = (h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening') + ' · ' + now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
@@ -657,7 +676,10 @@
       '<section class="hero"><span class="orb o1"></span><span class="orb o2"></span>' +
       '<div class="art" aria-hidden="true"><div class="sheet s1"><i></i><i></i><i></i><i></i><u></u></div><div class="sheet s2"><i></i><i></i><i></i><i></i><u></u></div><div class="coin">₹</div></div>' +
       '<div class="greet">' + esc(greet) + '</div><h1 class="co">' + esc(c.name || 'Set up your Company Profile') + '</h1>' +
-      '<div class="chips"><span class="chip">' + (c.gstin ? 'GSTIN ' + esc(c.gstin) : 'No GSTIN') + '</span><span class="chip">' + esc(c.activity || 'General') + '</span></div>' +
+      '<div class="chips"><span class="chip">' + (c.gstin ? 'GSTIN ' + esc(c.gstin) : 'No GSTIN') + '</span><span class="chip">' + esc(c.activity || 'General') + '</span>' +
+      // Which company of the account is open, with the group and the role there; the chip switches companies
+      (co && co.group_name ? '<span class="chip">' + esc(co.group_name) + '</span>' : '') + (Store.cid ? '<span class="chip">' + esc(Companies.roleLabel()) + (co && co.owner_name ? ' · ' + esc(co.owner_name) : '') + '</span>' : '') +
+      (Companies.list().length > 1 || Store.cid ? '<button class="chip tap" id="coSwitch" title="Switch company">Switch company ▾</button>' : '') + '</div>' +
       '<div class="cta"><button class="btn light" data-go="invoice">' + icon('plus') + 'New Invoice</button><button class="btn ghost" data-go="sales">View Sales' + icon('arrow') + '</button></div></section>' +
       (recent.length ? '<div class="section-title">Recent products</div><div class="recent">' + recent.map(r => '<button data-item="' + esc(r) + '">' + esc(r) + '</button>').join('') + '</div>' : '') +
       '<div class="section-title">What would you like to do?<span class="tilehint"><button class="link small" id="tileArrange">Arrange</button>' + ((Store.get('tile_order', []) || []).length ? ' · <button class="link small" id="tileReset">Reset order</button>' : '') + '</span></div><div class="tiles dash" id="tiles">' +
@@ -668,9 +690,14 @@
       (Sub.isLite() ? stat('stPack', 'star', '#B45309', '#F59E0B', 'Invoices left', Sub.invoicesLeft() + ' of ' + Sub.invoiceQuota(), (Sub.packUntil() ? 'Use by ' + U.pad(new Date(Sub.packUntil()).getDate()) + '/' + U.pad(new Date(Sub.packUntil()).getMonth() + 1) + '/' + new Date(Sub.packUntil()).getFullYear() : 'In your invoice pack') + ' · credit and debit notes count · tap to buy more', 'subscription')
         : stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging')) + '</div>');
     countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
+    if ($('#coSwitch')) $('#coSwitch').onclick = () => Companies.switcher();
     $$('[data-go]', root).forEach(el => el.onclick = () => {
       const k = el.dataset.go;
-      if (k === 'reports') { if (Sub.isLite()) App.go('salesReport'); else UI.menu('Reports', ['Sales Report', 'Outstanding & Ageing', 'Party Ledger', 'Profit & Loss', 'Balance Sheet', 'Stock in Hand'], (i) => App.go(['salesReport', 'aging', 'ledger', 'pnl', 'balance', 'stock'][i])); }
+      if (k === 'reports') {
+        // Only the reports the role may open (a sales member gets the sales side)
+        const all = [['Sales Report', 'salesReport'], ['Outstanding & Ageing', 'aging'], ['Party Ledger', 'ledger'], ['Profit & Loss', 'pnl'], ['Balance Sheet', 'balance'], ['Stock in Hand', 'stock'], ['Group Statements', 'group']].filter(r => Companies.mayOpen(r[1]));
+        if (Sub.isLite()) App.go('salesReport'); else UI.menu('Reports', all.map(r => r[0]), (i) => App.go(all[i][1]));
+      }
       else if (k === 'cnotes') App.go('notes', { kind: 'CN' });
       else if (k === 'dnotes') App.go('notes', { kind: 'DN' });
       else if (k === 'customers') App.go('contacts', { type: 'Customer' });
@@ -784,6 +811,15 @@
   const Subscription = {
     dialog(locked) {
       if ($('#subDlg')) { if (!locked || $('#subDlg.locked')) return; $('#subDlg').remove(); }
+      // Another company's books run on the owner's subscription: nothing to buy or activate from here
+      if (Store.cid) {
+        const co = Companies.current(), own = co && co.role === 'owner';
+        const bg = UI.modal({ title: locked ? 'Subscription Required' : 'Subscription', cancelable: !locked,
+          body: '<p style="white-space:pre-line">' + esc(Sub.statusText() + '.\n\n' + (own ? 'This company runs on your own subscription: renew it from your first company (switch company, then Subscription).' : 'This company runs on the subscription of its owner' + (co && co.owner_name ? ', ' + co.owner_name : '') + '. Ask them to renew it.')) + '</p>',
+          buttons: [{ label: locked ? 'Logout' : 'Close', cls: 'outline', onClick: () => { if (locked) App.logout(); } }, { label: 'Switch company', cls: 'blue', onClick: () => { Companies.switcher(); return false; } }] });
+        bg.id = 'subDlg'; if (locked) bg.classList.add('locked');
+        return;
+      }
       const pending = Sub.pendingRequest();
       const msg = (locked ? (Sub.isOnTrial() && !Sub.invoiceQuota() ? 'Your free ' + Sub.TRIAL_LABEL + ' activation has ended.' : Sub.statusText() + '.') + '\n\nA subscription is needed to continue.' : Sub.statusText() + '.') +
         (Sub.isLite() ? '\n\nOn an invoice pack only invoicing is offered: invoices, credit and debit notes, customers and suppliers, the sales report. Every saved invoice or note uses one invoice of the pack and cannot be changed or deleted afterwards. A monthly or longer plan opens every feature.' : '') +

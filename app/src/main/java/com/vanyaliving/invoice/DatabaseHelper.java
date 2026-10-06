@@ -11,7 +11,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     // vanya.db holds the login accounts. Each account's business data (company profile, invoices,
     // contacts, items) lives in its own database file so users never see each other's details.
     private static final String DATABASE_NAME = "vanya.db";
-    private static final int DATABASE_VERSION = 5;
+    private static final int DATABASE_VERSION = 6;
     private static final String PREFS = "invoice_prefs";
     private static final String LEGACY_OWNER = "legacy_owner_id";
 
@@ -59,6 +59,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, address TEXT, phone TEXT, gstin TEXT, state TEXT)");
         db.execSQL("CREATE TABLE history (id INTEGER PRIMARY KEY AUTOINCREMENT, contact_id INTEGER, invoice_no TEXT, date TEXT, amount REAL, taxable REAL, gst REAL)");
         db.execSQL("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT UNIQUE, password TEXT, phone TEXT)");
+        addCompanyColumns(db);
         createInvoiceTables(db);
     }
 
@@ -91,10 +92,67 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         if (oldVersion < 5) {
             db.execSQL("ALTER TABLE users ADD COLUMN phone TEXT");
         }
+        if (oldVersion < 6) addCompanyColumns(db);
+    }
+
+    // A company opened under an account (server/supabase/companies.sql) is a row of users too: its own books file,
+    // sync state and subscription prefs follow from its id like an account's. The row carries no login; account_id
+    // names the account whose credentials, token and identity it uses.
+    private static final String[] COMPANY_COLUMNS = {"company_id TEXT", "account_id INTEGER", "company_name TEXT", "role TEXT", "group_name TEXT", "owner_id TEXT"};
+    private void addCompanyColumns(SQLiteDatabase db) {
+        Cursor c = db.rawQuery("PRAGMA table_info(users)", null);
+        java.util.Set<String> have = new java.util.HashSet<>();
+        while (c.moveToNext()) have.add(c.getString(c.getColumnIndexOrThrow("name")).toLowerCase(java.util.Locale.ROOT));
+        c.close();
+        for (String col : COMPANY_COLUMNS) if (!have.contains(col.split(" ")[0])) db.execSQL("ALTER TABLE users ADD COLUMN " + col);
+    }
+
+    /** The account behind a users row: the row itself for an account, the owning account for a company row. */
+    public long accountOf(long userId) {
+        Cursor c = getReadableDatabase().query("users", new String[]{"account_id"}, "id=?", new String[]{String.valueOf(userId)}, null, null, null);
+        long id = c.moveToFirst() && !c.isNull(0) ? c.getLong(0) : userId;
+        c.close();
+        return id;
+    }
+
+    /** {company id, name, role, group, owner id} of a company row, or null for an account's own first company. */
+    public String[] companyInfo(long userId) {
+        Cursor c = getReadableDatabase().query("users", new String[]{"company_id", "company_name", "role", "group_name", "owner_id"}, "id=? AND company_id IS NOT NULL AND company_id<>''", new String[]{String.valueOf(userId)}, null, null, null);
+        String[] out = null;
+        if (c.moveToFirst()) { out = new String[5]; for (int i = 0; i < 5; i++) out[i] = c.isNull(i) ? "" : c.getString(i).trim(); }
+        c.close();
+        return out;
+    }
+
+    /** The local row of a company opened under an account, made the first time; the name, role and group are brought up to date. */
+    public long companyRow(long accountId, String companyId, String name, String role, String group, String ownerId) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put("company_name", name == null ? "" : name); cv.put("role", role == null ? "" : role); cv.put("group_name", group == null ? "" : group); cv.put("owner_id", ownerId == null ? "" : ownerId);
+        Cursor c = db.query("users", new String[]{"id"}, "company_id=? AND account_id=?", new String[]{companyId, String.valueOf(accountId)}, null, null, null);
+        long id = c.moveToFirst() ? c.getLong(0) : -1;
+        c.close();
+        if (id >= 0) { db.update("users", cv, "id=?", new String[]{String.valueOf(id)}); return id; }
+        cv.put("company_id", companyId); cv.put("account_id", accountId);
+        return db.insert("users", null, cv);
+    }
+
+    /** Every company row opened under an account: id, company id. */
+    public java.util.Map<String, Long> companyRows(long accountId) {
+        java.util.Map<String, Long> out = new java.util.HashMap<>();
+        Cursor c = getReadableDatabase().query("users", new String[]{"id", "company_id"}, "account_id=?", new String[]{String.valueOf(accountId)}, null, null, null);
+        while (c.moveToNext()) if (!c.isNull(1)) out.put(c.getString(1), c.getLong(0));
+        c.close();
+        return out;
+    }
+
+    /** Forgets the local rows of companies the account no longer has access to (their books files stay until reinstall). */
+    public void dropCompanyRows(long accountId, java.util.Set<String> keep) {
+        for (java.util.Map.Entry<String, Long> e : companyRows(accountId).entrySet()) if (!keep.contains(e.getKey())) getWritableDatabase().delete("users", "id=?", new String[]{String.valueOf(e.getValue())});
     }
 
     private long firstUserId() {
-        Cursor c = getReadableDatabase().rawQuery("SELECT MIN(id) FROM users", null);
+        Cursor c = getReadableDatabase().rawQuery("SELECT MIN(id) FROM users WHERE account_id IS NULL", null);
         long id = c.moveToFirst() && !c.isNull(0) ? c.getLong(0) : -1;
         c.close();
         return id;
@@ -145,6 +203,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
     // The login the account was registered with (phone, else email); activation codes are tied to it
     public String userIdentity(long userId) {
+        userId = accountOf(userId);
         Cursor c = getReadableDatabase().query("users", new String[]{"phone", "email"}, "id=?", new String[]{String.valueOf(userId)}, null, null, null);
         String id = "";
         if (c.moveToFirst()) {
@@ -156,6 +215,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     }
 
     public String userEmail(long userId) {
+        userId = accountOf(userId);
         Cursor c = getReadableDatabase().query("users", new String[]{"email"}, "id=?", new String[]{String.valueOf(userId)}, null, null, null);
         String email = c.moveToFirst() && !c.isNull(0) ? c.getString(0).trim() : "";
         c.close();
@@ -164,6 +224,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
     /** name, phone, email, password of an account, or null when it does not exist. */
     public String[] userRecord(long userId) {
+        userId = accountOf(userId);
         Cursor c = getReadableDatabase().query("users", new String[]{"name", "phone", "email", "password"}, "id=?", new String[]{String.valueOf(userId)}, null, null, null);
         String[] out = null;
         if (c.moveToFirst()) {

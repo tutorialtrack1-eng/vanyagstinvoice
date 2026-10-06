@@ -37,6 +37,7 @@ here and vice versa, and the trial and activation are shared.
 | `js/money.js` | Receipts & Payments (kept as journal vouchers), receipt / payment voucher printout, bank statement upload |
 | `js/reports.js` | Sales report, Profit & Loss, Balance sheet, period picker, Excel export |
 | `js/gst.js` | GST returns: fetches a return period from the books and writes the GSTR-1 and GSTR-3B JSON files for the GST portal's offline tool (yearly plan or longer) |
+| `js/companies.js` | Companies: several companies under one login (each in its own storage namespace with its own sync), company groups, members with roles (owner, admin, accountant, sales, viewer) and what each role may open and change, the company switcher, and Group Statements (consolidated Profit & Loss / Balance Sheet with inter-company eliminations) |
 
 ## Screens
 
@@ -102,6 +103,28 @@ Everything the app has:
 - Sales report, Profit & Loss and Balance Sheet with the same lines and figures as the app, Excel export.
   Receivables and payables are party-wise: credit sales, credit purchases, notes on account and receipts /
   payments net off per customer or supplier, and each outstanding party is listed.
+
+## Companies, groups and members
+
+- **Companies** (top bar) lists every company the account owns or has been given a role in, grouped. *New
+  company* makes another company owned by the account (its profile is then filled in under Company Profile);
+  *Group / name* puts a company in a group; *Members* adds other BlitzBook accounts by mobile number or email
+  with a role and changes or removes them; *Delete* (owner) removes a company with all its books; *Leave*
+  drops a company one was invited to. The company chip in the top bar (and *Switch company* on the dashboard)
+  switches between companies; the chip shows the role in another owner's company.
+- Roles: **Owner** everything, members, subscription, deleting the company; **Admin** everything in the books,
+  the profile and the members; **Accountant** every record of the books, not the profile or members; **Sales**
+  sales invoices, delivery challans, credit / debit notes, receipts, customers and items; **Viewer** looks at
+  everything, changes nothing. Screens and tiles a role cannot use are not offered; a save a role may not make
+  is refused with a note, and the server refuses it as well.
+- Each company has its own storage namespace in the browser and its own sync; the account's own first company
+  is the one it always had. Everyone working in a company runs on its owner's subscription (shown under
+  Subscription); AI Access belongs to the account and is offered in its own company only.
+- **Group Statements** (top bar, Reports): choose a group or all companies, Profit & Loss for a period or
+  Balance Sheet as at a date. The latest books of every company are fetched first; the table has a column per
+  company, an Eliminations column when the companies dealt with each other (sales, purchases, credit / debit
+  notes and balances between them, parties matched to companies by name) and the group total, with group
+  ratios, Excel and PDF. Each company's GST stays its own.
 
 ## Sync with the app
 
@@ -212,6 +235,10 @@ Days can be 30, 365, 730 or 1825. The identity must be what the user registered 
   and the due date on the PDF, the GST lock and the GSTR-1 / GSTR-3B JSON, dark mode, in a portal opened as a file.
 - `PLAYWRIGHT_CORE=/path/to/playwright-core node tools/smoke.js` — drives the portal in Chromium through
   every screen, then a second browser signs in to the same account and both must stay in step.
+- `node server/supabase/companies-test.js` — companies, groups, roles and the group statements against a stand-in
+  for Supabase that applies the rules of `companies.sql` (`server/supabase/standin.js`).
+- `PLAYWRIGHT_CORE=/path/to/playwright-core node tools/companies.js` — the Companies, switcher, members and Group
+  Statements screens in Chromium, an owner and a member with changing roles, against the same stand-in.
 
 ## Customising
 

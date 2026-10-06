@@ -1,6 +1,6 @@
 {
-  "versionCode": 8,
-  "versionName": "1.7",
+  "versionCode": 9,
+  "versionName": "1.8",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "Receipts: money received against a sale is recorded and comes out as a receipt voucher PDF (Rct on an invoice in Sales, + Receipt in Journal). Transporter line of activity: consignor / consignee, LR number and date, from / to, vehicle and goods on the invoice. AI Access: one universal API key for any assistant."
+  "notes": "Companies: keep the books of several companies under one login and switch between them (dashboard > Switch company). Groups and members: put companies in a group and give other BlitzBook accounts a role in a company (owner, admin, accountant, sales, viewer). Group Statements: the Profit & Loss and Balance Sheet of every company in a group side by side with inter-company eliminations and the group total."
 }

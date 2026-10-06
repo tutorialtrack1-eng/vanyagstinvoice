@@ -27,6 +27,15 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   on the invoice screen in challan mode (no rate needed), printed as a challan PDF, and turned into a Credit
   invoice with Make Invoice; the invoice carries the challan number under Delivery Note and the challan shows
   which invoice it became. A challan PDF for any saved invoice from the DC button beside it in Sales.
+- Companies (side menu): the books of several companies under one login, each with its own profile, parties,
+  invoices and reports; Switch company on the dashboard moves between them. Companies go in groups
+  ("Sharma Group") and other BlitzBook accounts get a role in a company: owner, admin, accountant, sales or
+  viewer. Everyone working in a company runs on its owner's subscription; the server refuses what a role may
+  not change (`server/supabase/companies.sql`).
+- Group Statements (side menu, Reports): the Profit & Loss or Balance Sheet of every company in a group side by
+  side with the group total, after fetching each company's latest books. Dealings between companies of the group
+  (an invoice of A on B, B's purchase from A, what they owe each other; parties matched to companies by name) go
+  in an Eliminations column and out of the total. Excel and PDF.
 - Upload PO (Sales): a CSV / Excel file of customer purchase orders in the BlitzBook template (Template button;
   one row per item with the PO Number on each row) previews what each PO will do, then every PO becomes one
   Credit invoice: a PO number already on an invoice updates that invoice, the rest are inserted in bulk;
@@ -49,6 +58,9 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   (`server/supabase/README.md`, *AI access*).
 - Registration and password reset OTPs are sent by Supabase Auth (`server/supabase/README.md`) or by the
   sync server (`server/README.md`, *OTP delivery*); with neither, the OTP is shown on screen (test mode).
+- Companies, groups, members with roles and the group statements need the Supabase project with
+  `server/supabase/companies.sql` run (`server/supabase/README.md`, *Companies*); the Node sync server keeps one
+  company per account.
 
 ## Publishing a new APK
 
