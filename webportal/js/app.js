@@ -909,7 +909,7 @@
   App.routes.sync = () => SyncUI.dialog();
 
   // ------------------------------------------------------------ AI access: API keys for the MCP server
-  /* An AI assistant (Claude and other MCP clients) reaches these books through the Supabase Edge Function
+  /* Any AI assistant that speaks MCP (ChatGPT, Claude, Gemini, Copilot ...) reaches these books through the Supabase Edge Function
      server/supabase/functions/mcp with an API key made here (server/supabase/mcp.sql). A key is shown once, when it
      is made; Supabase keeps only its hash. A read-only key looks; a read & write key can also save invoices,
      contacts and items. Revoking a key deletes it. */
@@ -923,8 +923,8 @@
     async screen() {
       const here = () => App.current && App.current.route === 'ai' && !!$('#aiKeys');
       const root = App.view(App.header('AI Access') +
-        '<div class="card white"><div class="hd">Connect an AI assistant</div><div class="bd"><p>Let an AI assistant such as Claude work with your books: ask it for this month\'s sales, who still owes you money or what a customer bought, or have it make an invoice for you. It connects to BlitzBook\'s MCP server with an API key you make here.</p>' +
-        UI.field('MCP server address', '<input id="aiUrl" readonly value="' + esc(this.url()) + '">', { hint: 'The same address for every key; the key decides whose books are opened and what may be done with them.' }) +
+        '<div class="card white"><div class="hd">Connect an AI assistant</div><div class="bd"><p>Let any AI assistant work with your books: ChatGPT, Claude, Gemini, Copilot or any other app that connects to MCP servers. Ask it for this month\'s sales, who still owes you money or what a customer bought, or have it make an invoice for you. One universal API key made here works with every assistant.</p>' +
+        UI.field('MCP server address', '<input id="aiUrl" readonly value="' + esc(this.url()) + '">', { hint: 'The same address for every assistant and every key; the key decides whose books are opened and what may be done with them.' }) +
         '<div class="btnrow"><button class="btn outline" id="aiCopyUrl">Copy address</button><button class="btn green" id="aiNew">' + icon('plus') + ' New API key</button></div></div></div>' +
         '<div class="card white"><div class="hd">API keys</div><div class="bd" id="aiKeys"><div class="hint">Loading…</div></div></div>');
       App.wireBack(root);
@@ -948,7 +948,7 @@
     },
     create() {
       UI.modal({ title: 'New API Key',
-        body: UI.field('Name', UI.input('akName', '', { placeholder: 'e.g. Claude on my laptop', attrs: ' maxlength="60"' }), { hint: 'To tell your keys apart later.' }) +
+        body: UI.field('Name', UI.input('akName', '', { placeholder: 'e.g. Office laptop', attrs: ' maxlength="60"' }), { hint: 'Where or by whom the key is used, to tell your keys apart later.' }) +
           UI.field('Access', UI.select('akScope', [['read', 'Read only - look at the books'], ['write', 'Read & write - also save invoices, contacts and items']], 'read'), { hint: 'Choose read only unless the assistant has to enter things for you. An invoice saved by an assistant counts like any other invoice.' }),
         buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Make key', cls: 'green', onClick: async (bg) => {
           let r;
@@ -959,15 +959,16 @@
           return true;
         } }] });
     },
-    // The one time the key itself is on screen, with what to paste where
+    // The one time the key itself is on screen, with what to paste into the assistant. The same key and address
+    // serve every assistant; nothing here is specific to one of them.
     show(k) {
-      const url = this.url(), cmd = 'claude mcp add --transport http blitzbook ' + url + ' --header "Authorization: Bearer ' + k.key + '"';
+      const url = this.url();
       const box = (id, text, rows) => '<textarea id="' + id + '" readonly rows="' + rows + '" style="min-height:0;font-family:monospace;font-size:12.5px;word-break:break-all">' + esc(text) + '</textarea>';
       const bg = UI.modal({ title: 'API Key: ' + k.name, wide: true, cancelable: false, focus: false,
         body: '<p><b>Copy the key now.</b> It is not shown again; if it is lost, revoke it and make a new one. Anyone who has it can ' + (k.scope === 'write' ? 'read and add to' : 'read') + ' your books, so treat it like a password.</p>' +
           UI.field('API key (' + (k.scope === 'write' ? 'read & write' : 'read only') + ')', box('akKey', k.key, 2)) + '<div class="btnrow"><button class="btn sm" data-copy="akKey">Copy key</button></div>' +
-          UI.field('Claude Code: run this once in a terminal', box('akCmd', cmd, 4)) + '<div class="btnrow"><button class="btn sm outline" data-copy="akCmd">Copy command</button></div>' +
-          UI.field('Other assistants', box('akAny', url + '?key=' + k.key, 3), { hint: 'An MCP client that takes headers: the server address with the header "Authorization: Bearer <key>". One that only takes an address (a custom connector, for example): the address above, which carries the key.' }) + '<div class="btnrow"><button class="btn sm outline" data-copy="akAny">Copy address with key</button></div>',
+          UI.field('MCP server address', box('akUrl', url, 2), { hint: 'In your assistant add BlitzBook as a custom connector / MCP server: this address, with the header "Authorization: Bearer <key>" when the assistant asks for headers or a token.' }) + '<div class="btnrow"><button class="btn sm outline" data-copy="akUrl">Copy address</button></div>' +
+          UI.field('Address with the key', box('akAny', url + '?key=' + k.key, 3), { hint: 'For an assistant that only takes a URL and no headers: this address carries the key, so no login is needed.' }) + '<div class="btnrow"><button class="btn sm outline" data-copy="akAny">Copy address with key</button></div>',
         buttons: [{ label: 'I have copied the key', cls: 'green', onClick: () => { if (App.current && App.current.route === 'ai') this.screen(); } }] });
       $$('[data-copy]', bg).forEach(b => b.onclick = () => this.copy($('#' + b.dataset.copy, bg).value, b.textContent.replace(/^Copy /, '').replace(/^./, c => c.toUpperCase())));
     }

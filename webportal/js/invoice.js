@@ -10,7 +10,11 @@
   // A GSTIN whose first two digits differ from ours belongs to another state; blank counts as local
   function isInter(gstin) { const g = String(gstin || '').trim(); return /^\d{2}/.test(g) && g.slice(0, 2) !== sellerStateCode(); }
   function activity() { const a = Store.company().activity || ''; return a && !a.startsWith('Select') ? a : 'General'; }
-  function rcmAllowed() { return chargesGst() && activity().toLowerCase().includes('service'); }
+  // A goods transport agency bills freight: its documents are consignment notes, with a consignor, a consignee,
+  // the route and the vehicle, and GST on freight is usually paid by the recipient under reverse charge
+  function isTransporter() { return activity().toLowerCase().includes('transport'); }
+  // Reverse charge on a sale only arises for notified services (transport, security, legal ...)
+  function rcmAllowed() { return chargesGst() && (activity().toLowerCase().includes('service') || isTransporter()); }
   function contactsOf(type) { return Store.list('contacts').filter(c => !type || (c.type || 'Customer') === type).sort((a, b) => a.name.localeCompare(b.name)); }
   function partyFromContact(c) { return { name: c.name + (c.address ? '\n' + c.address : ''), phone: c.phone || '', email: c.email || '', gstin: c.gstin || '', state: U.matchState(c.state, c.gstin) || U.stateByCode(sellerStateCode()) }; }
   function blankParty() { return { name: '', phone: '', email: '', gstin: '', state: U.stateByCode(sellerStateCode()) || U.STATES[0] }; }
@@ -114,7 +118,7 @@
   function newInvoice() {
     const c = Store.company();
     return { id: null, kind: 'invoice', no: nextInvoiceNo(), date: U.today(), payment: 'Cash', rcm: false, buyer: blankParty(), sameShip: true, consignee: blankParty(),
-      other: { destination: '', vehicleType: '', vehicleNo: '', transporter: '', deliveryNote: '', orderNo: '', orderDate: '', reference: '', info: '' }, items: [blankItem(1)], totals: {},
+      other: { destination: '', vehicleType: '', vehicleNo: '', transporter: '', deliveryNote: '', orderNo: '', orderDate: '', reference: '', info: '', lrNo: '', lrDate: '', origin: '', goods: '' }, items: [blankItem(1)], totals: {},
       // Payment due date (set for Credit invoices from the company's credit period) and whether the company's
       // terms & conditions print on this invoice
       dueDate: '', termsOn: c.termsOn !== false && !!c.terms, terms: c.terms || '' };
@@ -181,12 +185,14 @@
     retail: [['Cotton Shirt', '6205', 'Apparel', '5', 850], ['Denim Jeans', '6203', 'Apparel', '12', 1200], ['Leather Wallet', '4202', 'Accessories', '18', 450], ['Stainless Steel Bottle', '7323', 'Accessories', '18', 350], ['A4 Notebook', '4820', 'Stationery', '12', 80], ['Ball Pen Pack', '9608', 'Stationery', '18', 50]],
     service: [['Consulting Service', '9983', 'Professional', '18', 1500], ['Maintenance & Repair', '9987', 'Maintenance', '18', 800], ['Design & Branding', '9983', 'Professional', '18', 2500], ['Delivery & Logistics', '9968', 'Logistics', '18', 200], ['Installation Fee', '9987', 'Maintenance', '18', 500]],
     trade: [['Raw Material Pack', '9999', 'Materials', '18', 5000], ['Finished Goods Unit', '9999', 'Products', '18', 2500], ['Bulk Packaging Box', '4819', 'Packaging', '12', 150], ['Freight Charges', '9965', 'Logistics', '18', 1200]],
+    // Goods transport: freight at 5% (reverse charge, or forward charge without ITC) and the usual extras
+    transport: [['Freight Charges', '9965', 'Freight', '5', 5000], ['Door Delivery Charges', '9965', 'Freight', '5', 800], ['Detention / Halting Charges', '9965', 'Freight', '5', 1000], ['Loading & Unloading Charges', '9967', 'Handling', '18', 500], ['Toll & Parking Charges', '9965', 'Freight', '5', 300], ['Hamali / Labour Charges', '9967', 'Handling', '18', 400]],
     general: [['General Goods Item', '9999', 'General', '18', 100], ['Standard Product Unit', '9999', 'General', '18', 250], ['Service Charge', '9987', 'General', '18', 500]]
   };
-  function quickLabel(act) { const a = String(act || '').toLowerCase(); return /food|beverage/.test(a) ? 'Food Items' : a.includes('service') ? 'Services' : /retail|wholesale|manufactur/.test(a) ? 'Products' : 'Items'; }
+  function quickLabel(act) { const a = String(act || '').toLowerCase(); return /food|beverage/.test(a) ? 'Food Items' : a.includes('transport') ? 'Freight Services' : a.includes('service') ? 'Services' : /retail|wholesale|manufactur/.test(a) ? 'Products' : 'Items'; }
   function quickItems() {
     const a = activity().toLowerCase();
-    const set = /food|beverage/.test(a) ? SAMPLES.food : a.includes('retail') ? SAMPLES.retail : a.includes('service') ? SAMPLES.service : /manufactur|wholesale/.test(a) ? SAMPLES.trade : SAMPLES.general;
+    const set = /food|beverage/.test(a) ? SAMPLES.food : a.includes('retail') ? SAMPLES.retail : a.includes('transport') ? SAMPLES.transport : a.includes('service') ? SAMPLES.service : /manufactur|wholesale/.test(a) ? SAMPLES.trade : SAMPLES.general;
     const items = set.map(x => ({ name: x[0], hsn: x[1], category: x[2], gst: x[3], rate: x[4], code: '', qty: 0 }));
     Store.list('items').slice().sort((x, y) => String(x.name).localeCompare(String(y.name))).forEach(m => {
       if (!String(m.name || '').trim()) return;
@@ -303,7 +309,8 @@
       if (params.print) this.print(params.print === 'challan' ? 'challan' : 'invoice');
     },
     render() {
-      const inv = this.inv, c = Store.company(), gst = chargesGst(), challan = inv.kind === 'challan';
+      const inv = this.inv, c = Store.company(), gst = chargesGst(), challan = inv.kind === 'challan', gta = isTransporter();
+      inv.other = Object.assign({ lrNo: '', lrDate: '', origin: '', goods: '' }, inv.other);
       const nextNo = () => challan ? nextChallanNo() : nextInvoiceNo(), stepNo = (no, d) => challan ? stepChallanNo(no, d) : stepInvoiceNo(no, d);
       const allContacts = contactsOf(null);
       // Name & address on the left with the contact picker beside it, then phone, email, GSTIN and state in one line
@@ -321,22 +328,29 @@
         (challan ? UI.field('Status', UI.input('iStatus', inv.invoiceNo ? 'Invoiced: ' + inv.invoiceNo : 'Open - not invoiced yet', { disabled: true }), { hint: 'Make Invoice turns the challan into a sales invoice' }) : UI.field('Payment Mode', UI.select('iPay', U.PAYMENT_MODES, inv.payment))) + '</div>' +
         (challan ? '' : '<div class="grid3" style="margin-top:12px">' + UI.field('Payment Due Date', UI.dateInput('iDue', inv.dueDate), { hint: 'Prints on the PDF. A Credit invoice gets ' + (num(c.creditDays) || 0) + ' days from the invoice date (Company Profile)' }) +
           '<div class="field"><label>Terms &amp; Conditions</label>' + UI.check('iTerms', 'Include terms & conditions on the PDF', !!inv.termsOn) + '<div class="hint">' + (c.terms ? esc(c.terms.split('\n')[0]) + (c.terms.includes('\n') ? ' ...' : '') : 'No terms yet: add them under Company Profile') + '</div></div></div>') +
-        (rcmAllowed() ? UI.check('iRcm', 'Reverse charge (RCM) - GST payable by the recipient', inv.rcm) : '') + '</div></div>' +
-        '<div class="card"><div class="hd">Buyer & Shipping Details</div><div class="bd">' + partyBlock(inv.buyer, 'b', 'Buyer (Bill To)') +
-        UI.check('iSame', 'Shipping same as Billing', inv.sameShip) + '<div id="shipBox" class="' + (inv.sameShip ? 'hidden' : '') + '">' + partyBlock(inv.consignee, 'c', 'Consignee (Ship To)') + '</div></div></div>' +
-        '<div class="card"><div class="hd">Other Details</div><div class="bd"><div class="grid3">' +
-        UI.field('Destination', UI.input('oDest', inv.other.destination)) + UI.field('Vehicle Type', UI.input('oVType', inv.other.vehicleType)) + UI.field('Vehicle Number', UI.input('oVNo', inv.other.vehicleNo)) + '</div>' +
-        UI.check('oMore', 'Show additional details', !!(inv.other.transporter || inv.other.deliveryNote || inv.other.orderNo || inv.other.orderDate || inv.other.reference || inv.other.info)) +
-        '<div id="moreBox" class="grid3 hidden">' + UI.field('Transporter', UI.input('oTrans', inv.other.transporter)) + UI.field('Delivery Note', UI.input('oDN', inv.other.deliveryNote)) + UI.field('Buyer Order No', UI.input('oOrd', inv.other.orderNo)) +
-        UI.field('Buyer Order Date', UI.dateInput('oOrdDt', inv.other.orderDate)) + UI.field('Reference No', UI.input('oRef', inv.other.reference)) + UI.field('Other Info', UI.input('oInfo', inv.other.info)) + '</div></div></div>' +
-        '<div class="card"><div class="hd">Goods / Services <button class="btn sm green" id="quickBtn">Quick ' + esc(quickLabel(activity())) + '</button></div><div class="bd" style="padding:8px">' +
+        (rcmAllowed() ? UI.check('iRcm', 'Reverse charge (RCM) - GST payable by the recipient', inv.rcm) + (gta && !challan ? '<div class="hint">Freight by a goods transport agency: 5% GST paid by the recipient under reverse charge (tick), or charged on the invoice at 5% without input credit / 12% with it.</div>' : '') : '') + '</div></div>' +
+        '<div class="card"><div class="hd">' + (gta ? 'Consignor & Consignee' : 'Buyer & Shipping Details') + '</div><div class="bd">' + partyBlock(inv.buyer, 'b', gta ? 'Consignor (Bill To)' : 'Buyer (Bill To)') +
+        UI.check('iSame', gta ? 'Consignee same as Consignor' : 'Shipping same as Billing', inv.sameShip) + '<div id="shipBox" class="' + (inv.sameShip ? 'hidden' : '') + '">' + partyBlock(inv.consignee, 'c', gta ? 'Consignee (Deliver To)' : 'Consignee (Ship To)') + '</div></div></div>' +
+        (gta ? '<div class="card"><div class="hd">Consignment Details</div><div class="bd"><div class="grid3">' +
+          UI.field('LR / Consignment Note No', UI.input('oLr', inv.other.lrNo, { placeholder: 'LR No' })) + UI.field('LR Date', UI.dateInput('oLrDt', inv.other.lrDate)) + UI.field('Vehicle Number', UI.input('oVNo', inv.other.vehicleNo, { attrs: ' style="text-transform:uppercase"' })) +
+          UI.field('From (Origin)', UI.input('oFrom', inv.other.origin, { placeholder: 'Place loaded' })) + UI.field('To (Destination)', UI.input('oDest', inv.other.destination, { placeholder: 'Place delivered' })) + UI.field('Vehicle Type', UI.input('oVType', inv.other.vehicleType, { placeholder: 'e.g. 32 ft container, 10-wheeler' })) + '</div>' +
+          UI.field('Goods / Packages / Weight', UI.input('oGoods', inv.other.goods, { placeholder: 'e.g. 120 cartons of ceramic tiles, 8.5 MT' })) +
+          UI.check('oMore', 'Show additional details', !!(inv.other.deliveryNote || inv.other.orderNo || inv.other.orderDate || inv.other.reference || inv.other.info)) +
+          '<div id="moreBox" class="grid3 hidden">' + UI.field('E-way Bill / Reference No', UI.input('oRef', inv.other.reference)) + UI.field('Delivery Note / Challan', UI.input('oDN', inv.other.deliveryNote)) + UI.field('Order No', UI.input('oOrd', inv.other.orderNo)) +
+          UI.field('Order Date', UI.dateInput('oOrdDt', inv.other.orderDate)) + UI.field('Other Info', UI.input('oInfo', inv.other.info), { span: true }) + '</div></div></div>'
+        : '<div class="card"><div class="hd">Other Details</div><div class="bd"><div class="grid3">' +
+          UI.field('Destination', UI.input('oDest', inv.other.destination)) + UI.field('Vehicle Type', UI.input('oVType', inv.other.vehicleType)) + UI.field('Vehicle Number', UI.input('oVNo', inv.other.vehicleNo)) + '</div>' +
+          UI.check('oMore', 'Show additional details', !!(inv.other.transporter || inv.other.deliveryNote || inv.other.orderNo || inv.other.orderDate || inv.other.reference || inv.other.info)) +
+          '<div id="moreBox" class="grid3 hidden">' + UI.field('Transporter', UI.input('oTrans', inv.other.transporter)) + UI.field('Delivery Note', UI.input('oDN', inv.other.deliveryNote)) + UI.field('Buyer Order No', UI.input('oOrd', inv.other.orderNo)) +
+          UI.field('Buyer Order Date', UI.dateInput('oOrdDt', inv.other.orderDate)) + UI.field('Reference No', UI.input('oRef', inv.other.reference)) + UI.field('Other Info', UI.input('oInfo', inv.other.info)) + '</div></div></div>') +
+        '<div class="card"><div class="hd">' + (gta ? 'Freight & Charges' : 'Goods / Services') + ' <button class="btn sm green" id="quickBtn">Quick ' + esc(quickLabel(activity())) + '</button></div><div class="bd" style="padding:8px">' +
         '<div class="tablewrap" style="border:0"><table class="items"><thead><tr><th class="sl">Sl</th><th class="desc">Particulars</th><th class="hsn">HSN/SAC</th>' + (gst ? '<th class="gst">GST %</th><th class="inc">Inc?</th>' : '') + '<th class="qty">Qty *</th><th class="uqc">UQC</th><th class="rate">Rate *</th><th class="tax">' + (gst ? 'Taxable' : 'Amount') + '</th>' + (gst ? '<th class="tot">Total Incl.</th>' : '') + '<th class="del"></th></tr></thead><tbody id="rows"></tbody></table></div>' +
         UI.datalist('itemsDl', itemLabels()) +
         '<div class="btnrow"><button class="btn sm" id="addRow">+ Add Particular / Row</button></div></div></div>' +
         '<div class="card"><div class="hd">Totals Summary</div><div class="bd"><div class="totals" id="totals"></div><div class="words" id="words"></div></div></div>' +
         '<div class="btnrow end"><button class="btn red outline" id="iDel" ' + (inv.id ? '' : 'disabled') + '>🗑 Delete</button><button class="btn outline" id="iNew">+ New</button><button class="btn outline" id="iSettings">Print Settings</button>' +
         (challan ? (inv.id && !inv.invoiceNo ? '<button class="btn" id="iMakeInv">Make Invoice</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print Challan</button>'
-          : '<button class="btn" id="iChallan">Delivery Challan</button><button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print / PDF</button>') + '</div>');
+          : '<button class="btn" id="iChallan">Delivery Challan</button>' + (inv.id ? '<button class="btn" id="iReceipt" title="Record the money received against this invoice and print the receipt">Receipt</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print / PDF</button>') + '</div>');
       App.wireBack(root);
       const bind = (id, fn) => { const el = $('#' + id); if (el) el.addEventListener('input', fn), el.addEventListener('change', fn); };
       bind('iNo', e => {
@@ -363,8 +377,9 @@
       };
       wireParty('b', inv.buyer); wireParty('c', inv.consignee);
       bind('iSame', e => { inv.sameShip = e.target.checked; $('#shipBox').classList.toggle('hidden', inv.sameShip); });
-      ['oDest', 'destination', 'oVType', 'vehicleType', 'oVNo', 'vehicleNo', 'oTrans', 'transporter', 'oDN', 'deliveryNote', 'oOrd', 'orderNo', 'oRef', 'reference', 'oInfo', 'info'].forEach((k, i, a) => { if (i % 2 === 0) bind(k, e => inv.other[a[i + 1]] = e.target.value.trim()); });
-      bind('oOrdDt', e => inv.other.orderDate = U.fromIso(e.target.value));
+      ['oDest', 'destination', 'oVType', 'vehicleType', 'oVNo', 'vehicleNo', 'oTrans', 'transporter', 'oDN', 'deliveryNote', 'oOrd', 'orderNo', 'oRef', 'reference', 'oInfo', 'info', 'oLr', 'lrNo', 'oFrom', 'origin', 'oGoods', 'goods'].forEach((k, i, a) => { if (i % 2 === 0) bind(k, e => inv.other[a[i + 1]] = e.target.value.trim()); });
+      bind('oOrdDt', e => inv.other.orderDate = U.fromIso(e.target.value)); bind('oLrDt', e => inv.other.lrDate = U.fromIso(e.target.value));
+      if ($('#iReceipt')) $('#iReceipt').onclick = () => Invoice.receipt(inv, () => Invoice.open({ id: inv.id }));
       const more = $('#oMore'); const showMore = () => $('#moreBox').classList.toggle('hidden', !more.checked); more.addEventListener('change', showMore); showMore();
       $('#addRow').onclick = () => {
         const last = inv.items[inv.items.length - 1];
@@ -518,6 +533,20 @@
       absorb(inv);
       return inv;
     },
+    // Receipt for a saved invoice. Money still due on a credit invoice is recorded as a receipt first (Receipts &
+    // Payments), and the receipt comes out as a voucher to print or save as a PDF; an invoice paid at the time of
+    // sale, or a credit invoice already settled, gets its receipt printed straight away.
+    receipt(inv, then) {
+      const c = Store.company(), party = (inv.buyer.name || '').split('\n')[0].trim() || 'Cash sale';
+      const total = num(inv.totals.rounded) || num(inv.totals.grand), bal = invoiceBalance(inv.no);
+      if (inv.payment === 'Credit' && bal && bal.balance > 0.005 && global.Money) { Money.edit('receipt', { party: bal.party, ref: inv.no, amount: bal.balance }, then); return; }
+      const got = Store.list('journal').filter(j => j.vtype === 'receipt' && String(j.ref || '').trim() === inv.no).sort((a, b) => U.dateMs(a.date) - U.dateMs(b.date) || num(a.createdAt) - num(b.createdAt));
+      // Paid at the time of sale: the invoice itself is the record, the receipt shows it
+      const v = inv.payment !== 'Credit' ? { vtype: 'receipt', no: 'RCT-' + inv.no, date: inv.date, party, mode: inv.payment, ref: inv.no, bankRef: '', narration: 'Received at the time of sale',
+        lines: [{ account: inv.payment === 'Cash' ? 'Cash' : 'Bank', side: 'Dr', amount: total }, { account: party, side: 'Cr', amount: total }] } : got[got.length - 1];
+      if (!v) { UI.toast('No receipt is recorded against invoice ' + inv.no + ' yet'); return; }
+      Print.show(Print.voucher(v, c));
+    },
     // Save only: the invoice is kept, nothing is printed, and the editor moves on to the next invoice number
     saveOnly() {
       if (!this.validate()) return;
@@ -595,7 +624,7 @@
       (invs.length ? '<div class="btnrow"><input id="sSearch" class="search" placeholder="Search by invoice no, party, phone, GSTIN, item, amount..." autocomplete="off"><span class="hint" id="sCount"></span></div>' : '') +
       '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th>Due</th><th></th></tr></thead><tbody>' +
         invs.map(i => '<tr data-s="' + esc(hay(i)) + '"><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + (i.buyer.phone ? '<div class="small muted">' + esc(i.buyer.phone) + '</div>' : '') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td><td data-l="Due">' + dueCell(i) + '</td>' +
-          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">' + (lite ? 'View' : 'Open') + '</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm outline" data-dc="' + esc(i.id) + '" title="Print a delivery challan for this invoice">Challan</button>' + (lite ? '' : '<button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one, or "Upload PO" to make invoices from purchase orders.</div>') + '</div>');
+          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">' + (lite ? 'View' : 'Open') + '</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm outline" data-dc="' + esc(i.id) + '" title="Print a delivery challan for this invoice">Challan</button><button class="btn sm outline" data-rct="' + esc(i.id) + '" title="' + (i.payment === 'Credit' ? 'Record the money received against this invoice and print the receipt' : 'Print the receipt for this invoice') + '">Receipt</button>' + (lite ? '' : '<button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one, or "Upload PO" to make invoices from purchase orders.</div>') + '</div>');
     App.wireBack(root);
     if ($('#sSearch')) {
       // Every word typed has to appear somewhere in the invoice
@@ -612,6 +641,7 @@
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
     $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));
     $$('[data-dc]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.dc, print: 'challan' }));
+    $$('[data-rct]', root).forEach(b => b.onclick = () => Invoice.receipt(Store.find('invoices', b.dataset.rct), () => App.go('sales')));
     $$('[data-del]', root).forEach(b => b.onclick = () => deleteInvoice(Store.find('invoices', b.dataset.del), () => App.go('sales')));
   };
 
@@ -825,6 +855,6 @@
   App.routes.notes = (p) => Notes.open(p);
 
   global.Invoice = Invoice; global.Notes = Notes; global.Quick = Quick;
-  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, contactsOf, computeTotals, noteTotals, invoices, noteCap, creditNotesFor, outstanding, invoiceBalance,
+  global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, isTransporter, contactsOf, computeTotals, noteTotals, invoices, noteCap, creditNotesFor, outstanding, invoiceBalance,
     findMaster, upsertMaster, hideMaster, categories, itemLabels, itemFromLabel };
 })(window);

@@ -1,6 +1,6 @@
 {
-  "versionCode": 7,
-  "versionName": "1.6",
+  "versionCode": 8,
+  "versionName": "1.7",
   "apk": "https://blitzbook.co.in/BlitzBook.apk",
-  "notes": "Invoice packs are now 15 invoices (3 months) and 40 invoices (6 months); ratios under Profit & Loss and Balance Sheet."
+  "notes": "Receipts: money received against a sale is recorded and comes out as a receipt voucher PDF (Rct on an invoice in Sales, + Receipt in Journal). Transporter line of activity: consignor / consignee, LR number and date, from / to, vehicle and goods on the invoice. AI Access: one universal API key for any assistant."
 }

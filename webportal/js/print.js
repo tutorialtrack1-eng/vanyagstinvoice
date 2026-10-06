@@ -28,6 +28,8 @@
     return 'TAX INVOICE';
   }
   function chargesGst(company) { return company.gstType === 'Regular'; }
+  // A goods transport agency: its invoices carry consignment details instead of dispatch details
+  function isTransporter(company) { return String(company.activity || '').toLowerCase().includes('transport'); }
   function subText(it) {
     const p = [];
     if (it.subSerial) p.push('S/N: ' + it.subSerial);
@@ -68,10 +70,14 @@
     const title = docTitle(inv, company);
     const gstLine = company.gstType === 'Composition' ? 'GSTIN: ' + esc(company.gstin) + '  (Composition Dealer)'
       : noGst ? 'GSTIN: Not Registered under GST' : 'GSTIN: ' + esc(company.gstin);
-    const other = [
-      ['Dest:', titleCase(inv.other.destination)], ['Veh No:', (inv.other.vehicleNo || '').toUpperCase()], ['Trnsp:', titleCase(inv.other.transporter)],
-      ['Challan:', inv.other.deliveryNote], ['Ord No:', inv.other.orderNo], ['Ord Dt:', inv.other.orderDate], ['Ref:', inv.other.reference], ['Info:', titleCase(inv.other.info)]
-    ].filter(x => x[1]);
+    const o = inv.other, gta = isTransporter(company);
+    const other = (gta ? [
+      ['LR No:', o.lrNo], ['LR Dt:', o.lrDate], ['From:', titleCase(o.origin)], ['To:', titleCase(o.destination)], ['Veh No:', (o.vehicleNo || '').toUpperCase()], ['Vehicle:', titleCase(o.vehicleType)], ['Goods:', o.goods],
+      ['E-way/Ref:', o.reference], ['Challan:', o.deliveryNote], ['Ord No:', o.orderNo], ['Ord Dt:', o.orderDate], ['Info:', titleCase(o.info)]
+    ] : [
+      ['Dest:', titleCase(o.destination)], ['Veh No:', (o.vehicleNo || '').toUpperCase()], ['Trnsp:', titleCase(o.transporter)], ['LR No:', o.lrNo], ['From:', titleCase(o.origin)],
+      ['Challan:', o.deliveryNote], ['Ord No:', o.orderNo], ['Ord Dt:', o.orderDate], ['Ref:', o.reference], ['Info:', titleCase(o.info)]
+    ]).filter(x => x[1]);
     const party = (p) => {
       const l = partyLines(p);
       return '<div class="pname">' + esc((l[0] || '').toUpperCase()) + '</div>' + l.slice(1, 3).map(s => '<div>' + esc(s.toUpperCase()) + '</div>').join('') +
@@ -109,7 +115,7 @@
       '<div><b>' + gstLine + '</b></div><div><b>Phone: ' + esc(company.phone) + ' | Email: ' + esc(company.email) + '</b></div></div>' +
       '<div class="meta"><div><b>' + noLabel(inv) + ':</b><b>' + esc(inv.no) + '</b></div><div><b>Date:</b><b>' + esc(inv.date) + '</b></div>' +
       (inv.kind === 'invoice' ? '<div><b>Payment:</b><span>' + esc(inv.payment) + '</span></div>' + (dueDate(inv) ? '<div><b>Due Date:</b><b>' + esc(dueDate(inv)) + '</b></div>' : '') + (noGst ? '' : '<div><b>Reverse Charge:</b><span>' + (inv.rcm ? 'Yes' : 'No') + '</span></div>') : '') + '</div></div>' +
-      '<table class="grid parties"><tr><th>BILL TO</th><th>SHIP TO</th><th>OTHER DETAILS</th></tr><tr><td>' + party(inv.buyer) + '</td><td>' + party(inv.consignee.name ? inv.consignee : inv.buyer) + '</td><td>' +
+      '<table class="grid parties"><tr><th>' + (gta ? 'CONSIGNOR (BILL TO)' : 'BILL TO') + '</th><th>' + (gta ? 'CONSIGNEE' : 'SHIP TO') + '</th><th>' + (gta ? 'CONSIGNMENT DETAILS' : 'OTHER DETAILS') + '</th></tr><tr><td>' + party(inv.buyer) + '</td><td>' + party(inv.consignee.name ? inv.consignee : inv.buyer) + '</td><td>' +
       other.map(o => '<div><b>' + o[0] + '</b> ' + esc(o[1]) + '</div>').join('') + '</td></tr></table></div>' +
       '<table class="grid items"><thead><tr>' + cols.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table>' +
       '<div class="part tail">' + breakdown +
@@ -142,15 +148,25 @@
     };
     const sellerGst = company.gstType === 'Composition' ? company.gstin + ' (Composition Dealer)' : noGst ? '' : company.gstin;
     const sellerState = U.stateByCode((company.gstin || '').slice(0, 2)) || '';
-    const cells = [
+    const o = inv.other, gta = isTransporter(company), payCell = inv.kind === 'invoice' ? inv.payment + (dueDate(inv) ? ', due ' + dueDate(inv) : '') : '';
+    const rcmCell = noGst || inv.kind !== 'invoice' ? ['', ''] : ['Reverse Charge', inv.rcm ? 'Yes' : 'No'];
+    const cells = gta ? [
       [inv.kind === 'challan' ? 'Challan No.' : inv.kind === 'quotation' ? 'Quotation No.' : 'Invoice No.', inv.no, 'Dated', inv.date],
-      ['Delivery Note', inv.other.deliveryNote, 'Mode/Terms of Payment', inv.kind === 'invoice' ? inv.payment + (dueDate(inv) ? ', due ' + dueDate(inv) : '') : ''],
-      ['Reference No. & Date', inv.other.reference, 'Other References', titleCase(inv.other.info)],
-      ["Buyer's Order No.", inv.other.orderNo, 'Dated', inv.other.orderDate],
-      ['Dispatched through', titleCase(inv.other.transporter), 'Destination', titleCase(inv.other.destination)],
-      ['Motor Vehicle No.', (inv.other.vehicleNo || '').toUpperCase(), noGst || inv.kind !== 'invoice' ? '' : 'Reverse Charge', noGst || inv.kind !== 'invoice' ? '' : inv.rcm ? 'Yes' : 'No']
+      ['LR / Consignment Note No.', o.lrNo, 'LR Date', o.lrDate],
+      ['From', titleCase(o.origin), 'To', titleCase(o.destination)],
+      ['Motor Vehicle No.', (o.vehicleNo || '').toUpperCase(), 'Vehicle Type', titleCase(o.vehicleType)],
+      ['Goods / Packages / Weight', o.goods, 'Mode/Terms of Payment', payCell],
+      ['E-way Bill / Reference No.', o.reference, rcmCell[0], rcmCell[1]]
+    ] : [
+      [inv.kind === 'challan' ? 'Challan No.' : inv.kind === 'quotation' ? 'Quotation No.' : 'Invoice No.', inv.no, 'Dated', inv.date],
+      ['Delivery Note', o.deliveryNote, 'Mode/Terms of Payment', payCell],
+      ['Reference No. & Date', o.reference, 'Other References', titleCase(o.info)],
+      ["Buyer's Order No.", o.orderNo, 'Dated', o.orderDate],
+      ['Dispatched through', titleCase(o.transporter), 'Destination', titleCase(o.destination)],
+      ['Motor Vehicle No.', (o.vehicleNo || '').toUpperCase(), rcmCell[0], rcmCell[1]]
     ];
-    const cols = noGst ? ['Description of Goods', 'HSN/SAC', 'Quantity', 'Rate', 'per', 'Amount'] : ['Description of Goods', 'HSN/SAC', 'GST Rate', 'Quantity', 'Rate', 'per', 'Amount'];
+    const descHdr = gta ? 'Description of Services' : 'Description of Goods';
+    const cols = noGst ? [descHdr, 'HSN/SAC', 'Quantity', 'Rate', 'per', 'Amount'] : [descHdr, 'HSN/SAC', 'GST Rate', 'Quantity', 'Rate', 'per', 'Amount'];
     const span = cols.length + 1;
     const rows = inv.items.map(it => '<tr><td class="c">' + it.sl + '</td><td><b>' + esc(titleCase(it.desc)) + '</b>' + (subText(it) ? '<div class="sub">' + esc(subText(it)) + '</div>' : '') + '</td>' +
       '<td class="c">' + esc(it.hsn) + '</td>' + (noGst ? '' : '<td class="c">' + esc(it.gst) + '%</td>') +
@@ -186,8 +202,8 @@
       '<div class="part top"><div class="title">' + title + '</div>' +
       '<div class="head"><div class="left">' +
       party(null, { name: company.name, address: company.address }, sellerGst, sellerState ? stateNameCode(sellerState) : '', company.email, company.phone) +
-      (inv.consignee.name ? party('Consignee (Ship to)', inv.consignee, (inv.consignee.gstin || '').toUpperCase(), stateNameCode(inv.consignee.state), (inv.consignee.email || '').toLowerCase(), inv.consignee.phone) : '') +
-      party('Buyer (Bill to)', inv.buyer, (inv.buyer.gstin || '').toUpperCase(), stateNameCode(inv.buyer.state), (inv.buyer.email || '').toLowerCase(), inv.buyer.phone) +
+      (inv.consignee.name ? party(gta ? 'Consignee' : 'Consignee (Ship to)', inv.consignee, (inv.consignee.gstin || '').toUpperCase(), stateNameCode(inv.consignee.state), (inv.consignee.email || '').toLowerCase(), inv.consignee.phone) : '') +
+      party(gta ? 'Consignor (Bill to)' : 'Buyer (Bill to)', inv.buyer, (inv.buyer.gstin || '').toUpperCase(), stateNameCode(inv.buyer.state), (inv.buyer.email || '').toLowerCase(), inv.buyer.phone) +
       '</div><div class="right">' + cells.map(c => '<div class="cell"><div class="lb">' + c[0] + '</div><div class="vl">' + esc(c[1]) + '</div></div><div class="cell"><div class="lb">' + c[2] + '</div><div class="vl">' + esc(c[3]) + '</div></div>').join('') +
       '<div class="cell terms"><div class="lb">Terms of Delivery</div><div class="vl"></div></div></div></div></div>' +
       '<table class="grid items"><thead><tr><th>Sl<br>No.</th>' + cols.map(h => '<th>' + (h === 'GST Rate' ? 'GST<br>Rate' : h) + '</th>').join('') + '</tr></thead><tbody>' + rows + totRows + '</tbody></table>' +
@@ -505,11 +521,21 @@
   // ------------------------------------------------------------ receipt / payment voucher on A4
   function voucher(v, company) {
     const receipt = v.vtype !== 'payment', amount = v.lines.filter(l => l.side === 'Dr').reduce((s, l) => s + num(l.amount), 0);
-    const body = '<div class="doc std">' + head(receipt ? 'RECEIPT' : 'PAYMENT VOUCHER', company, [[(receipt ? 'Receipt' : 'Voucher') + ' No:', v.no || '-', 1], ['Date:', v.date, 1], [receipt ? 'Against Invoice:' : 'Against Bill:', v.ref || '-']]) +
-      '<table class="grid parties"><tr><th style="text-align:left">' + (receipt ? 'RECEIVED FROM' : 'PAID TO') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(v.party || '').toUpperCase()) + '</div>' + (v.narration ? '<div>' + esc(v.narration) + '</div>' : '') + '</td></tr></table>' +
+    // The invoice the money is for, and the customer's details from it
+    const inv = receipt && v.ref && global.Store ? Store.list('invoices').find(i => i.kind === 'invoice' && i.no === String(v.ref).trim()) : null;
+    const total = inv ? num(inv.totals.rounded) || num(inv.totals.grand) : 0;
+    const got = inv && inv.payment === 'Credit' && global.Store ? Store.list('journal').filter(j => j.vtype === 'receipt' && String(j.ref || '').trim() === inv.no && j.id !== v.id).reduce((s, j) => s + (j.lines || []).filter(l => l.side === 'Dr').reduce((t, l) => t + num(l.amount), 0), 0) + amount : total;
+    const cn = inv && global.Store ? Store.list('notes').filter(n => n.kind === 'CN' && n.settle === 'Credit' && String(n.ref || '').trim() === inv.no).reduce((s, n) => s + num(n.total), 0) : 0;
+    const due = inv ? Math.max(0, U.round2(total - got - cn)) : 0;
+    const who = inv ? partyLines(inv.buyer) : [];
+    const body = '<div class="doc std">' + head(receipt ? 'RECEIPT' : 'PAYMENT VOUCHER', company, [[(receipt ? 'Receipt' : 'Voucher') + ' No:', v.no || '-', 1], ['Date:', v.date, 1], [receipt ? 'Against Invoice:' : 'Against Bill:', v.ref || '-'], ['Mode:', v.mode || 'Bank Transfer']]) +
+      '<table class="grid parties"><tr><th style="text-align:left">' + (receipt ? 'RECEIVED FROM' : 'PAID TO') + '</th></tr><tr><td style="height:auto"><div class="pname">' + esc(String(v.party || '').toUpperCase()) + '</div>' +
+      who.slice(1, 3).map(s => '<div>' + esc(s.toUpperCase()) + '</div>').join('') + (inv && inv.buyer.gstin ? '<div><b>GSTIN: ' + esc(inv.buyer.gstin.toUpperCase()) + '</b></div>' : '') + (inv && inv.buyer.phone ? '<div>Ph: ' + esc(inv.buyer.phone) + '</div>' : '') +
+      (v.narration ? '<div>' + esc(v.narration) + '</div>' : '') + '</td></tr></table>' +
       '<table class="grid items"><thead><tr><th>PARTICULARS</th><th style="width:125pt">AMOUNT</th></tr></thead><tbody><tr><td>' + (receipt ? 'Amount received' : 'Amount paid') + ' by ' + esc(v.mode || 'Bank Transfer') + (v.bankRef ? ' (ref ' + esc(v.bankRef) + ')' : '') + (v.ref ? ' against ' + esc(v.ref) : '') + '</td><td class="r">' + indianNumber(amount) + '</td></tr>' +
       '<tr><td class="r"><b>TOTAL</b></td><td class="r"><b>' + money(amount) + '</b></td></tr></tbody></table>' +
       '<div class="sect words">Amount in Words: ' + esc(rupeesPaiseWords(amount)) + '</div>' +
+      (inv ? '<div class="sect">Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + ': total ' + money(total) + (inv.payment === 'Credit' ? ', received ' + money(got) + (cn ? ', credit notes ' + money(cn) : '') + ', <b>balance due ' + money(due) + '</b>' : ', paid in full at the time of sale') + '</div>' : '') +
       (receipt ? '<div class="note" style="font-weight:normal">Received with thanks. Subject to realisation of cheque / transfer where applicable.</div>' : '') + signBlock(company) + POWERED + '</div>';
     return page(fileName(company, '', v.no || ''), PAPERS.A4.css, '12mm 10mm', body);
   }

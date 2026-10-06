@@ -56,10 +56,10 @@
       const chip = (k, label) => '<button class="btn sm ' + (kind === k ? '' : 'outline') + '" data-kind="' + k + '">' + label + '</button>';
       const root = App.view(App.header('Receipts & Payments', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="mRct">+ Receipt</button><button class="btn sm red" id="mPmt">+ Payment</button><button class="btn sm blue" id="mBank">Upload Bank Statement</button><button class="btn sm outline" id="mTpl">Template</button><button class="btn sm outline" id="mOut">Outstanding</button><button class="btn sm outline" id="mLedger">Party Ledger</button></div>') +
         '<div class="btnrow">' + chip('', 'All') + chip('receipt', 'Receipts') + chip('payment', 'Payments') + '<span class="hint bold" style="margin-left:auto">Received ' + money(sum('receipt')) + '   |   Paid ' + money(sum('payment')) + '</span></div>' +
-        '<div class="hint" style="margin-bottom:10px">A receipt against a credit invoice brings the customer\'s outstanding down; a payment against a credit purchase brings what you owe the supplier down. Both move Cash or Bank and appear on the Balance Sheet and in the Journal.</div>' +
+        '<div class="hint" style="margin-bottom:10px">A receipt against a credit invoice brings the customer\'s outstanding down; a payment against a credit purchase brings what you owe the supplier down. Both move Cash or Bank and appear on the Balance Sheet and in the Journal. Every receipt is a voucher the customer can be given: it opens for printing or saving as a PDF when it is saved, and again from Receipt PDF.</div>' +
         listTable(['Date', 'No', 'Type', 'Party / Account', 'Against', 'Mode / Ref', '#Amount', ''], list.map(v => { const K = KIND[v.vtype]; return '<tr>' + td('Date', esc(v.date)) + td('No', '<b>' + esc(v.no || '-') + '</b>') + td('Type', '<span class="pill ' + K.pill + '">' + K.label + '</span>') +
           td('Party', '<b>' + esc(v.party) + '</b>' + (v.narration ? '<div class="small muted">' + esc(v.narration) + '</div>' : '')) + td('Against', esc(v.ref || '-')) + td('Mode', esc(v.mode || '-') + (v.bankRef ? '<div class="small muted">' + esc(v.bankRef) + '</div>' : '')) + td('Amount', '<b>' + money(amountOf(v)) + '</b>', 'num') +
-          '<td class="actions"><button class="btn sm" data-p="' + esc(v.id) + '">Print</button><button class="btn sm outline" data-e="' + esc(v.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(v.id) + '">Delete</button></td></tr>'; }),
+          '<td class="actions"><button class="btn sm" data-p="' + esc(v.id) + '" title="Print or save the voucher as a PDF">' + (v.vtype === 'receipt' ? 'Receipt PDF' : 'Voucher PDF') + '</button><button class="btn sm outline" data-e="' + esc(v.id) + '">Edit</button><button class="btn sm red" data-d="' + esc(v.id) + '">Delete</button></td></tr>'; }),
           kind ? 'No ' + KIND[kind].label.toLowerCase() + 's yet.' : 'No receipts or payments yet. Add one, or upload your bank statement to record many at once.'));
       App.wireBack(root);
       const back = () => Money.open({ kind });
@@ -96,6 +96,13 @@
           Object.assign(v, { no: g('vNo').trim(), date: UI.dateVal('vDate', bg), party, mode: g('vMode'), ref: g('vRef').trim(), bankRef: g('vBankRef').trim(), narration: g('vNarr').trim(), lines: lines(kind, party, g('vMode'), amt) });
           if (v.id) Store.update('journal', v); else Store.add('journal', v);
           UI.toast(K.label + ' ' + v.no + ' saved'); if (onDone) onDone(v);
+          // Money received is acknowledged on the spot: the receipt voucher opens to print or save as a PDF
+          if (kind === 'receipt') {
+            const c = Store.company();
+            Print.show(Print.voucher(v, c));
+            UI.modal({ title: 'Receipt ' + v.no + ' Saved', body: '<p>The receipt is open in the print dialog: choose "Save as PDF" to download it, or a printer.</p>' + (v.ref ? '<p>Against invoice ' + esc(v.ref) + '.</p>' : ''),
+              buttons: [{ label: 'Close', cls: 'outline' }, { label: 'Print again', cls: 'green', onClick: () => { Print.show(Print.voucher(v, c)); return false; } }] });
+          }
         } }] });
       const sel = $('#vParty', bg);
       // Outstanding balance of the chosen party, and its open bills as suggestions for "against"

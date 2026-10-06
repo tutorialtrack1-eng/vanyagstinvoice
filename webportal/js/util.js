@@ -15,7 +15,7 @@
   const GST_RATES = ['0', '5', '18', '40', '3', '0.25'];
   const PAYMENT_MODES = ['Cash', 'Online', 'Cheque', 'Credit'];
   const GST_REG_TYPES = ['Regular', 'Composition', 'Unregistered'];
-  const LINE_OF_ACTIVITIES = ['Food and Beverages', 'Retailer', 'Services', 'Manufacturing', 'Wholesale', 'General'];
+  const LINE_OF_ACTIVITIES = ['Food and Beverages', 'Retailer', 'Services', 'Manufacturing', 'Wholesale', 'Transporter', 'General'];
   const DEFAULT_INVOICE_FORMAT = '####';
   // Item names with a well-known HSN code: typing one fills the HSN column, as in the app
   const HSN_MAP = { 'Sofa': '9401', 'Chair': '9401', 'Bed': '9403', 'Dining Table': '9403', 'Cupboard': '9403', 'Wardrobe': '9403', 'Office Chair': '9401', 'Wooden Table': '9403',

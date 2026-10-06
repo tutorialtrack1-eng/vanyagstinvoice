@@ -216,12 +216,14 @@ public class MainActivity extends Activity implements Sync.Listener {
     private LinearLayout root, itemsContainer;
     private TextView sideCompanyTv;
     private EditText invoiceNo, invoiceDate, destination, buyerPhone, consigneePhone, buyerEmail, consigneeEmail, buyerGstin, consigneeGstin, transporter, vehicle, vehicleNumber, otherInfo, deliveryNote, buyerOrderNo, buyerOrderDate, referenceNoDate;
+    // Consignment details of a transporter's invoice (LR = lorry receipt / consignment note); kept on every invoice
+    private EditText lrNo, lrDate, origin, goodsDesc;
     private AutoCompleteTextView buyerBillTo, consignee;
     private Spinner buyerState, consigneeState, paymentSpinner;
     private CheckBox sameAsBilling, othersCb, rcmCb;
     // Reverse charge: GST is shown on the invoice but paid by the buyer, so it is not added to the total
     private boolean isRcm() { return rcmCb != null && rcmCb.isChecked() && salesRcmAllowed(); }
-    private boolean salesRcmAllowed() { return chargesGst() && effectiveActivity(null).toLowerCase(Locale.ROOT).contains("service"); }
+    private boolean salesRcmAllowed() { return chargesGst() && (effectiveActivity(null).toLowerCase(Locale.ROOT).contains("service") || isTransporter()); }
     private TextView sellerName, taxableLabel, taxableValue, cgstAmount, sgstAmount, igstAmount, grandTotal, roundedTotal, amountWords;
     private final List<TextView> gstOnlyHeaders = new ArrayList<>();
     private TextView amountHeader;
@@ -292,9 +294,13 @@ public class MainActivity extends Activity implements Sync.Listener {
             "Services",
             "Manufacturing",
             "Wholesale",
+            "Transporter",
             "General"
     };
     private String lineOfActivityStr = "General";
+    // A goods transport agency bills freight: its documents are consignment notes with a consignor, a consignee,
+    // the route and the vehicle, and GST on freight is usually paid by the recipient under reverse charge
+    private boolean isTransporter() { return effectiveActivity(null).toLowerCase(Locale.ROOT).contains("transport"); }
 
     private static class QuickMenuItem {
         String name;
@@ -1039,6 +1045,14 @@ public class MainActivity extends Activity implements Sync.Listener {
             items.add(new QuickMenuItem("Stainless Steel Bottle", "7323", "Accessories", "18", 350.0));
             items.add(new QuickMenuItem("A4 Notebook", "4820", "Stationery", "12", 80.0));
             items.add(new QuickMenuItem("Ball Pen Pack", "9608", "Stationery", "18", 50.0));
+        } else if (act.contains("transport")) {
+            // Goods transport: freight at 5% (reverse charge, or forward charge without ITC) and the usual extras
+            items.add(new QuickMenuItem("Freight Charges", "9965", "Freight", "5", 5000.0));
+            items.add(new QuickMenuItem("Door Delivery Charges", "9965", "Freight", "5", 800.0));
+            items.add(new QuickMenuItem("Detention / Halting Charges", "9965", "Freight", "5", 1000.0));
+            items.add(new QuickMenuItem("Loading & Unloading Charges", "9967", "Handling", "18", 500.0));
+            items.add(new QuickMenuItem("Toll & Parking Charges", "9965", "Freight", "5", 300.0));
+            items.add(new QuickMenuItem("Hamali / Labour Charges", "9967", "Handling", "18", 400.0));
         } else if (act.contains("service")) {
             items.add(new QuickMenuItem("Consulting Service", "9983", "Professional", "18", 1500.0));
             items.add(new QuickMenuItem("Maintenance & Repair", "9987", "Maintenance", "18", 800.0));
@@ -1380,6 +1394,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private String quickItemsLabel(String activity) {
         String a = activity == null ? "" : activity.toLowerCase(Locale.ROOT);
         if (a.contains("food") || a.contains("beverage")) return "Food Items";
+        if (a.contains("transport")) return "Freight Services";
         if (a.contains("service")) return "Services";
         if (a.contains("retail") || a.contains("wholesale") || a.contains("manufactur")) return "Products";
         return "Items";
@@ -2265,7 +2280,8 @@ public class MainActivity extends Activity implements Sync.Listener {
         // The running number is never left blank: leaving the field empty restores the next number in sequence
         invoiceNo.setOnFocusChangeListener((v, hasFocus) -> { if (!hasFocus) ensureInvoiceNumber(); });
 
-        LinearLayout buyerSec = createSectionContainer("Buyer & Shipping Details", BLUE);
+        final boolean gta = isTransporter();
+        LinearLayout buyerSec = createSectionContainer(gta ? "Consignor & Consignee" : "Buyer & Shipping Details", BLUE);
         buyerBillTo = new AutoCompleteTextView(this);
         buyerBillTo.setHint("Buyer Name & Address");
         buyerBillTo.setTextSize(13);
@@ -2287,7 +2303,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             @Override public void changed() { recalc(); syncConsignee(); }
         });
 
-        buyerSec.addView(field("Buyer (Bill To) *", buyerBillTo));
+        buyerSec.addView(field(gta ? "Consignor (Bill To) *" : "Buyer (Bill To) *", buyerBillTo));
 
         LinearLayout g2 = row();
         g2.addView(field("Phone", buyerPhone), weightLp());
@@ -2301,7 +2317,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         addStateSeparator(buyerSec);
 
         sameAsBilling = new CheckBox(this);
-        sameAsBilling.setText("Shipping same as Billing");
+        sameAsBilling.setText(gta ? "Consignee same as Consignor" : "Shipping same as Billing");
         sameAsBilling.setPadding(dp(4), dp(4), dp(4), dp(4));
         buyerSec.addView(sameAsBilling);
 
@@ -2326,7 +2342,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         consigneeGstin = gstinEdit("GSTIN Number");
         consigneeState = spinner(STATES);
 
-        consigneeContainer.addView(field("Consignee (Ship To)", consignee));
+        consigneeContainer.addView(field(gta ? "Consignee (Deliver To)" : "Consignee (Ship To)", consignee));
 
         LinearLayout g3 = row();
         g3.addView(field("Phone", consigneePhone), weightLp());
@@ -2350,15 +2366,39 @@ public class MainActivity extends Activity implements Sync.Listener {
         buyerEmail.addTextChangedListener(syncWatcher);
         buyerGstin.addTextChangedListener(syncWatcher);
 
-        LinearLayout otherSec = createSectionContainer("Other Details", SLATE);
-        LinearLayout g4 = row();
+        LinearLayout otherSec = createSectionContainer(gta ? "Consignment Details" : "Other Details", SLATE);
         destination = compactEdit();
         vehicle = compactEdit();
         vehicleNumber = compactEdit();
-        g4.addView(field("Destination", destination), weightLp());
-        g4.addView(field("Vehicle Type", vehicle), weightLp());
-        g4.addView(field("Vehicle Number", vehicleNumber), weightLp());
-        otherSec.addView(g4);
+        lrNo = compactEdit();
+        origin = compactEdit();
+        goodsDesc = compactEdit();
+        lrDate = compactEdit();
+        lrDate.setFocusable(false);
+        lrDate.setClickable(true);
+        lrDate.setOnClickListener(v -> pickDate(lrDate));
+        lrDate.setOnLongClickListener(v -> { lrDate.setText(""); Toast.makeText(this, "Date removed", Toast.LENGTH_SHORT).show(); return true; });
+        if (gta) {
+            // A transporter's invoice: the consignment note, the route, the vehicle and what was carried
+            LinearLayout t1 = row();
+            t1.addView(field("LR / Consignment Note No", lrNo), weightLp());
+            t1.addView(field("LR Date", lrDate), weightLp());
+            t1.addView(field("Vehicle Number", vehicleNumber), weightLp());
+            otherSec.addView(t1);
+            LinearLayout t2 = row();
+            t2.addView(field("From (Origin)", origin), weightLp());
+            t2.addView(field("To (Destination)", destination), weightLp());
+            t2.addView(field("Vehicle Type", vehicle), weightLp());
+            otherSec.addView(t2);
+            goodsDesc.setHint("e.g. 120 cartons of ceramic tiles, 8.5 MT");
+            otherSec.addView(field("Goods / Packages / Weight", goodsDesc));
+        } else {
+            LinearLayout g4 = row();
+            g4.addView(field("Destination", destination), weightLp());
+            g4.addView(field("Vehicle Type", vehicle), weightLp());
+            g4.addView(field("Vehicle Number", vehicleNumber), weightLp());
+            otherSec.addView(g4);
+        }
 
         othersCb = new CheckBox(this);
         othersCb.setText("Show additional details");
@@ -2370,10 +2410,6 @@ public class MainActivity extends Activity implements Sync.Listener {
         transporter = compactEdit();
         deliveryNote = compactEdit();
         buyerOrderNo = compactEdit();
-        o1.addView(field("Transporter", transporter), weightLp());
-        o1.addView(field("Delivery Note", deliveryNote), weightLp());
-        o1.addView(field("Buyer Order No", buyerOrderNo), weightLp());
-
         LinearLayout o2 = row();
         buyerOrderDate = compactEdit();
         buyerOrderDate.setFocusable(false);
@@ -2382,9 +2418,22 @@ public class MainActivity extends Activity implements Sync.Listener {
         buyerOrderDate.setOnLongClickListener(v -> { buyerOrderDate.setText(""); Toast.makeText(this, "Date removed", Toast.LENGTH_SHORT).show(); return true; });
         referenceNoDate = compactEdit();
         otherInfo = compactEdit();
-        o2.addView(field("Buyer Order Date", buyerOrderDate), weightLp());
-        o2.addView(field("Reference No", referenceNoDate), weightLp());
-        o2.addView(field("Other Info", otherInfo), weightLp());
+        if (gta) {
+            // The transporter is the company itself, so that field stays out; the e-way bill goes under Reference
+            o1.addView(field("E-way Bill / Reference No", referenceNoDate), weightLp());
+            o1.addView(field("Delivery Note / Challan", deliveryNote), weightLp());
+            o1.addView(field("Order No", buyerOrderNo), weightLp());
+            o2.addView(field("Order Date", buyerOrderDate), weightLp());
+            o2.addView(field("Other Info", otherInfo), weightLp());
+            o2.addView(new View(this), weightLp());
+        } else {
+            o1.addView(field("Transporter", transporter), weightLp());
+            o1.addView(field("Delivery Note", deliveryNote), weightLp());
+            o1.addView(field("Buyer Order No", buyerOrderNo), weightLp());
+            o2.addView(field("Buyer Order Date", buyerOrderDate), weightLp());
+            o2.addView(field("Reference No", referenceNoDate), weightLp());
+            o2.addView(field("Other Info", otherInfo), weightLp());
+        }
 
         otherSec.addView(o1);
         otherSec.addView(o2);
@@ -2396,7 +2445,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         });
         root.addView(otherSec);
 
-        LinearLayout goodsSec = createSectionContainer("Goods / Services", NAVY);
+        LinearLayout goodsSec = createSectionContainer(gta ? "Freight & Charges" : "Goods / Services", NAVY);
         // Quick POS picker sits under the Goods / Services heading; its label follows the company's line of activity
         Button quickMenuBtn = new Button(this);
         quickMenuBtn.setText("Quick " + quickItemsLabel(effectiveActivity(null)));
@@ -3123,7 +3172,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     // ---- AI access: API keys for BlitzBook's MCP server (server/supabase/functions/mcp), as in the portal ----
-    // An AI assistant (Claude and other MCP clients) works with these books through that server with a key made
+    // Any AI assistant that speaks MCP (ChatGPT, Claude, Gemini, Copilot ...) works with these books through that server with a key made
     // here. A key is shown once, when it is made; Supabase keeps only its hash. A read-only key looks; a read &
     // write key can also save invoices, contacts and items. Revoking a key deletes it.
 
@@ -3160,7 +3209,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), dp(4));
-        box.addView(aiNote("Let an AI assistant such as Claude work with your books: ask it for this month's sales, who still owes you money or what a customer bought, or have it make an invoice for you. It connects to BlitzBook's MCP server with an API key you make here."));
+        box.addView(aiNote("Let any AI assistant work with your books: ChatGPT, Claude, Gemini, Copilot or any other app that connects to MCP servers. Ask it for this month's sales, who still owes you money or what a customer bought, or have it make an invoice for you. One universal API key made here works with every assistant."));
         TextView url = aiNote(mcpUrl());
         url.setTextIsSelectable(true); url.setTypeface(Typeface.MONOSPACE); url.setTextSize(12f);
         box.addView(field("MCP server address", url));
@@ -3229,12 +3278,12 @@ public class MainActivity extends Activity implements Sync.Listener {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), dp(4));
-        EditText name = edit("e.g. Claude on my phone", false);
+        EditText name = edit("e.g. My phone", false);
         name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(60)});
         box.addView(field("Name", name));
         Spinner scope = spinner(new String[]{"Read only - look at the books", "Read & write - also save invoices, contacts and items"});
         box.addView(field("Access", scope));
-        box.addView(aiNote("Choose read only unless the assistant has to enter things for you. An invoice saved by an assistant counts like any other invoice."));
+        box.addView(aiNote("Name the key after where or by whom it is used. Choose read only unless the assistant has to enter things for you. An invoice saved by an assistant counts like any other invoice."));
         AlertDialog dlg = new AlertDialog.Builder(this).setTitle("New API Key").setView(box).setNegativeButton("Cancel", null).setPositiveButton("Make Key", null).create();
         dlg.setOnShowListener(d -> {
             Button make = dlg.getButton(AlertDialog.BUTTON_POSITIVE);
@@ -3275,6 +3324,13 @@ public class MainActivity extends Activity implements Sync.Listener {
         copyKey.setPadding(dp(14), dp(10), dp(14), dp(10));
         copyKey.setOnClickListener(v -> copyText("Key", key));
         box.addView(copyKey, new LinearLayout.LayoutParams(-1, -2));
+        TextView addrTv = aiNote(mcpUrl());
+        addrTv.setTextIsSelectable(true); addrTv.setTypeface(Typeface.MONOSPACE); addrTv.setTextSize(12f);
+        box.addView(field("MCP server address", addrTv));
+        Button copyAddr = smallButton("Copy address", SLATE, 13f);
+        copyAddr.setPadding(dp(14), dp(10), dp(14), dp(10));
+        copyAddr.setOnClickListener(v -> copyText("Address", mcpUrl()));
+        box.addView(copyAddr, new LinearLayout.LayoutParams(-1, -2));
         TextView urlTv = aiNote(withKey);
         urlTv.setTextIsSelectable(true); urlTv.setTypeface(Typeface.MONOSPACE); urlTv.setTextSize(12f);
         box.addView(field("Address with the key", urlTv));
@@ -3282,7 +3338,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         copyUrl.setPadding(dp(14), dp(10), dp(14), dp(10));
         copyUrl.setOnClickListener(v -> copyText("Address with key", withKey));
         box.addView(copyUrl, new LinearLayout.LayoutParams(-1, -2));
-        box.addView(aiNote("In your AI app add a custom connector (MCP server) and paste the address with the key as its URL; no login is needed. An app that takes headers instead: the server address with the header \"Authorization: Bearer <key>\"."));
+        box.addView(aiNote("The same key and address work with every assistant. In the assistant add BlitzBook as a custom connector (MCP server): the server address with the header \"Authorization: Bearer <key>\" when it asks for headers or a token, or the address with the key as its URL when it only takes a URL. No login is needed."));
         ScrollView scroll = new ScrollView(this);
         scroll.addView(box);
         new AlertDialog.Builder(this).setTitle("API Key: " + k.optString("name")).setView(scroll).setCancelable(false).setPositiveButton("I have copied the key", null).show();
@@ -3430,6 +3486,8 @@ public class MainActivity extends Activity implements Sync.Listener {
         addColumnIfMissing(db, "invoice_items", "sub_serial_no", "TEXT");
         addColumnIfMissing(db, "invoice_items", "sub_description", "TEXT");
         addColumnIfMissing(db, "invoice_items", "sub_other_info", "TEXT");
+        // Consignment details of a transporter's invoice
+        for (String col : new String[]{"lr_no", "lr_date", "origin", "goods_desc"}) addColumnIfMissing(db, "invoices", col, "TEXT");
         db.execSQL("CREATE TABLE IF NOT EXISTS company_master (id INTEGER PRIMARY KEY AUTOINCREMENT, company_name TEXT, gstin TEXT, address TEXT, phone TEXT, email TEXT, bank_name TEXT, account_no TEXT, ifsc_code TEXT, branch_name TEXT)");
         addColumnIfMissing(db, "company_master", "gst_reg_type", "TEXT");
         addColumnIfMissing(db, "company_master", "invoice_format", "TEXT");
@@ -3454,6 +3512,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         db.execSQL("CREATE TABLE IF NOT EXISTS challan_items (id INTEGER PRIMARY KEY AUTOINCREMENT, challan_id INTEGER, sl_no INTEGER, " +
                 "particulars TEXT, hsn TEXT, gst_rate TEXT, qty REAL, uqc TEXT, rate REAL, amount REAL, " +
                 "sub_serial_no TEXT, sub_description TEXT, sub_other_info TEXT)");
+        for (String col : new String[]{"lr_no", "lr_date", "origin", "goods_desc"}) addColumnIfMissing(db, "challans", col, "TEXT");
         Ledger.createTables(db);
         Sync.prepare(db);
     }
@@ -3830,6 +3889,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             buyerOrderDate.setText(getString(c, "order_date"));
             referenceNoDate.setText(getString(c, "ref_no"));
             otherInfo.setText(getString(c, "additional_info"));
+            lrNo.setText(getString(c, "lr_no")); lrDate.setText(getString(c, "lr_date")); origin.setText(getString(c, "origin")); goodsDesc.setText(getString(c, "goods_desc"));
             othersCb.setChecked(getInt(c, "others_checked") == 1);
             rcmCb.setChecked(getInt(c, "rcm") == 1);
             if (challan) challanInvoiceNo = getString(c, "invoice_no");
@@ -4067,6 +4127,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         cv.put("transporter", transporter.getText().toString()); cv.put("vehicle_number", vehicleNumber.getText().toString());
         cv.put("delivery_challan", deliveryNote.getText().toString()); cv.put("order_no", buyerOrderNo.getText().toString().trim()); cv.put("order_date", buyerOrderDate.getText().toString());
         cv.put("ref_no", referenceNoDate.getText().toString()); cv.put("additional_info", otherInfo.getText().toString());
+        cv.put("lr_no", lrNo.getText().toString().trim()); cv.put("lr_date", lrDate.getText().toString().trim()); cv.put("origin", origin.getText().toString().trim()); cv.put("goods_desc", goodsDesc.getText().toString().trim());
         // Under reverse charge no GST is collected, so the sales register records none
         boolean rcm = isRcm();
         cv.put("rcm", rcm ? 1 : 0);
@@ -4334,9 +4395,10 @@ public class MainActivity extends Activity implements Sync.Listener {
             p.setStyle(Paint.Style.FILL);
 
             p.setTextSize(9.5f);
-            center(c, p, "BILL TO", L + 87.5f, y + 13, true);
-            center(c, p, "SHIP TO", L + 175 + 87.5f, y + 13, true);
-            center(c, p, "OTHER DETAILS", L + 350 + 77.5f, y + 13, true);
+            boolean gta = isTransporter();
+            center(c, p, gta ? "CONSIGNOR (BILL TO)" : "BILL TO", L + 87.5f, y + 13, true);
+            center(c, p, gta ? "CONSIGNEE" : "SHIP TO", L + 175 + 87.5f, y + 13, true);
+            center(c, p, gta ? "CONSIGNMENT DETAILS" : "OTHER DETAILS", L + 350 + 77.5f, y + 13, true);
 
             float by = y+28; String[] bl = buyerBillTo.getText().toString().toUpperCase(Locale.ROOT).split("\n");
             if (bl.length > 0) { p.setTextSize(9.5f); text(c,p,bl[0],L+6,by,true); by+=12; p.setTextSize(8.5f); for(int i=1; i<Math.min(bl.length, 3); i++) { text(c,p,bl[i],L+6,by,false); by+=10; } }
@@ -4355,14 +4417,16 @@ public class MainActivity extends Activity implements Sync.Listener {
             if (!consigneeEmail.getText().toString().trim().isEmpty()) text(c,p,"Email: " + consigneeEmail.getText().toString().trim().toLowerCase(Locale.ROOT), L+175+6, cy, false);
 
             float oy = y+28; p.setTextSize(8.5f); float vOff = 42;
-            if (!destination.getText().toString().trim().isEmpty()) { text(c, p, "Dest:", L+356, oy, true); text(c, p, titleCase(destination.getText().toString()), L+356+vOff, oy, false); oy += 10; }
-            if (!vehicleNumber.getText().toString().trim().isEmpty()) { text(c, p, "Veh No:", L+356, oy, true); text(c, p, vehicleNumber.getText().toString().trim().toUpperCase(Locale.ROOT), L+356+vOff, oy, false); oy += 10; }
-            if (!transporter.getText().toString().trim().isEmpty()) { text(c, p, "Trnsp:", L+356, oy, true); text(c, p, titleCase(transporter.getText().toString()), L+356+vOff, oy, false); oy += 10; }
-            if (!deliveryNote.getText().toString().trim().isEmpty()) { text(c, p, "Challan:", L+356, oy, true); text(c, p, deliveryNote.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
-            if (!buyerOrderNo.getText().toString().trim().isEmpty()) { text(c, p, "Ord No:", L+356, oy, true); text(c, p, buyerOrderNo.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
-            if (!buyerOrderDate.getText().toString().trim().isEmpty()) { text(c, p, "Ord Dt:", L+356, oy, true); text(c, p, buyerOrderDate.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
-            if (!referenceNoDate.getText().toString().trim().isEmpty()) { text(c, p, "Ref:", L+356, oy, true); text(c, p, referenceNoDate.getText().toString().trim(), L+356+vOff, oy, false); oy += 10; }
-            if (!otherInfo.getText().toString().trim().isEmpty()) { text(c, p, "Info:", L+356, oy, true); text(c, p, titleCase(otherInfo.getText().toString()), L+356+vOff, oy, false); }
+            String dest = titleCase(destination.getText().toString()), vno = vehicleNumber.getText().toString().trim().toUpperCase(Locale.ROOT), trn = titleCase(transporter.getText().toString()), dn = deliveryNote.getText().toString().trim();
+            String ordNo = buyerOrderNo.getText().toString().trim(), ordDt = buyerOrderDate.getText().toString().trim(), ref = referenceNoDate.getText().toString().trim(), info = titleCase(otherInfo.getText().toString());
+            String lr = lrNo.getText().toString().trim(), lrDt = lrDate.getText().toString().trim(), from = titleCase(origin.getText().toString()), goods = goodsDesc.getText().toString().trim(), vtype = titleCase(vehicle.getText().toString());
+            // A transporter's invoice leads with the consignment note, the route and the vehicle; the rest follow
+            String[][] od = gta ? new String[][]{{"LR No:", lr}, {"LR Dt:", lrDt}, {"From:", from}, {"To:", dest}, {"Veh No:", vno}, {"Vehicle:", vtype}, {"Goods:", goods}, {"E-way:", ref}, {"Challan:", dn}, {"Ord No:", ordNo}, {"Ord Dt:", ordDt}, {"Info:", info}}
+                    : new String[][]{{"Dest:", dest}, {"Veh No:", vno}, {"Trnsp:", trn}, {"LR No:", lr}, {"From:", from}, {"Challan:", dn}, {"Ord No:", ordNo}, {"Ord Dt:", ordDt}, {"Ref:", ref}, {"Info:", info}};
+            for (String[] d : od) {
+                if (d[1] == null || d[1].trim().isEmpty() || oy > y + boxH - 6) continue;
+                text(c, p, d[0], L+356, oy, true); text(c, p, clipText(p, d[1].trim(), W - 356 - vOff - 4), L+356+vOff, oy, false); oy += 10;
+            }
 
             y = 238;
         }
@@ -4605,16 +4669,23 @@ public class MainActivity extends Activity implements Sync.Listener {
         c.drawLine(TL, ly, midX, ly, p);
         String cons = consignee.getText().toString().trim();
         if (!cons.isEmpty()) {
-            ly = drawClassicParty(c, p, "Consignee (Ship to)", cons, consigneeGstin.getText().toString().trim().toUpperCase(Locale.ROOT), stateNameCode((String) consigneeState.getSelectedItem()),
+            ly = drawClassicParty(c, p, isTransporter() ? "Consignee" : "Consignee (Ship to)", cons, consigneeGstin.getText().toString().trim().toUpperCase(Locale.ROOT), stateNameCode((String) consigneeState.getSelectedItem()),
                     consigneeEmail.getText().toString().trim().toLowerCase(Locale.ROOT), consigneePhone.getText().toString().trim(), lx, ly, lw);
             c.drawLine(TL, ly, midX, ly, p);
         }
-        ly = drawClassicParty(c, p, "Buyer (Bill to)", buyerBillTo.getText().toString().trim(), buyerGstin.getText().toString().trim().toUpperCase(Locale.ROOT), stateNameCode((String) buyerState.getSelectedItem()),
+        ly = drawClassicParty(c, p, isTransporter() ? "Consignor (Bill to)" : "Buyer (Bill to)", buyerBillTo.getText().toString().trim(), buyerGstin.getText().toString().trim().toUpperCase(Locale.ROOT), stateNameCode((String) buyerState.getSelectedItem()),
                 buyerEmail.getText().toString().trim().toLowerCase(Locale.ROOT), buyerPhone.getText().toString().trim(), lx, ly, lw);
 
         // Right: label / value grid, two cells per row
         Object pay = paymentSpinner.getSelectedItem();
-        String[][] cells = {
+        String[][] cells = isTransporter() ? new String[][]{
+                {"Invoice No.", invoiceNo.getText().toString().trim(), "Dated", invoiceDate.getText().toString().trim()},
+                {"LR / Consignment Note No.", lrNo.getText().toString().trim(), "LR Date", lrDate.getText().toString().trim()},
+                {"From", titleCase(origin.getText().toString()), "To", titleCase(destination.getText().toString())},
+                {"Motor Vehicle No.", vehicleNumber.getText().toString().trim().toUpperCase(Locale.ROOT), "Vehicle Type", titleCase(vehicle.getText().toString())},
+                {"Goods / Packages / Weight", goodsDesc.getText().toString().trim(), "Mode/Terms of Payment", pay == null ? "" : pay.toString()},
+                {"E-way Bill / Reference No.", referenceNoDate.getText().toString().trim(), noGst ? "" : "Reverse Charge", noGst ? "" : isRcm() ? "Yes" : "No"}}
+            : new String[][]{
                 {"Invoice No.", invoiceNo.getText().toString().trim(), "Dated", invoiceDate.getText().toString().trim()},
                 {"Delivery Note", deliveryNote.getText().toString().trim(), "Mode/Terms of Payment", pay == null ? "" : pay.toString()},
                 {"Reference No. & Date", referenceNoDate.getText().toString().trim(), "Other References", titleCase(otherInfo.getText().toString())},
@@ -4682,8 +4753,9 @@ public class MainActivity extends Activity implements Sync.Listener {
             box(c, p, TL, y, TW, 25); for (int j = 1; j < xs.length - 1; j++) c.drawLine(xs[j], y, xs[j], y + 25, p);
             p.setTextSize(8.5f);
             center(c, p, "Sl", (xs[0] + xs[1]) / 2, y + 11, true); center(c, p, "No.", (xs[0] + xs[1]) / 2, y + 21, true);
-            String[] hds = noGst ? new String[]{"Description of Goods", "HSN/SAC", "Quantity", "Rate", "per", "Amount"}
-                                 : new String[]{"Description of Goods", "HSN/SAC", "GST Rate", "Quantity", "Rate", "per", "Amount"};
+            String descHdr = isTransporter() ? "Description of Services" : "Description of Goods";
+            String[] hds = noGst ? new String[]{descHdr, "HSN/SAC", "Quantity", "Rate", "per", "Amount"}
+                                 : new String[]{descHdr, "HSN/SAC", "GST Rate", "Quantity", "Rate", "per", "Amount"};
             for (int j = 0; j < hds.length; j++) {
                 float cx = (xs[j + 1] + xs[j + 2]) / 2;
                 if ("GST Rate".equals(hds[j])) { center(c, p, "GST", cx, y + 11, true); center(c, p, "Rate", cx, y + 21, true); } else center(c, p, hds[j], cx, y + 16, true);
@@ -7182,6 +7254,11 @@ public class MainActivity extends Activity implements Sync.Listener {
                 dcRowBtn.setContentDescription("Delivery challan for " + no);
                 dcRowBtn.setOnClickListener(v -> { salesDialog.dismiss(); printChallanFor(no); });
                 row.addView(dcRowBtn, iconLp(36, 4));
+                // Money received against the invoice, acknowledged with a receipt voucher PDF
+                Button rctRowBtn = new Button(this); rctRowBtn.setText("Rct"); styleButton(rctRowBtn, GREEN); rctRowBtn.setTextSize(11); rctRowBtn.setPadding(0, 0, 0, 0);
+                rctRowBtn.setContentDescription("Receipt for " + no);
+                rctRowBtn.setOnClickListener(v -> receiptForInvoice(no));
+                row.addView(rctRowBtn, iconLp(36, 4));
                 ImageButton delBtn = iconButton(R.drawable.ic_delete, RED, "Delete " + no);
                 if (Subscription.isLite(this, userId)) delBtn.setVisibility(View.GONE);
                 delBtn.setOnClickListener(v -> { if (blockedByCreditNotes(no)) return; new AlertDialog.Builder(this).setTitle("Delete Invoice")
@@ -7840,6 +7917,195 @@ public class MainActivity extends Activity implements Sync.Listener {
 
     private AlertDialog journalDialog;
 
+    // ------------------------------------------------------------------ receipts: money received against a sale
+    // A receipt is a journal voucher (Dr Cash / Bank, Cr customer) carrying the receipt number, the invoice it
+    // settles, the mode and the bank reference, exactly as the web portal keeps them, so the party ledger, the
+    // outstanding and the balance sheet all see it. Every receipt comes out as a voucher PDF for the customer.
+
+    private static final String[] RECEIPT_MODES = {"Cash", "Bank Transfer", "UPI", "Cheque", "Card"};
+
+    // RCT-0001, RCT-0002 ... across the receipts made here and in the portal
+    private String nextVoucherNo(String prefix) {
+        int max = 0;
+        Cursor c = dbHelper.getReadableDatabase().query("journal_vouchers", new String[]{"doc_no"}, "doc_no LIKE ?", new String[]{prefix + "-%"}, null, null, null);
+        while (c.moveToNext()) { try { max = Math.max(max, Integer.parseInt(c.getString(0).substring(prefix.length() + 1).trim())); } catch (Exception ignored) { } }
+        c.close();
+        return String.format(Locale.US, "%s-%04d", prefix, max + 1);
+    }
+
+    // What is still due on a credit invoice: its total less the receipts against it and the credit notes adjusted
+    // to it; -1 for an invoice paid at the time of sale
+    private double invoiceBalance(String no, double total, String paymentMode) {
+        if (!"Credit".equalsIgnoreCase(paymentMode)) return -1;
+        double got = 0;
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        Cursor r = db.rawQuery("SELECT SUM(l.amount) FROM journal_lines l JOIN journal_vouchers v ON v.id=l.voucher_id WHERE v.kind='Receipt' AND v.ref_no=? AND l.side='Dr'", new String[]{no});
+        if (r.moveToFirst()) got += r.getDouble(0);
+        r.close();
+        Cursor n = db.rawQuery("SELECT SUM(total) FROM notes WHERE kind=? AND ref_no=? AND settlement='Credit'", new String[]{Ledger.NOTE_CREDIT, no});
+        if (n.moveToFirst()) got += n.getDouble(0);
+        n.close();
+        return Math.max(0, Math.round((total - got) * 100) / 100.0);
+    }
+
+    // Rct on an invoice in Sales: a credit invoice with money due opens the receipt form filled in; an invoice
+    // paid at once, or a credit invoice already settled, gets its receipt printed straight away
+    private void receiptForInvoice(String no) {
+        Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"date", "buyer_name_addr", "rounded_total", "grand_total", "payment_mode"}, "invoice_no=?", new String[]{no}, null, null, null);
+        if (!c.moveToFirst()) { c.close(); return; }
+        String date = c.isNull(0) ? "" : c.getString(0), party = (c.isNull(1) ? "" : c.getString(1)).split("\n")[0].trim(), mode = c.isNull(4) || c.getString(4).isEmpty() ? "Cash" : c.getString(4);
+        double total = c.isNull(2) || c.getDouble(2) == 0 ? c.getDouble(3) : c.getDouble(2);
+        c.close();
+        if (party.isEmpty()) party = "Cash sale";
+        double due = invoiceBalance(no, total, mode);
+        if (due > 0.005) { showReceiptDialog(party, no, due, "Bank Transfer"); return; }
+        Ledger.JournalVoucher v = null;
+        if (due >= 0) {
+            // A settled credit invoice: the last receipt against it
+            for (Ledger.JournalVoucher j : Ledger.journal(dbHelper.getReadableDatabase())) if (j.isReceipt() && j.refNo.equals(no)) { v = j; break; }
+            if (v == null) { Toast.makeText(this, "No receipt is recorded against invoice " + no + " yet", Toast.LENGTH_LONG).show(); return; }
+        } else {
+            // Paid at the time of sale: the invoice itself is the record, the receipt shows it
+            v = new Ledger.JournalVoucher();
+            v.kind = "Receipt"; v.docNo = "RCT-" + no; v.date = date; v.party = party; v.refNo = no; v.mode = mode; v.narration = "Received at the time of sale";
+            v.lines.add(new Ledger.JournalLine("Cash".equalsIgnoreCase(mode) ? "Cash" : "Bank", true, total));
+            v.lines.add(new Ledger.JournalLine(party, false, total));
+        }
+        renderVoucherPdf(v);
+    }
+
+    private void showReceiptDialog(String party, String ref, double amount, String mode) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(14), dp(8), dp(14), dp(8));
+        EditText eNo = edit("Receipt No", false); eNo.setText(nextVoucherNo("RCT"));
+        EditText eDate = dateEdit("");
+        AccountPicker eParty = new AccountPicker(party);
+        EditText eAmt = edit("0.00", true); eAmt.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        if (amount > 0) eAmt.setText(String.format(Locale.US, "%.2f", amount));
+        Spinner eMode = spinner(RECEIPT_MODES);
+        int mi = Arrays.asList(RECEIPT_MODES).indexOf(mode); if (mi >= 0) eMode.setSelection(mi);
+        EditText eRef = edit("Invoice No (optional)", false); eRef.setText(ref);
+        EditText eBank = edit("UTR, cheque no (optional)", false);
+        EditText eNarr = edit("optional", false);
+        LinearLayout r1 = row(); r1.addView(field("Receipt No", eNo), weightLp()); r1.addView(field("Date *", eDate), weightLp()); box.addView(r1);
+        box.addView(field("Received from *", eParty));
+        LinearLayout r2 = row(); r2.addView(field("Amount \u20b9 *", eAmt), weightLp()); r2.addView(field("Received in", eMode), weightLp()); box.addView(r2);
+        LinearLayout r3 = row(); r3.addView(field("Against invoice", eRef), weightLp()); r3.addView(field("Bank / UPI / Cheque ref", eBank), weightLp()); box.addView(r3);
+        box.addView(field("Narration", eNarr));
+        box.addView(aiNote("Cash goes to the cash book, everything else to the bank book. Naming the invoice clears what is due on it. The receipt is saved as a PDF under Downloads/BlitzBook, ready to print or share with the customer."));
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+        AlertDialog dlg = new AlertDialog.Builder(this).setTitle("New Receipt").setView(sc).setPositiveButton("Save & Print", null).setNegativeButton("Cancel", null).create();
+        dlg.setOnShowListener(d -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String who = eParty.value().trim(); double amt = parseNum(eAmt);
+            if (eDate.getText().toString().trim().isEmpty()) { eDate.setError("Date is required"); return; }
+            if (who.isEmpty()) { Toast.makeText(this, "Choose who the money came from", Toast.LENGTH_SHORT).show(); return; }
+            if (amt <= 0) { eAmt.setError("Enter the amount"); eAmt.requestFocus(); return; }
+            String md = (String) eMode.getSelectedItem();
+            SQLiteDatabase db = dbHelper.getWritableDatabase();
+            Ledger.addAccount(db, who, Ledger.N_CUSTOMER);
+            Ledger.JournalVoucher j = new Ledger.JournalVoucher();
+            j.kind = "Receipt"; j.docNo = eNo.getText().toString().trim(); j.date = eDate.getText().toString().trim(); j.party = who;
+            j.refNo = eRef.getText().toString().trim(); j.mode = md; j.bankRef = eBank.getText().toString().trim(); j.narration = eNarr.getText().toString().trim();
+            j.lines.add(new Ledger.JournalLine("Cash".equals(md) ? "Cash" : "Bank", true, amt));
+            j.lines.add(new Ledger.JournalLine(who, false, amt));
+            Ledger.saveJournal(db, j);
+            Toast.makeText(this, "Receipt " + j.docNo + " saved", Toast.LENGTH_SHORT).show();
+            dlg.dismiss();
+            if (journalDialog != null && journalDialog.isShowing()) showJournalDialog();
+            renderVoucherPdf(j);
+        }));
+        dlg.show();
+    }
+
+    // [the customer's address / GSTIN / phone, what the invoice came to and what is still due] for the invoice a
+    // receipt names; null when no such invoice is saved here
+    private String[] invoiceSummary(String no) {
+        Cursor c = dbHelper.getReadableDatabase().query("invoices", new String[]{"date", "buyer_name_addr", "buyer_gstin", "buyer_phone", "rounded_total", "grand_total", "payment_mode"}, "invoice_no=?", new String[]{no}, null, null, null);
+        if (!c.moveToFirst()) { c.close(); return null; }
+        String date = c.isNull(0) ? "" : c.getString(0), gstin = c.isNull(2) ? "" : c.getString(2).trim(), phone = c.isNull(3) ? "" : c.getString(3).trim(), mode = c.isNull(6) ? "" : c.getString(6);
+        String[] addr = (c.isNull(1) ? "" : c.getString(1)).split("\n");
+        double total = c.isNull(4) || c.getDouble(4) == 0 ? c.getDouble(5) : c.getDouble(4);
+        c.close();
+        StringBuilder who = new StringBuilder();
+        for (int i = 1; i < Math.min(addr.length, 3); i++) if (!addr[i].trim().isEmpty()) who.append(who.length() == 0 ? "" : ", ").append(addr[i].trim().toUpperCase(Locale.ROOT));
+        if (!gstin.isEmpty()) who.append(who.length() == 0 ? "" : "   ").append("GSTIN: ").append(gstin.toUpperCase(Locale.ROOT));
+        if (!phone.isEmpty()) who.append(who.length() == 0 ? "" : "   ").append("Ph: ").append(phone);
+        double due = invoiceBalance(no, total, mode);
+        String line = "Invoice " + no + " dated " + date + ": total " + money(total) + (due < 0 ? ", paid in full at the time of sale" : ", balance due " + money(due));
+        return new String[]{who.toString(), line};
+    }
+
+    // The receipt / payment voucher as a one-page A4 PDF in the invoice style, saved under Downloads/BlitzBook
+    private void renderVoucherPdf(Ledger.JournalVoucher v) {
+        try {
+            boolean receipt = !v.isPayment();
+            double amount = v.debitTotal();
+            String mode = v.mode.isEmpty() ? "Bank Transfer" : v.mode;
+            final float L = 45, R = 550, W = R - L;
+            PdfDocument pdf = new PdfDocument();
+            PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(595, 842, 1).create());
+            Canvas c = page.getCanvas();
+            Paint pt = new Paint(Paint.ANTI_ALIAS_FLAG); pt.setColor(Color.BLACK); pt.setTextSize(9.5f); pt.setTypeface(pdfTypeface(false));
+            float y = 35;
+            pt.setTextSize(15); pt.setUnderlineText(true); center(c, pt, receipt ? "RECEIPT" : "PAYMENT VOUCHER", 297.5f, y, true); pt.setUnderlineText(false); y += 14;
+            pt.setStrokeWidth(1.2f); pt.setStyle(Paint.Style.STROKE); c.drawLine(L, y, R, y, pt); pt.setStyle(Paint.Style.FILL);
+            pt.setTextSize(12f); text(c, pt, sellerNameStr, L, 62, true);
+            pt.setTextSize(8.5f); drawMultiline(c, pt, sellerAddressStr, L, 75, 240, 10);
+            text(c, pt, (sellerGstinStr.isEmpty() ? "" : "GSTIN: " + sellerGstinStr + "   ") + "Phone: " + sellerPhoneStr, L, 111, true);
+            pt.setTextSize(9.5f); float rlX = R - 140, my = 62;
+            text(c, pt, (receipt ? "Receipt" : "Voucher") + " No:", rlX, my, true); text(c, pt, v.docNo.isEmpty() ? "-" : v.docNo, R, my, true, true, false); my += 13;
+            text(c, pt, "Date:", rlX, my, true); text(c, pt, v.date, R, my, true, true, false); my += 13;
+            text(c, pt, receipt ? "Against Invoice:" : "Against Bill:", rlX, my, true); text(c, pt, v.refNo.isEmpty() ? "-" : v.refNo, R, my, false, true, false); my += 13;
+            text(c, pt, "Mode:", rlX, my, true); text(c, pt, mode, R, my, false, true, false);
+
+            String[] inv = receipt && !v.refNo.isEmpty() ? invoiceSummary(v.refNo) : null;
+            y = 125; float boxH = 62;
+            box(c, pt, L, y, W, boxH);
+            pt.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 18, pt); pt.setColor(Color.BLACK);
+            pt.setStyle(Paint.Style.STROKE); c.drawRect(L, y, R, y + 18, pt); pt.setStyle(Paint.Style.FILL);
+            text(c, pt, receipt ? "RECEIVED FROM" : "PAID TO", L + 6, y + 13, true);
+            text(c, pt, v.party.toUpperCase(Locale.ROOT), L + 6, y + 32, true);
+            pt.setTextSize(8.5f); float py = y + 44;
+            if (inv != null && !inv[0].isEmpty()) { text(c, pt, clipText(pt, inv[0], W - 12), L + 6, py, false); py += 10; }
+            if (!v.narration.isEmpty()) text(c, pt, clipText(pt, v.narration, W - 12), L + 6, py, false);
+            y += boxH + 14;
+
+            float[] xs = {L, L + 380, R};
+            pt.setColor(0xFFE0E0E0); c.drawRect(L, y, R, y + 22, pt); pt.setColor(Color.BLACK);
+            box(c, pt, L, y, W, 22); c.drawLine(xs[1], y, xs[1], y + 22, pt);
+            pt.setTextSize(10f); center(c, pt, "PARTICULARS", (xs[0] + xs[1]) / 2, y + 15, true); center(c, pt, "AMOUNT", (xs[1] + xs[2]) / 2, y + 15, true);
+            y += 22;
+            String line = (receipt ? "Amount received by " : "Amount paid by ") + mode + (v.bankRef.isEmpty() ? "" : " (ref " + v.bankRef + ")") + (v.refNo.isEmpty() ? "" : " against " + v.refNo);
+            box(c, pt, L, y, W, 20); c.drawLine(xs[1], y, xs[1], y + 20, pt);
+            pt.setTextSize(9.5f); text(c, pt, clipText(pt, line, xs[1] - xs[0] - 12), xs[0] + 6, y + 14, false); text(c, pt, indianNumber(amount), xs[2] - 6, y + 14, false, true, false);
+            y += 20;
+            box(c, pt, L, y, W, 22); c.drawLine(xs[1], y, xs[1], y + 22, pt);
+            pt.setTextSize(10.5f); text(c, pt, "TOTAL", xs[1] - 6, y + 15, true, true, false); text(c, pt, money(amount), xs[2] - 6, y + 15, true, true, false);
+            y += 40;
+            pt.setTextSize(9.5f); text(c, pt, clipText(pt, "Amount in Words: " + rupeesPaiseWords(amount), W), L, y, true); y += 14;
+            if (inv != null && !inv[1].isEmpty()) { text(c, pt, clipText(pt, inv[1], W), L, y, false); y += 14; }
+            if (receipt) text(c, pt, "Received with thanks. Subject to realisation of cheque / transfer where applicable.", L, y, false);
+            float signY = y + 70; pt.setTextSize(10.5f); text(c, pt, "For " + sellerNameStr, R, signY, true, true, false);
+            Bitmap sig = loadSignature();
+            if (sig != null) {
+                float scale = Math.min(120f / sig.getWidth(), 36f / sig.getHeight());
+                float sw = sig.getWidth() * scale, sh = sig.getHeight() * scale;
+                c.drawBitmap(sig, null, new RectF(R - sw, signY + 4 + (36 - sh), R, signY + 40), new Paint(Paint.FILTER_BITMAP_FLAG));
+            }
+            text(c, pt, "Authorised Signatory", R, signY + 45, false, true, false);
+            poweredBy(c, pt, (L + R) / 2, 830);
+            pdf.finishPage(page);
+            String no = v.docNo.isEmpty() ? (receipt ? "Receipt" : "Payment") : v.docNo;
+            Uri uri = writePdfToDownloads(pdf, pdfName("", no));
+            if (uri != null) {
+                new AlertDialog.Builder(this).setTitle((receipt ? "Receipt " : "Payment Voucher ") + no + " Saved").setMessage("PDF saved to Downloads/BlitzBook. Share it with the " + (receipt ? "customer" : "supplier") + " or print it.")
+                        .setPositiveButton("Print / Share PDF", (dialog, which) -> sharePdf(uri)).setNegativeButton("Close", null).show();
+            }
+        } catch (Exception e) { Toast.makeText(this, "PDF error: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
     private void showJournalDialog() {
         remember("journal");
         List<Ledger.JournalVoucher> list = Ledger.journal(dbHelper.getReadableDatabase());
@@ -7853,14 +8119,16 @@ public class MainActivity extends Activity implements Sync.Listener {
         styleButton(addBtn, GREEN);
         addBtn.setTextSize(12);
         addBtn.setOnClickListener(v -> showJournalEditor(null));
+        Button rctBtn = new Button(this); rctBtn.setText("+ Receipt"); styleButton(rctBtn, BLUE); rctBtn.setTextSize(12);
+        rctBtn.setOnClickListener(v -> showReceiptDialog("", "", 0, "Cash"));
         Button jLedger = new Button(this); jLedger.setText("Party Ledger"); styleButton(jLedger, NAVY); jLedger.setTextSize(12);
         jLedger.setOnClickListener(v -> showPartyLedger(null, null, null, null));
-        jBtns.addView(addBtn, new LinearLayout.LayoutParams(0, -2, 1.4f)); jBtns.addView(jLedger, weightLp());
+        jBtns.addView(addBtn, new LinearLayout.LayoutParams(0, -2, 1.4f)); jBtns.addView(rctBtn, weightLp()); jBtns.addView(jLedger, weightLp());
         rootBox.addView(jBtns);
 
         TextView hint = new TextView(this);
-        hint.setText(list.isEmpty() ? "No journal entries yet. Use them for capital introduced, drawings, loans, asset purchases, depreciation, payments received or made, and corrections. An entry can have any number of debit and credit lines."
-                : list.size() + " entries. Debit the account that receives value, credit the account that gives it.");
+        hint.setText(list.isEmpty() ? "No journal entries yet. Use them for capital introduced, drawings, loans, asset purchases, depreciation, payments received or made, and corrections. An entry can have any number of debit and credit lines. + Receipt records money received from a customer and prints the receipt."
+                : list.size() + " entries. Debit the account that receives value, credit the account that gives it. A receipt or payment voucher prints as a PDF from its print button.");
         hint.setTextSize(11.5f); hint.setTextColor(0xFF607D8B); hint.setPadding(dp(4), dp(8), dp(4), dp(6));
         rootBox.addView(hint);
 
@@ -7877,6 +8145,11 @@ public class MainActivity extends Activity implements Sync.Listener {
             tv.setText(sb.toString());
             tv.setTextSize(12.5f);
             row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+            if (j.isReceipt() || j.isPayment()) {
+                ImageButton pdfBtn = iconButton(R.drawable.ic_print, NAVY, (j.isReceipt() ? "Receipt " : "Voucher ") + j.docNo + " as PDF");
+                pdfBtn.setOnClickListener(v -> renderVoucherPdf(j));
+                row.addView(pdfBtn, iconLp(36, 4));
+            }
             ImageButton editBtn = iconButton(R.drawable.ic_edit, BLUE, "Edit entry");
             editBtn.setOnClickListener(v -> showJournalEditor(j));
             row.addView(editBtn, iconLp(36, 4));

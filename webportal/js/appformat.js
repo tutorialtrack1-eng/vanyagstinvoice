@@ -41,6 +41,8 @@
         destination: s(o.destination), vehicle: s(o.vehicleType), vehicle_number: s(o.vehicleNo),
         others_checked: b01(o.transporter || o.deliveryNote || o.orderNo || o.orderDate || o.reference || o.info),
         transporter: s(o.transporter), delivery_challan: s(o.deliveryNote), order_no: s(o.orderNo), order_date: s(o.orderDate), ref_no: s(o.reference), additional_info: s(o.info),
+        // Consignment details of a transporter's invoice (LR = lorry receipt / consignment note)
+        lr_no: s(o.lrNo), lr_date: s(o.lrDate), origin: s(o.origin), goods_desc: s(o.goods),
         // Under reverse charge nothing is collected, so the app's sales register records no GST
         taxable_value: num(t.taxable), cgst: rcm ? 0 : num(t.cgst), sgst: rcm ? 0 : num(t.sgst), igst: rcm ? 0 : num(t.igst),
         grand_total: num(t.grand), rounded_total: num(t.rounded), amount_words: s(t.words), rcm: b01(rcm),
@@ -115,7 +117,10 @@
       return Object.assign({}, old, { kind: 'invoice', no: s(r.invoice_no).trim(), date: s(r.date), payment: s(r.payment_mode) || 'Cash', rcm, dueDate, terms: terms.terms, termsOn: terms.termsOn,
         buyer: party('buyer'), sameShip: num(r.same_as_billing) === 1, consignee: party('consignee'),
         other: { destination: s(r.destination), vehicleType: s(r.vehicle), vehicleNo: s(r.vehicle_number), transporter: s(r.transporter), deliveryNote: s(r.delivery_challan),
-          orderNo: s(r.order_no), orderDate: s(r.order_date), reference: s(r.ref_no), info: s(r.additional_info) },
+          orderNo: s(r.order_no), orderDate: s(r.order_date), reference: s(r.ref_no), info: s(r.additional_info),
+          // A row from an app that does not know the consignment columns yet leaves what was here
+          lrNo: r.lr_no === undefined && old ? s((old.other || {}).lrNo) : s(r.lr_no), lrDate: r.lr_date === undefined && old ? s((old.other || {}).lrDate) : s(r.lr_date),
+          origin: r.origin === undefined && old ? s((old.other || {}).origin) : s(r.origin), goods: r.goods_desc === undefined && old ? s((old.other || {}).goods) : s(r.goods_desc) },
         items, totals: { intra, taxable: num(r.taxable_value), cgst, sgst, igst, grand, rounded, words: s(r.amount_words) || U.toIndianWords(rounded) } });
     },
     challan(r, old) {

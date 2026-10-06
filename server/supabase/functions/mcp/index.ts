@@ -1,4 +1,4 @@
-// BlitzBook - MCP server, as a Supabase Edge Function. An AI assistant (Claude and any other Model Context Protocol
+// BlitzBook - MCP server, as a Supabase Edge Function. Any AI assistant (ChatGPT, Claude, Gemini, Copilot or another Model Context Protocol
 // client) connected here can look through an account's books and, with a read-write key, add to them.
 //
 //   POST /functions/v1/mcp      JSON-RPC 2.0 (MCP "streamable HTTP", answered as plain JSON, no session):

@@ -317,6 +317,9 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('choosing the invoice fills what is still due on it (after the credit note)', (await page.inputValue('#vAmt')) === '30934.00', await page.inputValue('#vAmt'));
   check('the invoice line says what is due', (await page.textContent('#vRefHint')).includes('30,934.00 still due'), await page.textContent('#vRefHint'));
   await page.fill('#vAmt', '10000'); await page.selectOption('#vMode', 'UPI'); await page.fill('#vBankRef', 'UTR123'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  await page.waitForSelector('.modal .mh');
+  check('a saved receipt comes out as a voucher at once, ready to print or save as a PDF', (await page.textContent('.modal .mh')).includes('Receipt RCT-0001 Saved') && (await page.$('#printFrame')) !== null, await page.textContent('.modal .mh'));
+  await page.click('.modal .mf .btn.outline');
   const moneyList = (await page.textContent('table.list')).replace(/\s+/g, ' ');
   check('receipt listed', moneyList.includes('RCT-0001') && moneyList.includes('Receipt') && moneyList.includes('10,000.00') && moneyList.includes('UTR123'), moneyList.slice(0, 300));
   const bsAfter = await page.evaluate(() => { const b = Books.balanceSheet(U.dateMs(U.today())); return [b.receivables, b.bank, Math.abs(b.totalAssets - b.totalLiabilities - b.capital)]; });
@@ -325,7 +328,33 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   const ageing = (await page.textContent('#view')).replace(/\s+/g, ' ');
   check('outstanding & ageing: the receipt mapped to the invoice leaves the rest due', ageing.includes('OFFSI27-00001') && ageing.includes('₹ 20,934.00') && ageing.includes('0 - 30 days') && ageing.includes('1 open credit invoice'), ageing.slice(0, 400));
   await page.screenshot({ path: OUT + '/11b-ageing.png', fullPage: true });
-  check('receipt prints as a voucher', (await page.evaluate(() => Print.voucher(Store.list('journal').find(j => j.vtype === 'receipt'), Store.company()))).includes('RECEIPT'));
+  const voucherHtml = await page.evaluate(() => Print.voucher(Store.list('journal').find(j => j.vtype === 'receipt'), Store.company()));
+  check('receipt prints as a voucher naming the invoice, the customer and what is still due', voucherHtml.includes('RECEIPT') && voucherHtml.includes('Invoice OFFSI27-00001') && voucherHtml.includes('balance due ₹ 20,934.00') && voucherHtml.includes('36AADCW0665P1ZS'.slice(0, 2)) && voucherHtml.includes('UPI'), voucherHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 600));
+  // Receipt on an invoice in Sales: a settled or cash invoice prints its receipt, one with money due records a receipt
+  await page.evaluate(() => App.go('sales')); await page.waitForSelector('[data-rct]');
+  check('every invoice in Sales has a Receipt button', (await page.$$('[data-rct]')).length === (await page.evaluate(() => Store.list('invoices').filter(i => i.kind === 'invoice').length)));
+  await page.click('[data-rct]'); await page.waitForSelector('#vParty');
+  check('Receipt on a credit invoice with money due opens the receipt form filled in', (await page.inputValue('#vRef')) === 'OFFSI27-00001' && (await page.inputValue('#vAmt')) === '20934.00', [await page.inputValue('#vRef'), await page.inputValue('#vAmt')]);
+  await page.click('.modal .mf .btn.outline');
+  // a transporter's invoice: consignor and consignee, the consignment note, the route, the vehicle and the goods
+  const transporter = await page.evaluate(() => {
+    const c = Store.company(), was = c.activity; c.activity = 'Transporter'; Store.saveCompany(c);
+    const out = { label: Biz.isTransporter() };
+    const inv = JSON.parse(JSON.stringify(Store.list('invoices')[0]));
+    inv.other = Object.assign(inv.other, { lrNo: 'LR-778', lrDate: '03/10/2026', origin: 'Hyderabad', goods: '120 cartons, 8.5 MT', destination: 'Vijayawada', vehicleNo: 'ts09ab1234' });
+    out.std = Print.preview(inv, Store.company(), 0, 'A4'); out.classic = Print.preview(inv, Store.company(), 1, 'A4');
+    c.activity = was; Store.saveCompany(c);
+    return out;
+  });
+  check('transporter PDFs: consignor / consignee, LR number and date, from / to, vehicle and goods', transporter.label && transporter.std.includes('CONSIGNOR (BILL TO)') && transporter.std.includes('CONSIGNMENT DETAILS') && transporter.std.includes('LR-778') && transporter.std.includes('Hyderabad') && transporter.std.includes('TS09AB1234') && transporter.std.includes('8.5 MT') &&
+    transporter.classic.includes('Consignor (Bill to)') && transporter.classic.includes('LR / Consignment Note No.') && transporter.classic.includes('Description of Services') && transporter.classic.includes('Vijayawada'));
+  await page.evaluate(() => { const c = Store.company(); c.activity = 'Transporter'; Store.saveCompany(c); App.go('invoice'); }); await page.waitForSelector('#oLr');
+  const gtaForm = await page.evaluate(() => [document.body.textContent.includes('Consignor (Bill To)'), !!document.querySelector('#oFrom'), !!document.querySelector('#oGoods'), !!document.querySelector('#iRcm'), !document.querySelector('#oTrans'), document.querySelector('#quickBtn').textContent.trim()]);
+  check('transporter editor: consignor, LR / from / to / goods fields, reverse charge offered, no transporter field, freight quick items', gtaForm.join() === 'true,true,true,true,true,Quick Freight Services', gtaForm);
+  await page.click('#quickBtn'); await page.waitForSelector('.qitem');
+  check('freight quick items at 5%', (await page.textContent('#qList')).includes('Freight Charges'));
+  await page.click('.modal .mf .btn.outline');
+  await page.evaluate(() => { const c = Store.company(); c.activity = 'Wholesale'; Store.saveCompany(c); });
   check('receipt is a journal entry too', await page.evaluate(() => { App.go('journal'); return document.querySelector('table.list').textContent.includes('Receipt RCT-0001'); }));
   // a bank statement in a bank's own export layout: parties matched from the narration, duplicates spotted on re-upload
   const bank = path.join(process.env.BLITZBOOK_DATA, 'statement.csv');

@@ -125,7 +125,7 @@ received and when it was collected.
 ## 7. AI access (MCP server and API keys)
 
 `functions/mcp/index.ts` is a Supabase Edge Function that speaks the Model Context Protocol, so an AI assistant
-(Claude and any other MCP client) can work with an account's books: list and read invoices, purchases, expenses,
+(any MCP client: ChatGPT, Claude, Gemini, Copilot and the rest, all with the same key) can work with an account's books: list and read invoices, purchases, expenses,
 notes, receipts and payments, contacts and items, add up sales, show what customers owe, and with a read-write key
 save invoices, contacts and items. Each account makes its own **API keys** in the portal (**AI Access** in the top
 bar) or in the app (**AI Access** in the side menu): a key belongs to that account, is *read only* or *read & write*, is shown once and can be revoked there.
