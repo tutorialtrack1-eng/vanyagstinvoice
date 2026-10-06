@@ -83,10 +83,11 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 The app checks `https://blitzbook.co.in/app-version.json` while it is in use and offers to update when that file
 names a higher `versionCode`. So for every new APK: raise `versionCode` (and `versionName`) in `app/build.gradle`,
 put the same numbers, a line of notes and the file's URL (`https://blitzbook.co.in/BlitzBook-<versionName>.apk`)
-in `webportal/app-version.json`, build, copy the APK to `webportal/BlitzBook-<versionName>.apk`, `git rm` the
-previous one, and push. The file carries the version in its name so a downloaded copy says which release it is;
-the portal's "Android app" button and the app's "Update now" both take the URL from the version file, and
-Android installs it over the old version; the books on the phone are kept.
+in `webportal/app-version.json`, build, copy the APK to `webportal/BlitzBook-<versionName>.apk` and also to
+`webportal/BlitzBook.apk`, `git rm` the previous versioned file, and push. The versioned file is what the
+portal's "Android app" button and the app's "Update now" download (both take the URL from the version file), so a
+downloaded copy says which release it is; `BlitzBook.apk` is the same build under the old name, kept so that old
+links keep working. Android installs it over the old version; the books on the phone are kept.
 
 ## Build
 Open this folder in Android Studio and let Gradle sync. Then select:
