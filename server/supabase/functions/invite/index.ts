@@ -84,7 +84,8 @@ async function sendMail(to: string, m: { subject: string; text: string; html: st
   try {
     await client.send({ from: env("SMTP_FROM") || user, to, subject: m.subject, content: m.text, html: m.html });
   } finally {
-    await client.close().catch(() => undefined);
+    // close() is not always a promise, so no .catch on it
+    try { await client.close(); } catch { /* already closed */ }
   }
 }
 

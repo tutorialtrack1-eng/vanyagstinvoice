@@ -211,6 +211,8 @@ by `user_id`; the rules on `books` check the role per record:
   those defaults. Without the function or the secrets the clients still add or invite through `set_member`;
   nobody is mailed and the owner is told so. A mobile number of someone not registered cannot be mailed either:
   the invitation waits for an account with that number.
+  `SUPABASE_TOKEN=sbp_... node server/supabase/invite-live-test.js` checks the deployed function end to end with a
+  throwaway owner (deployed and checked 2026-10-09).
 - `create_company` and `set_member` need the owner on a yearly plan or longer (`is_yearly`: the owner's `sub`
   record has a `yearly_until` ahead or more than 300 days of validity), as the clients require.
 - The company name in `companies` follows the company profile record (`books_company_name` trigger).
