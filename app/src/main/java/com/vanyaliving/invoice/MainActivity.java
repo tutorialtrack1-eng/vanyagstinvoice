@@ -3764,7 +3764,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
     }
 
-    // "Powered by BlitzBook" at the foot of every printed page
+    // "Powered by BlitzBook.co.in" at the foot of every printed page
     private void poweredBy(Canvas c, Paint p, float centerX, float y) {
         float size = p.getTextSize(); int color = p.getColor();
         p.setTextSize(7.5f); p.setColor(0xFF555555);
