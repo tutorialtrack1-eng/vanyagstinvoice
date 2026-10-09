@@ -117,7 +117,7 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.waitForFunction(() => Sync.status === 'idle', null, { timeout: 10000 });
   check('sync is on', await page.evaluate(() => Sync.status === 'idle'));
   await page.screenshot({ path: OUT + '/02-dashboard.png', fullPage: true });
-  check('top bar in groups: Dashboard, Sales, Purchases, Stock, Books, HR, Company; the company chip', await page.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales,Purchases,Stock,Books,HR,Company' && Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).includes('Company Profile') && !!document.querySelector('#barCo')));
+  check('top bar in groups: Dashboard, Sales, Purchases, Stock, Records, HR, Company; the company chip', await page.evaluate(() => Array.from(document.querySelectorAll('#nav .navlink span')).map(e => e.textContent).join() === 'Dashboard,Sales,Purchases,Stock,Records,HR,Company' && Array.from(document.querySelectorAll('#nav .navitem')).map(e => e.textContent).includes('Company Profile') && !!document.querySelector('#barCo')));
   await page.hover('#nav .navgrp:nth-of-type(2) .grp'); await page.waitForTimeout(300);
   check('a group opens on hover and shows its screens', await page.evaluate(() => { const g = document.querySelector('#nav .navgrp.open'); return !!g && g.querySelector('.grp span').textContent === 'Purchases' && getComputedStyle(g.querySelector('.navmenu')).display === 'block'; }));
   await page.mouse.move(600, 500); await page.waitForTimeout(400);
@@ -232,6 +232,16 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   check('an invoice with a credit note cannot be deleted', (await page.textContent('.modal .mh')) === 'Cannot Delete Invoice' && (await page.textContent('.modal .mb')).includes('CN-0001'), await page.textContent('.modal .mb'));
   await page.click('.modal .mf .btn');
   check('print carries the footer', htmlStd.includes('Powered by BlitzBook') && htmlEnv.includes('Powered by BlitzBook') && fs.readFileSync(OUT + '/print-purchase.html', 'utf8').includes('Powered by BlitzBook'));
+  check('the footer links to the portal', htmlStd.includes('href="https://blitzbook.co.in">Powered by BlitzBook</a>') && htmlEnv.includes('href="https://blitzbook.co.in"') && fs.readFileSync(OUT + '/print-purchase.html', 'utf8').includes('href="https://blitzbook.co.in"'));
+  // Duplicate: the first invoice of the list again under the next number and today's date; saved, it is one more
+  // invoice and the original is untouched. Deleted again afterwards so the rest of the run counts as before.
+  const dupSrc = await page.$eval('[data-dup]', e => e.dataset.dup), nInv = await page.evaluate(() => Store.list('invoices').length);
+  await page.click('[data-dup]'); await page.waitForSelector('#iSave');
+  check('Duplicate opens a copy under the next number, dated today, without the consignment details', await page.evaluate((id) => { const s = Store.find('invoices', id), i = Invoice.inv; return !i.id && i.no !== s.no && i.date === U.today() && i.buyer.name === s.buyer.name && i.items.length === s.items.length && i.items[0].desc === s.items[0].desc && i.payment === s.payment && !i.other.deliveryNote && !i.other.reference && !!document.querySelector('.toast') && document.querySelector('.toast').textContent.includes('Copy of invoice ' + s.no); }, dupSrc), await page.evaluate(() => [Invoice.inv.no, Invoice.inv.date, document.querySelector('.toast') && document.querySelector('.toast').textContent]));
+  await page.click('#iSave'); await page.waitForSelector('.toast');
+  const dup = await page.evaluate((id) => { const s = Store.find('invoices', id), all = Store.list('invoices'), d = all.filter(x => x.kind === 'invoice' && x.id !== id && x.buyer.name === s.buyer.name).sort((a, b) => b.createdAt - a.createdAt)[0]; return { n: all.length, no: d && d.no, src: s.no, same: !!d && d.items.length === s.items.length && d.date === U.today(), flag: d ? 'duplicateOf' in d : null, orig: s.items.length }; }, dupSrc);
+  check('saved as one more invoice, the original untouched', dup.n === nInv + 1 && !!dup.no && dup.no !== dup.src && dup.same && dup.flag === false, dup);
+  await page.evaluate((no) => { const d = Store.list('invoices').find(x => x.no === no); Store.delete('invoices', d.id); }, dup.no);
   // a long invoice prints page by page: numbered pages, "Continued on next page..." and a "(Continued)" strip
   const longInv = await page.evaluate(() => { const i = JSON.parse(JSON.stringify(Store.list('invoices')[0])); i.items = Array.from({ length: 45 }, (_, n) => Object.assign({}, i.items[0], { sl: n + 1, desc: 'Item ' + (n + 1) })); Biz.computeTotals(i); return [Print.html(i, Store.company(), 0, 'A4'), Print.html(i, Store.company(), 1, 'A4')]; });
   for (const [n, h] of longInv.entries()) {

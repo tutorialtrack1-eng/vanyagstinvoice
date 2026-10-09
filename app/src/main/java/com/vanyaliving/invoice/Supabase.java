@@ -333,6 +333,17 @@ final class Supabase {
         return r instanceof JSONArray ? (JSONArray) r : new JSONArray(String.valueOf(r));
     }
     static JSONObject setMember(Context c, long userId, String cid, String identity, String role) throws Exception { return checked(rpc(c, userId, "set_member", json("cid", cid, "identity", identity, "role_in", role)), "Add member"); }
+    /** Adds a member, or invites someone without an account yet, and has them emailed (the invite edge function,
+     *  server/supabase/functions/invite). A project without the function falls back to set_member alone: the member is
+     *  added or the invitation kept, nobody is mailed. Answers set_member's object with mailed / mail_error. */
+    static JSONObject inviteMember(Context c, long userId, String cid, String identity, String role) throws Exception {
+        JSONObject r = null;
+        try { r = withToken(c, userId, token -> asObject(http(c, "POST", "/functions/v1/invite", json("cid", cid, "identity", identity, "role", role), token, null))); }
+        catch (Sync.SyncException e) { if (e.status == 401 || (e.status >= 400 && e.status < 500 && e.status != 404)) throw e; }
+        if (r == null) { r = checked(rpc(c, userId, "set_member", json("cid", cid, "identity", identity, "role_in", role)), "Add member"); r.put("mailed", false); r.put("mail_error", "Email is not available on this server"); }
+        return checked(r, "Add member");
+    }
+    static JSONObject removeInvite(Context c, long userId, String cid, String identity) throws Exception { return checked(rpc(c, userId, "remove_invite", json("cid", cid, "identity", identity)), "Withdraw invitation"); }
     static JSONObject removeMember(Context c, long userId, String cid, String member) throws Exception { return checked(rpc(c, userId, "remove_member", json("cid", cid, "member", member)), "Remove member"); }
     /** The account's own id on the server, from the token it holds (blank when signed out). */
     static String myUid(Context c, long userId) { String t = Sync.token(c, userId); return t.isEmpty() ? "" : jwtSub(t); }

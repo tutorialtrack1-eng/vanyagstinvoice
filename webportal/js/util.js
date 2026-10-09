@@ -235,11 +235,19 @@
   function nl2br(s) { return esc(s).replace(/\n/g, '<br>'); }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
+  // dd/mm/yyyy from what an uploaded sheet may hold: an Excel serial, an ISO date, or d/m/y with any separator
+  function sheetDate(v) {
+    v = String(v == null ? '' : v).trim(); if (!v) return '';
+    if (/^\d{5}$/.test(v)) { const d = new Date(Date.UTC(1899, 11, 30) + (+v) * 86400000); return pad(d.getUTCDate()) + '/' + pad(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear(); }
+    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v); if (m) return pad(+m[3]) + '/' + pad(+m[2]) + '/' + m[1];
+    m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(v); if (m) return pad(+m[1]) + '/' + pad(+m[2]) + '/' + (m[3].length === 2 ? '20' + m[3] : m[3]);
+    return v;
+  }
   global.U = {
     STATES, UQC_CODES, GST_RATES, PAYMENT_MODES, GST_REG_TYPES, LINE_OF_ACTIVITIES, DEFAULT_INVOICE_FORMAT, HSN_MAP, BANK_IFSC,
     matchState, hsnFor, nameCase, stamp, xlsxRows, sha256Hex,
     num, round2, indianNumber, money, fmtQty, pct, toIndianWords, rupeesPaiseWords, twoDigits,
     isValidGstin, isValidPhone, isValidEmail, stateCode, stateByCode, stateName, formatState, stateNameCode,
-    today, pad, toIso, fromIso, dateMs, currentFinancialYear, formatInvoiceNo, parseInvoiceCounter, titleCase, esc, nl2br, uid
+    today, pad, toIso, fromIso, dateMs, sheetDate, currentFinancialYear, formatInvoiceNo, parseInvoiceCounter, titleCase, esc, nl2br, uid
   };
 })(window);

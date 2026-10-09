@@ -205,29 +205,55 @@
     async members(c) {
       const manage = (c.role === 'owner' || c.role === 'admin') && this.yearly(), me = this.myUid();
       const bg = UI.modal({ title: 'Members of ' + (c.name || 'the company'), wide: true, focus: false, body: '<div id="mbList"><div class="hint">Loading…</div></div>' +
-          (manage ? '<div class="field span" style="margin-top:12px"><label>Add a member</label><div class="btnrow" style="margin:0"><input id="mbId" placeholder="Mobile number or email of a BlitzBook account" style="flex:1;min-width:200px">' + UI.select('mbRole', ROLES.filter(r => r !== 'owner').map(r => [r, ROLE_LABEL[r]]), 'viewer') + '<button class="btn sm green" id="mbAdd">Add</button></div><div class="hint">They must have a BlitzBook account already (registered in the app or the portal). The company then appears under Companies in their login, and they work in it on your subscription.</div></div>' : ''),
+          (manage ? '<div class="field span" style="margin-top:12px"><label>Add a member</label><div class="btnrow" style="margin:0"><input id="mbId" placeholder="Mobile number or email" style="flex:1;min-width:200px">' + UI.select('mbRole', ROLES.filter(r => r !== 'owner').map(r => [r, ROLE_LABEL[r]]), 'viewer') + '<button class="btn sm green" id="mbAdd">Add</button></div><div class="hint">Someone with a BlitzBook account gets the role at once and an email saying so. Someone without one is invited: an email tells them who added them and in what role, and asks them to register at blitzbook.co.in (or in the app) with that email; the company appears under Companies in their login the moment they do. They work in it on your subscription.</div></div>' : ''),
         buttons: [{ label: 'Close', cls: 'outline' }] });
       const draw = async () => {
         let list;
         try { list = this.checked(await this.rpc('list_members', { cid: c.id }), 'Members'); } catch (e) { if (bg.isConnected) $('#mbList', bg).innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
         if (!bg.isConnected) return;
         list = Array.isArray(list) ? list : [];
-        $('#mbList', bg).innerHTML = '<table class="list"><thead><tr><th>Name</th><th>Mobile / Email</th><th>Role</th>' + (manage ? '<th></th>' : '') + '</tr></thead><tbody>' + list.map(m => '<tr><td><b>' + esc(m.name || '-') + '</b>' + (m.user_id === me ? ' <span class="small muted">(you)</span>' : '') + '</td><td>' + esc([m.phone, m.email].filter(Boolean).join(' · ')) + '</td><td>' +
-          (manage && m.role !== 'owner' ? UI.select('r_' + m.user_id, ROLES.filter(r => r !== 'owner').map(r => [r, ROLE_LABEL[r]]), m.role, { attrs: ' data-role="' + esc(m.user_id) + '" data-id="' + esc(m.phone || m.email) + '" style="min-height:34px;padding:4px 8px"' }) : '<span class="pill ' + (m.role === 'owner' ? 'ok' : 'warn') + '">' + esc(ROLE_LABEL[m.role] || m.role) + '</span>') + '</td>' +
-          (manage ? '<td class="actions">' + (m.role !== 'owner' ? '<button class="btn sm red" data-rm="' + esc(m.user_id) + '" data-name="' + esc(m.name) + '">Remove</button>' : '') + '</td>' : '') + '</tr>').join('') + '</tbody></table>' +
+        $('#mbList', bg).innerHTML = '<table class="list"><thead><tr><th>Name</th><th>Mobile / Email</th><th>Role</th>' + (manage ? '<th></th>' : '') + '</tr></thead><tbody>' + list.map((m, n) => '<tr' + (m.invited ? ' class="muted"' : '') + '><td><b>' + esc(m.name || (m.invited ? 'Invited' : '-')) + '</b>' + (m.user_id && m.user_id === me ? ' <span class="small muted">(you)</span>' : '') + (m.invited ? '<div class="small muted">No BlitzBook account yet; gets the role on registering with this ' + (m.email ? 'email' : 'mobile number') + '</div>' : '') + '</td><td>' + esc([m.phone, m.email].filter(Boolean).join(' · ')) + '</td><td>' +
+          (manage && m.role !== 'owner' ? UI.select('r_' + n, ROLES.filter(r => r !== 'owner').map(r => [r, ROLE_LABEL[r]]), m.role, { attrs: ' data-role="' + esc(m.user_id || '') + '" data-id="' + esc(m.phone || m.email) + '" style="min-height:34px;padding:4px 8px"' }) : '<span class="pill ' + (m.role === 'owner' ? 'ok' : 'warn') + '">' + esc(ROLE_LABEL[m.role] || m.role) + '</span>') + (m.invited ? ' <span class="pill">Invited</span>' : '') + '</td>' +
+          (manage ? '<td class="actions">' + (m.role !== 'owner' ? '<button class="btn sm red"' + (m.invited ? ' data-uninvite="' + esc(m.phone || m.email) + '"' : ' data-rm="' + esc(m.user_id) + '"') + ' data-name="' + esc(m.name || m.phone || m.email) + '">' + (m.invited ? 'Withdraw' : 'Remove') + '</button>' : '') + '</td>' : '') + '</tr>').join('') + '</tbody></table>' +
           '<div class="hint">' + ROLES.map(r => '<b>' + ROLE_LABEL[r] + '</b>: ' + esc(ROLE_HELP[r])).join('. ') + '.</div>';
         $$('[data-role]', bg).forEach(s => s.onchange = async () => { try { this.checked(await this.rpc('set_member', { cid: c.id, identity: s.dataset.id, role_in: s.value }), 'Change role'); UI.toast('Role changed'); } catch (e) { UI.toast(e.message, 6000); } draw(); });
         $$('[data-rm]', bg).forEach(b => b.onclick = () => UI.confirm('Remove Member', 'Remove ' + (b.dataset.name || 'this member') + ' from ' + c.name + '?', async () => { try { this.checked(await this.rpc('remove_member', { cid: c.id, member: b.dataset.rm }), 'Remove'); UI.toast('Member removed'); } catch (e) { UI.toast(e.message, 6000); } draw(); this.load().catch(() => null); }, 'Remove'));
+        $$('[data-uninvite]', bg).forEach(b => b.onclick = () => UI.confirm('Withdraw Invitation', 'Withdraw the invitation of ' + b.dataset.uninvite + ' to ' + c.name + '? They can be invited again any time.', async () => { try { this.checked(await this.rpc('remove_invite', { cid: c.id, identity: b.dataset.uninvite }), 'Withdraw'); UI.toast('Invitation withdrawn'); } catch (e) { UI.toast(e.message, 6000); } draw(); }, 'Withdraw'));
       };
       if (manage) $('#mbAdd', bg).onclick = async () => {
         const id = UI.val('mbId', bg).trim(); if (!id) { UI.toast('Enter the mobile number or email'); return; }
         $('#mbAdd', bg).disabled = true;
-        try { const r = this.checked(await this.rpc('set_member', { cid: c.id, identity: id, role_in: UI.val('mbRole', bg) }), 'Add'); UI.toast((r.name || id) + ' added as ' + ROLE_LABEL[r.role], 4000); $('#mbId', bg).value = ''; }
+        try { const r = await this.invite(c.id, id, UI.val('mbRole', bg)); UI.toast(this.inviteText(r, id), 8000); $('#mbId', bg).value = ''; }
         catch (e) { UI.toast(e.message, 7000); }
         finally { if (bg.isConnected) $('#mbAdd', bg).disabled = false; }
         draw(); this.load().catch(() => null);
       };
       draw();
+    },
+
+    // Adds a member or invites someone without an account, and has them emailed (the invite edge function,
+    // server/supabase/functions/invite). A project without the function falls back to set_member alone: the member is
+    // added or the invitation kept, and nobody is mailed.
+    async invite(cid, identity, role) {
+      let r;
+      try {
+        r = await Sub.withToken(async (token) => {
+          const res = await fetch(Sync.serverUrl().replace(/\/+$/, '') + '/functions/v1/invite', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: Sync.supabaseKey(), Authorization: 'Bearer ' + token }, body: JSON.stringify({ cid, identity, role }) });
+          const text = await res.text(); let j = null; try { j = text ? JSON.parse(text) : null; } catch (e) { /* not JSON */ }
+          if (res.status === 404 || res.status === 503 || (res.status >= 500 && !(j && j.error))) return null;   // no such function on this project
+          if (res.status === 401) { const e = new Error((j && j.error) || 'Signed out'); e.status = 401; throw e; }
+          if (!res.ok && !(j && j.error)) throw new Error('Could not reach the server (' + res.status + ')');
+          return j;
+        });
+      } catch (e) { if (e.status === 401) throw e; r = null; }
+      if (!r) r = Object.assign({}, await this.rpc('set_member', { cid, identity, role_in: role }), { mailed: false, mail_error: 'Email is not available on this server' });
+      return this.checked(r, 'Add');
+    },
+    // What to tell the person who added a member about what happened
+    inviteText(r, id) {
+      const who = r.name || r.identity || id, role = ROLE_LABEL[r.role] || r.role;
+      if (r.invited) return who + ' has no BlitzBook account yet: invited as ' + role + '. ' + (r.mailed ? 'An email tells them to register with this address; the company is theirs to open the moment they do.' : 'They get the role on registering with this ' + (/@/.test(who) ? 'email' + (r.mail_error ? ' (no email sent: ' + r.mail_error + ')' : '') : 'mobile number') + '.');
+      return who + ' added as ' + role + (r.mailed ? '; an email has told them' : r.mail_error ? ' (no email sent: ' + r.mail_error + ')' : '') + '.';
     },
 
     // ---- a company's books in its own namespace, for the group statements

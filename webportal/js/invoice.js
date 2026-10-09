@@ -141,6 +141,18 @@
     return Object.assign(newInvoice(), { payment: 'Credit', buyer: copy(dc.buyer), sameShip: dc.sameShip, consignee: copy(dc.consignee), items: copy(dc.items).map((it, n) => Object.assign(it, { sl: n + 1 })),
       other: Object.assign({}, dc.other, { deliveryNote: dc.no }), fromChallan: dc.id });
   }
+  // A copy of a saved invoice as a new one: the same buyer, consignee, goods, payment mode and terms under the next
+  // number and today's date. What belongs to the original consignment (delivery note, order, e-way bill / reference,
+  // vehicle and LR) is left blank; the due date follows the new date.
+  function duplicateInvoice(src) {
+    const copy = JSON.parse(JSON.stringify(src));
+    ['id', 'createdAt', 'updatedAt', 'fromChallan', 'totals'].forEach(k => delete copy[k]);
+    const inv = Object.assign(newInvoice(), copy, { id: null, no: nextInvoiceNo(), date: U.today(), duplicateOf: src.no,
+      other: Object.assign({}, copy.other, { deliveryNote: '', orderNo: '', orderDate: '', reference: '', vehicleNo: '', lrNo: '', lrDate: '' }) });
+    inv.items = (inv.items.length ? inv.items : [blankItem(1)]).map((it, n) => Object.assign(it, { sl: n + 1 }));
+    inv.dueDate = dueDateFor(inv);
+    return inv;
+  }
   function computeItem(it) {
     const q = num(it.qty), g = chargesGst() ? num(it.gst) : 0;
     if (!it.inc) { const r = num(it.rate); it.taxable = U.round2(q * r); it.totalIncl = U.round2(q * r * (1 + g / 100)); }
@@ -309,6 +321,7 @@
       if (params.challan) inv = JSON.parse(JSON.stringify(Store.find('challans', params.challan) || {}));
       else if (params.id) inv = JSON.parse(JSON.stringify(Store.find('invoices', params.id) || {}));
       else if (params.fromChallan) { const dc = Store.find('challans', params.fromChallan); if (dc) inv = invoiceFromChallan(dc); }
+      else if (params.duplicate) { const src = Store.find('invoices', params.duplicate); if (src) inv = duplicateInvoice(src); }
       if (!inv || !inv.no) inv = params.kind === 'challan' ? newChallan() : newInvoice();
       if (params.quickItem) { const m = findMaster(params.quickItem); Object.assign(inv.items[0], { desc: params.quickItem, hsn: m && !m.hidden ? m.hsn : U.hsnFor(params.quickItem), gst: m && !m.hidden ? m.gst : '18', qty: 1, rate: m && !m.hidden && num(m.rate) > 0 ? exclRate(m.rate, m.gst) : '' }); }
       this.inv = inv;
@@ -357,7 +370,7 @@
         '<div class="card"><div class="hd">Totals Summary</div><div class="bd"><div class="totals" id="totals"></div><div class="words" id="words"></div></div></div>' +
         '<div class="btnrow end"><button class="btn red outline" id="iDel" ' + (inv.id ? '' : 'disabled') + '>🗑 Delete</button><button class="btn outline" id="iNew">+ New</button><button class="btn outline" id="iSettings">Print Settings</button>' +
         (challan ? (inv.id && !inv.invoiceNo ? '<button class="btn" id="iMakeInv">Make Invoice</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print Challan</button>'
-          : '<button class="btn" id="iChallan">Delivery Challan</button>' + (inv.id ? '<button class="btn" id="iReceipt" title="Record the money received against this invoice and print the receipt">Receipt</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print / PDF</button>') + '</div>');
+          : '<button class="btn" id="iChallan">Delivery Challan</button>' + (inv.id ? '<button class="btn" id="iReceipt" title="Record the money received against this invoice and print the receipt">Receipt</button><button class="btn" id="iDup" title="A new invoice with the same buyer and items, under the next number">Duplicate</button>' : '') + '<button class="btn blue" id="iSave">Save</button><button class="btn green" id="iPrint">Print / PDF</button>') + '</div>');
       App.wireBack(root);
       const bind = (id, fn) => { const el = $('#' + id); if (el) el.addEventListener('input', fn), el.addEventListener('change', fn); };
       bind('iNo', e => {
@@ -404,8 +417,10 @@
       $('#iSettings').onclick = () => this.printSettings();
       if ($('#iChallan')) $('#iChallan').onclick = () => this.print('challan');
       if ($('#iMakeInv')) $('#iMakeInv').onclick = () => Invoice.open({ fromChallan: inv.id });
+      if ($('#iDup')) $('#iDup').onclick = () => Invoice.open({ duplicate: inv.id });
       this.renderRows();
       if (inv.fromChallan) UI.toast('Invoice prepared from delivery challan ' + inv.other.deliveryNote + '. Check it and Save.', 5000);
+      if (inv.duplicateOf) UI.toast('Copy of invoice ' + inv.duplicateOf + ' as ' + inv.no + ' dated today. Check it and Save.', 5000);
       // On an invoice pack a saved invoice is read-only: it can be printed, not changed
       if (inv.id && Sub.isLite() && !challan) {
         $$('input, select, textarea, .step, .subbtn, .delbtn, #addRow, #quickBtn', root).forEach(el => { el.disabled = true; });
@@ -519,7 +534,7 @@
       const ex = Store.list('invoices').find(x => x.kind === 'invoice' && x.no === inv.no && x.id !== inv.id);
       if (ex) inv.id = ex.id;
       inv.kind = 'invoice';
-      const fresh = !inv.id, from = inv.fromChallan; delete inv.fromChallan;
+      const fresh = !inv.id, from = inv.fromChallan; delete inv.fromChallan; delete inv.duplicateOf;
       const saved = inv.id ? Store.update('invoices', inv) : Store.add('invoices', inv);
       inv.id = saved.id;
       if (fresh) Sub.useInvoice();
@@ -631,7 +646,7 @@
       (invs.length ? '<div class="btnrow"><input id="sSearch" class="search" placeholder="Search by invoice no, party, phone, GSTIN, item, amount..." autocomplete="off"><span class="hint" id="sCount"></span></div>' : '') +
       '<div class="tablewrap">' + (invs.length ? '<table class="list cards"><thead><tr><th>Invoice</th><th>Date</th><th>Buyer</th><th class="num">Total</th><th>Mode</th><th>Due</th><th></th></tr></thead><tbody>' +
         invs.map(i => '<tr data-s="' + esc(hay(i)) + '"><td data-l="Invoice"><b>' + esc(i.no) + '</b></td><td data-l="Date">' + esc(i.date) + '</td><td data-l="Buyer">' + esc(U.titleCase((i.buyer.name || '').split('\n')[0]) || '(cash sale)') + (i.buyer.phone ? '<div class="small muted">' + esc(i.buyer.phone) + '</div>' : '') + '</td><td class="num" data-l="Total">' + money(num(i.totals.rounded) || num(i.totals.grand)) + '</td><td data-l="Mode"><span class="pill ' + (i.payment === 'Credit' ? 'warn' : '') + '">' + esc(i.payment) + '</span>' + (i.rcm ? ' <span class="pill">RCM</span>' : '') + '</td><td data-l="Due">' + dueCell(i) + '</td>' +
-          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">' + (lite ? 'View' : 'Open') + '</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm outline" data-dc="' + esc(i.id) + '" title="Print a delivery challan for this invoice">Challan</button><button class="btn sm outline" data-rct="' + esc(i.id) + '" title="' + (i.payment === 'Credit' ? 'Record the money received against this invoice and print the receipt' : 'Print the receipt for this invoice') + '">Receipt</button>' + (lite ? '' : '<button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one, or "Upload PO" to make invoices from purchase orders.</div>') + '</div>');
+          '<td class="actions"><button class="btn sm outline" data-open="' + esc(i.id) + '">' + (lite ? 'View' : 'Open') + '</button><button class="btn sm" data-print="' + esc(i.id) + '">Print</button><button class="btn sm outline" data-dup="' + esc(i.id) + '" title="A new invoice with the same buyer and items">Duplicate</button><button class="btn sm outline" data-dc="' + esc(i.id) + '" title="Print a delivery challan for this invoice">Challan</button><button class="btn sm outline" data-rct="' + esc(i.id) + '" title="' + (i.payment === 'Credit' ? 'Record the money received against this invoice and print the receipt' : 'Print the receipt for this invoice') + '">Receipt</button>' + (lite ? '' : '<button class="btn sm red" data-del="' + esc(i.id) + '">Delete</button>') + '</td></tr>').join('') + '</tbody></table><div class="empty hidden" id="sNone">No invoice matches the search.</div>' : '<div class="empty">No invoices saved yet. Tap "+ New Invoice" to make the first one, or "Upload PO" to make invoices from purchase orders.</div>') + '</div>');
     App.wireBack(root);
     if ($('#sSearch')) {
       // Every word typed has to appear somewhere in the invoice
@@ -648,6 +663,7 @@
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
     $$('[data-print]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.print, print: true }));
     $$('[data-dc]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.dc, print: 'challan' }));
+    $$('[data-dup]', root).forEach(b => b.onclick = () => App.go('invoice', { duplicate: b.dataset.dup }));
     $$('[data-rct]', root).forEach(b => b.onclick = () => Invoice.receipt(Store.find('invoices', b.dataset.rct), () => App.go('sales')));
     $$('[data-del]', root).forEach(b => b.onclick = () => deleteInvoice(Store.find('invoices', b.dataset.del), () => App.go('sales')));
   };
@@ -691,14 +707,8 @@
     'PO-1001,02/10/2026,Ramesh Traders,37ABCDE1234F1ZZ,9876543210,ramesh@gmail.com,100 Feet Road Vijayawada,Andhra Pradesh,Steel Pipe 2 inch,7306,10,NOS,450,18\n' +
     'PO-1001,,,,,,,,Welding Rods,8311,5,BOX,320,18\n' +
     'PO-1002,02/10/2026,Suresh Enterprises,36XYZAB5678G2ZY,9123456789,suresh@gmail.com,MG Road Hyderabad,Telangana,Office Chair,9401,4,NOS,3200,18\n';
-  // dd/mm/yyyy from what a sheet may hold: an Excel serial, an ISO date, or d/m/y with any separator
-  function poDate(v) {
-    v = String(v || '').trim(); if (!v) return '';
-    if (/^\d{5}$/.test(v)) { const d = new Date(Date.UTC(1899, 11, 30) + (+v) * 86400000); return U.pad(d.getUTCDate()) + '/' + U.pad(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear(); }
-    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v); if (m) return U.pad(+m[3]) + '/' + U.pad(+m[2]) + '/' + m[1];
-    m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(v); if (m) return U.pad(+m[1]) + '/' + U.pad(+m[2]) + '/' + (m[3].length === 2 ? '20' + m[3] : m[3]);
-    return v;
-  }
+  // dd/mm/yyyy from what a sheet may hold (U.sheetDate: an Excel serial, an ISO date, or d/m/y with any separator)
+  const poDate = (v) => U.sheetDate(v);
   // The purchase orders in the uploaded rows: [{no, date, customer, gstin, phone, email, address, state, items: [{desc, hsn, qty, uqc, rate, gst}]}]
   function parsePurchaseOrders(rows) {
     const head = rows.length ? rows[0].map(c => String(c == null ? '' : c).trim().toLowerCase().replace(/[^a-z]/g, '')) : [];

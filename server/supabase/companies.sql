@@ -1,59 +1,76 @@
--- Companies, company groups and members with roles (run in the SQL Editor after schema.sql; safe to run again).
---
--- Until now one account was one set of books: public.books is keyed by (user_id, k). From here on books.user_id is
--- the id of the COMPANY a record belongs to. An account's first company keeps the account's own id, so every row
--- that exists today, every older app and portal, and the MCP server go on working unchanged. Further companies an
--- account creates get an id of their own in public.companies, with the owner, a name and a group name (the group
--- is what the consolidated statements are drawn for).
---
--- Other accounts join a company as members with a role (public.company_members):
---   owner       the account that made the company: everything, including members and deleting the company
---   admin       everything in the books, the company profile and the members
---   accountant  every record of the books (invoices, purchases, expenses, journal, receipts, payments, parties,
---               items); not the company profile, members or subscription
---   sales       sales invoices, delivery challans, credit / debit notes, receipts, customers and items only
---   manager     the HR records (emp:, att:, ts:, rb:, pay:, hr) and approves timesheets and reimbursements
---   hr          the HR records only (employees, attendance, timesheets, reimbursements, payroll, HR settings); reads
---               nothing else of the books but the company profile and the subscription; approves only as the
---               reporting manager of the employee (hr_relation)
---   Nobody but the owner decides on their own timesheet or claim (the employee record carrying the login's mobile
---   or email); the reporting line is emp:<id>.managerId.
---   viewer      looks at everything, changes nothing
--- The rules below enforce the role on the server; the app and the portal hide what a role cannot do.
---
--- A client working on a company other than its own sends the header "X-Company: <company id>" (and filters by
--- user_id = that id). Without the header an account sees only its own books, so a device running an older
--- version never receives another company's records by accident.
---
--- The subscription stays with the OWNER's account: everybody working in a company runs on the owner's plan. A
--- member may read the owner's "sub" record while the header names one of the owner's companies.
+    -- Companies, company groups and members with roles (run in the SQL Editor after schema.sql; safe to run again).
+    --
+    -- Until now one account was one set of books: public.books is keyed by (user_id, k). From here on books.user_id is
+    -- the id of the COMPANY a record belongs to. An account's first company keeps the account's own id, so every row
+    -- that exists today, every older app and portal, and the MCP server go on working unchanged. Further companies an
+    -- account creates get an id of their own in public.companies, with the owner, a name and a group name (the group
+    -- is what the consolidated statements are drawn for).
+    --
+    -- Other accounts join a company as members with a role (public.company_members):
+    --   owner       the account that made the company: everything, including members and deleting the company
+    --   admin       everything in the books, the company profile and the members
+    --   accountant  every record of the books (invoices, purchases, expenses, journal, receipts, payments, parties,
+    --               items); not the company profile, members or subscription
+    --   sales       sales invoices, delivery challans, credit / debit notes, receipts, customers and items only
+    --   manager     the HR records (emp:, att:, ts:, rb:, pay:, hr) and approves timesheets and reimbursements
+    --   hr          the HR records only (employees, attendance, timesheets, reimbursements, payroll, HR settings); reads
+    --               nothing else of the books but the company profile and the subscription; approves only as the
+    --               reporting manager of the employee (hr_relation)
+    --   Nobody but the owner decides on their own timesheet or claim (the employee record carrying the login's mobile
+    --   or email); the reporting line is emp:<id>.managerId.
+    --   viewer      looks at everything, changes nothing
+    -- The rules below enforce the role on the server; the app and the portal hide what a role cannot do.
+    --
+    -- Someone without a BlitzBook account yet is added all the same: set_member keeps the mobile number or email with the
+    -- role in public.company_invites, the invite edge function (functions/invite) mails them, and the membership is made
+    -- the moment an account with that mobile number or email appears (claim_invites, run by my_companies).
+    --
+    -- A client working on a company other than its own sends the header "X-Company: <company id>" (and filters by
+    -- user_id = that id). Without the header an account sees only its own books, so a device running an older
+    -- version never receives another company's records by accident.
+    --
+    -- The subscription stays with the OWNER's account: everybody working in a company runs on the owner's plan. A
+    -- member may read the owner's "sub" record while the header names one of the owner's companies.
 
-create table if not exists public.companies (
-  id         uuid primary key default gen_random_uuid(),
-  owner_id   uuid not null references auth.users (id) on delete cascade,
-  name       text not null default '',
-  group_name text not null default '',
-  created_at timestamptz not null default now()
-);
-create index if not exists companies_owner on public.companies (owner_id);
-alter table public.companies enable row level security;
+    create table if not exists public.companies (
+      id         uuid primary key default gen_random_uuid(),
+      owner_id   uuid not null references auth.users (id) on delete cascade,
+      name       text not null default '',
+      group_name text not null default '',
+      created_at timestamptz not null default now()
+    );
+    create index if not exists companies_owner on public.companies (owner_id);
+    alter table public.companies enable row level security;
 
-create table if not exists public.company_members (
-  company_id uuid not null references public.companies (id) on delete cascade,
-  user_id    uuid not null references auth.users (id) on delete cascade,
-  role       text not null check (role in ('admin', 'accountant', 'sales', 'manager', 'hr', 'viewer')),
-  added_by   uuid,
-  created_at timestamptz not null default now(),
-  primary key (company_id, user_id)
-);
-create index if not exists company_members_user on public.company_members (user_id);
-alter table public.company_members enable row level security;
+    create table if not exists public.company_members (
+      company_id uuid not null references public.companies (id) on delete cascade,
+      user_id    uuid not null references auth.users (id) on delete cascade,
+      role       text not null check (role in ('admin', 'accountant', 'sales', 'manager', 'hr', 'viewer')),
+      added_by   uuid,
+      created_at timestamptz not null default now(),
+      primary key (company_id, user_id)
+    );
+    create index if not exists company_members_user on public.company_members (user_id);
+    alter table public.company_members enable row level security;
 -- The HR role (app 1.10): added to the check of a table made by an earlier version of this file
 alter table public.company_members drop constraint if exists company_members_role_check;
 alter table public.company_members add constraint company_members_role_check check (role in ('admin', 'accountant', 'sales', 'manager', 'hr', 'viewer'));
 
--- Clients reach both tables through the functions below only
-revoke all on public.companies, public.company_members from anon, authenticated;
+-- People given a role before they have an account: the mobile number or email they were added by (lower case),
+-- turned into a company_members row by claim_invites once an account with it registers
+create table if not exists public.company_invites (
+  company_id uuid not null references public.companies (id) on delete cascade,
+  identity   text not null,
+  role       text not null check (role in ('admin', 'accountant', 'sales', 'manager', 'hr', 'viewer')),
+  invited_by uuid,
+  created_at timestamptz not null default now(),
+  primary key (company_id, identity)
+);
+create index if not exists company_invites_identity on public.company_invites (identity);
+alter table public.company_invites enable row level security;
+
+-- Clients reach these tables through the functions below only
+revoke all on public.companies, public.company_members, public.company_invites from anon, authenticated;
 
 -- books.user_id may now be a company id, which is not an auth user: the foreign key has to go. A company's books
 -- are removed with the company (trigger below); an account's own books go with the account the same way, since
@@ -249,6 +266,7 @@ declare out jsonb;
 begin
   if auth.uid() is null then return '[]'::jsonb; end if;
   perform public.ensure_primary_company();
+  perform public.claim_invites();
   select coalesce(jsonb_agg(jsonb_build_object(
       'id', c.id, 'name', c.name, 'group_name', c.group_name, 'owner_id', c.owner_id,
       'owner_name', coalesce((select p.name from public.profiles p where p.id = c.owner_id), ''),
@@ -310,7 +328,8 @@ grant execute on function public.delete_company(uuid) to authenticated;
 
 -- ---------------------------------------------------------------- members
 
--- The people with access to a company (any member may look): [{"user_id", "name", "phone", "email", "role"}], the owner first
+-- The people with access to a company (any member may look): [{"user_id", "name", "phone", "email", "role"}], the owner
+-- first, the members by name, then the people invited who have no account yet ("invited": true, no user_id)
 create or replace function public.list_members(cid uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare out jsonb; own uuid;
@@ -318,38 +337,94 @@ begin
   if public.company_role(cid) is null then return jsonb_build_object('error', 'Not a member of this company'); end if;
   select owner_id into own from public.companies where id = cid;
   if own is null then own := cid; end if;
-  select coalesce(jsonb_agg(x order by (x ->> 'role' = 'owner') desc, x ->> 'name'), '[]'::jsonb) into out from (
+  select coalesce(jsonb_agg(x order by (x ->> 'role' = 'owner') desc, (coalesce(x ->> 'invited', 'false') = 'true'), x ->> 'name'), '[]'::jsonb) into out from (
     select jsonb_build_object('user_id', p.id, 'name', coalesce(p.name, ''), 'phone', coalesce(p.phone, ''), 'email', coalesce(p.email, ''), 'role', 'owner') as x
     from public.profiles p where p.id = own
     union all
     select jsonb_build_object('user_id', m.user_id, 'name', coalesce(p.name, ''), 'phone', coalesce(p.phone, ''), 'email', coalesce(p.email, ''), 'role', m.role)
     from public.company_members m left join public.profiles p on p.id = m.user_id where m.company_id = cid
+    union all
+    select jsonb_build_object('user_id', null, 'name', '', 'phone', case when i.identity like '%@%' then '' else i.identity end, 'email', case when i.identity like '%@%' then i.identity else '' end, 'role', i.role, 'invited', true, 'since', i.created_at)
+    from public.company_invites i where i.company_id = cid
   ) s;
   return out;
 end $$;
 grant execute on function public.list_members(uuid) to authenticated;
 
--- Gives an account (found by its mobile number or email) a role in a company, or changes the role it has
--- (owner or admin). The account must already be registered with BlitzBook. {"ok": true, "name": ...} or {"error"}.
+-- Gives an account (found by its mobile number or email) a role in a company, or changes the role it has (owner or
+-- admin). Someone without a BlitzBook account yet is invited instead: the mobile number or email is kept with the role
+-- (company_invites) and becomes the membership when they register with it.
+-- {"ok": true, "user_id", "name", "email", "role", "company", "by"} for a member, the same with "invited": true and
+-- "identity" for an invitation, or {"error"}. "company" and "by" (the name of who added them) go into the email the
+-- invite edge function sends.
 create or replace function public.set_member(cid uuid, identity text, role_in text) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare p public.profiles%rowtype; r text := lower(trim(coalesce(role_in, ''))); own uuid;
+declare p public.profiles%rowtype; r text := lower(trim(coalesce(role_in, ''))); own uuid; ident text := lower(trim(coalesce(identity, '')));
+        co text; by text; n int;
 begin
   if public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
   if not public.is_yearly(coalesce((select owner_id from public.companies where id = cid), cid)) then return jsonb_build_object('error', 'Members come with the yearly plan and longer (the owner of the company has to be on it)'); end if;
   if r not in ('admin', 'accountant', 'sales', 'manager', 'hr', 'viewer') then return jsonb_build_object('error', 'Role must be admin, accountant, sales, manager, hr or viewer'); end if;
-  select * into p from public.profiles where phone = trim(identity) or lower(email) = lower(trim(identity)) limit 1;
-  if not found then return jsonb_build_object('error', 'No BlitzBook account with that mobile number or email. Ask them to register first.'); end if;
   select owner_id into own from public.companies where id = cid;
+  select coalesce(name, '') into co from public.companies where id = cid;
+  select coalesce(name, '') into by from public.profiles where id = auth.uid();
+  select * into p from public.profiles where phone = ident or lower(email) = ident limit 1;
+  if not found then
+    -- No account yet: an invitation by email or 10-digit mobile number
+    if ident !~ '^[^\s@]+@[^\s@]+\.[^\s@]{2,}$' and ident !~ '^[6-9][0-9]{9}$' then
+      return jsonb_build_object('error', 'No BlitzBook account with that mobile number or email. Enter an email address or a 10-digit mobile number to invite them.');
+    end if;
+    select count(*) into n from public.company_members where company_id = cid;
+    if n + (select count(*) from public.company_invites x where x.company_id = cid and x.identity <> ident) >= 50 then return jsonb_build_object('error', 'A company can have 50 members'); end if;
+    insert into public.company_invites (company_id, identity, role, invited_by) values (cid, ident, r, auth.uid())
+      on conflict on constraint company_invites_pkey do update set role = excluded.role, invited_by = excluded.invited_by, created_at = now();
+    return jsonb_build_object('ok', true, 'invited', true, 'identity', ident, 'email', case when ident like '%@%' then ident else '' end, 'name', '', 'role', r, 'company', co, 'by', by);
+  end if;
   if p.id = coalesce(own, cid) then return jsonb_build_object('error', 'That is the owner of the company'); end if;
   if (select count(*) from public.company_members where company_id = cid) >= 50 and not exists (select 1 from public.company_members where company_id = cid and user_id = p.id) then
     return jsonb_build_object('error', 'A company can have 50 members');
   end if;
   insert into public.company_members (company_id, user_id, role, added_by) values (cid, p.id, r, auth.uid())
     on conflict (company_id, user_id) do update set role = excluded.role;
-  return jsonb_build_object('ok', true, 'user_id', p.id, 'name', coalesce(p.name, ''), 'role', r);
+  delete from public.company_invites x where x.company_id = cid and x.identity in (ident, coalesce(p.phone, ''), lower(coalesce(p.email, '')));
+  return jsonb_build_object('ok', true, 'user_id', p.id, 'name', coalesce(p.name, ''), 'email', coalesce(p.email, ''), 'role', r, 'company', co, 'by', by);
 end $$;
 grant execute on function public.set_member(uuid, text, text) to authenticated;
+
+-- Withdraws an invitation (owner or admin)
+create or replace function public.remove_invite(cid uuid, identity text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
+  delete from public.company_invites x where x.company_id = cid and x.identity = lower(trim(coalesce(remove_invite.identity, '')));
+  return jsonb_build_object('ok', true);
+end $$;
+grant execute on function public.remove_invite(uuid, text) to authenticated;
+
+-- Turns the invitations addressed to the signed-in account's mobile number or email into memberships (my_companies
+-- calls it, so the company is there at the first login after registering). Answers the number of companies joined.
+create or replace function public.claim_invites() returns integer
+language plpgsql security definer set search_path = public as $$
+declare p public.profiles%rowtype; n integer := 0;
+begin
+  if auth.uid() is null then return 0; end if;
+  select * into p from public.profiles where id = auth.uid();
+  if not found then return 0; end if;
+  with mine as (
+    select i.company_id, i.role, i.invited_by from public.company_invites i
+    where (p.phone is not null and i.identity = p.phone) or (p.email is not null and i.identity = lower(p.email))
+  ), joined as (
+    insert into public.company_members (company_id, user_id, role, added_by)
+    select m.company_id, auth.uid(), m.role, m.invited_by from mine m
+    where m.company_id <> auth.uid() and not exists (select 1 from public.companies c where c.id = m.company_id and c.owner_id = auth.uid())
+    on conflict (company_id, user_id) do nothing
+    returning company_id
+  )
+  select count(*) into n from joined;
+  delete from public.company_invites i where (p.phone is not null and i.identity = p.phone) or (p.email is not null and i.identity = lower(p.email));
+  return n;
+end $$;
+grant execute on function public.claim_invites() to authenticated;
 
 -- Removes a member (owner or admin), or oneself from a company one was invited to
 create or replace function public.remove_member(cid uuid, member uuid) returns jsonb

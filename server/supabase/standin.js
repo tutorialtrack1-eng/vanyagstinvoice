@@ -8,7 +8,7 @@
 const http = require('http'), crypto = require('crypto');
 const pwHash = (p) => crypto.createHash('sha256').update('bb|' + p).digest('hex');
 const ANON = 'anon-key';
-const users = new Map(), profiles = new Map(), tokens = new Map(), companies = new Map(), members = new Map();
+const users = new Map(), profiles = new Map(), tokens = new Map(), companies = new Map(), members = new Map(), invites = new Map(), mails = [];
 const books = []; let rev = 0;
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 function sessionFor(u) { const t = 'h.' + b64({ sub: u.id, exp: Math.floor(Date.now() / 1000) + 3600, jti: crypto.randomUUID() }) + '.sig'; tokens.set(t, u.id); return { access_token: t, token_type: 'bearer', expires_in: 3600, user: u }; }
@@ -56,11 +56,23 @@ function maySelect(uid, hdr, row) {
 const isYearly = (uid) => { const b = books.find(x => x.user_id === uid && x.k === 'sub'), d = b && b.d ? b.d : {}, now = Date.now(); if ((+d.yearly_until || 0) > now || (+d.valid_until || 0) - now > 300 * 86400000) return true; if ((+d.valid_until || 0) > 0) return false; const u = users.get(uid), start = +d.registered_at || (u ? Date.parse(u.created_at) : 0); return start > 0 && start + 30 * 86400000 > now; };
 function ensurePrimary(uid) { if (!companies.has(uid)) { const co = books.find(b => b.user_id === uid && b.k === 'company'); companies.set(uid, { id: uid, owner_id: uid, name: co && co.d ? co.d.company_name || '' : '', group_name: '', created_at: new Date().toISOString() }); } }
 function upsertBook(cid, k, d) { const at = books.findIndex(x => x.user_id === cid && x.k === k); const nr = { user_id: cid, k, d, r: ++rev }; if (at >= 0) books[at] = nr; else books.push(nr); if (k === 'company' && d && companies.has(cid)) companies.get(cid).name = String(d.company_name || '').slice(0, 120); }
+// The invitations addressed to an account's mobile number or email become memberships (companies.sql claim_invites)
+function claimInvites(uid) {
+  const p = profiles.get(uid); if (!p) return 0; let n = 0;
+  for (const [k, i] of Array.from(invites)) {
+    if (i.identity !== p.phone && i.identity !== (p.email || '').toLowerCase()) continue;
+    const c = companies.get(i.company_id);
+    if (i.company_id !== uid && !(c && c.owner_id === uid) && !members.has(i.company_id + '|' + uid)) { members.set(i.company_id + '|' + uid, { company_id: i.company_id, user_id: uid, role: i.role }); n++; }
+    invites.delete(k);
+  }
+  return n;
+}
 const rpc = {
   identity_login(uid, b) { const id = String(b.identity || '').toLowerCase(); const row = Array.from(profiles.values()).find(r => r.phone === id || (r.email || '').toLowerCase() === id); return [200, row ? { email: row.email || '', phone: row.phone || '' } : null]; },
   my_companies(uid) {
     if (!uid) return [200, []];
     ensurePrimary(uid);
+    claimInvites(uid);
     const out = [];
     for (const c of companies.values()) {
       const m = members.get(c.id + '|' + uid);
@@ -72,16 +84,26 @@ const rpc = {
   create_company(uid, b) { if (!uid) return [200, { error: 'Sign in first' }]; const nm = String(b.name_in || '').trim(); if (!nm) return [200, { error: 'Enter the company name' }]; if (!isYearly(uid)) return [200, { error: 'Companies, groups and members come with the yearly plan and longer' }]; ensurePrimary(uid); const id = crypto.randomUUID(); companies.set(id, { id, owner_id: uid, name: nm, group_name: String(b.group_in || '').trim(), created_at: new Date().toISOString() }); upsertBook(id, 'company', { company_name: nm }); return [200, { id, name: nm, group_name: String(b.group_in || '').trim() }]; },
   update_company(uid, b) { if (!['owner', 'admin'].includes(roleOf(uid, b.cid))) return [200, { error: 'Only the owner or an admin can change the company' }]; companies.get(b.cid).group_name = String(b.group_in || '').trim(); return [200, { ok: true }]; },
   delete_company(uid, b) { if (!uid || b.cid === uid) return [200, { error: 'The first company of an account cannot be deleted' }]; const c = companies.get(b.cid); if (!c || c.owner_id !== uid) return [200, { error: 'Only the owner can delete a company' }]; companies.delete(b.cid); for (const k of Array.from(members.keys())) if (k.startsWith(b.cid + '|')) members.delete(k); for (let i = books.length - 1; i >= 0; i--) if (books[i].user_id === b.cid) books.splice(i, 1); return [200, { ok: true }]; },
-  list_members(uid, b) { if (!roleOf(uid, b.cid)) return [200, { error: 'Not a member of this company' }]; const c = companies.get(b.cid), own = c ? c.owner_id : b.cid, p = profiles.get(own) || {}; const out = [{ user_id: own, name: p.name || '', phone: p.phone || '', email: p.email || '', role: 'owner' }]; for (const [k, m] of members) if (k.startsWith(b.cid + '|')) { const q = profiles.get(m.user_id) || {}; out.push({ user_id: m.user_id, name: q.name || '', phone: q.phone || '', email: q.email || '', role: m.role }); } return [200, out]; },
+  list_members(uid, b) { if (!roleOf(uid, b.cid)) return [200, { error: 'Not a member of this company' }]; const c = companies.get(b.cid), own = c ? c.owner_id : b.cid, p = profiles.get(own) || {}; const out = [{ user_id: own, name: p.name || '', phone: p.phone || '', email: p.email || '', role: 'owner' }]; for (const [k, m] of members) if (k.startsWith(b.cid + '|')) { const q = profiles.get(m.user_id) || {}; out.push({ user_id: m.user_id, name: q.name || '', phone: q.phone || '', email: q.email || '', role: m.role }); }
+    for (const [k, i] of invites) if (k.startsWith(b.cid + '|')) out.push({ user_id: null, name: '', phone: i.identity.includes('@') ? '' : i.identity, email: i.identity.includes('@') ? i.identity : '', role: i.role, invited: true, since: i.created_at });
+    return [200, out]; },
   set_member(uid, b) {
     if (!['owner', 'admin'].includes(roleOf(uid, b.cid))) return [200, { error: 'Only the owner or an admin can manage members' }];
     const r = String(b.role_in || '').toLowerCase(); if (!['admin', 'accountant', 'sales', 'manager', 'hr', 'viewer'].includes(r)) return [200, { error: 'Role must be admin, accountant, sales, manager, hr or viewer' }];
     const co = companies.get(b.cid); if (!isYearly(co ? co.owner_id : b.cid)) return [200, { error: 'Members come with the yearly plan and longer (the owner of the company has to be on it)' }];
     const id = String(b.identity || '').trim().toLowerCase(), p = Array.from(profiles.values()).find(x => x.phone === id || (x.email || '').toLowerCase() === id);
-    if (!p) return [200, { error: 'No BlitzBook account with that mobile number or email. Ask them to register first.' }];
-    const c = companies.get(b.cid); if (p.id === (c ? c.owner_id : b.cid)) return [200, { error: 'That is the owner of the company' }];
-    members.set(b.cid + '|' + p.id, { company_id: b.cid, user_id: p.id, role: r }); return [200, { ok: true, user_id: p.id, name: p.name, role: r }];
+    const c = companies.get(b.cid), company = c ? c.name : '', by = (profiles.get(uid) || {}).name || '';
+    if (!p) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(id) && !/^[6-9][0-9]{9}$/.test(id)) return [200, { error: 'No BlitzBook account with that mobile number or email. Enter an email address or a 10-digit mobile number to invite them.' }];
+      invites.set(b.cid + '|' + id, { company_id: b.cid, identity: id, role: r, invited_by: uid, created_at: new Date().toISOString() });
+      return [200, { ok: true, invited: true, identity: id, email: id.includes('@') ? id : '', name: '', role: r, company, by }];
+    }
+    if (p.id === (c ? c.owner_id : b.cid)) return [200, { error: 'That is the owner of the company' }];
+    members.set(b.cid + '|' + p.id, { company_id: b.cid, user_id: p.id, role: r }); [id, p.phone, (p.email || '').toLowerCase()].forEach(k => invites.delete(b.cid + '|' + k));
+    return [200, { ok: true, user_id: p.id, name: p.name, email: p.email || '', role: r, company, by }];
   },
+  remove_invite(uid, b) { if (!['owner', 'admin'].includes(roleOf(uid, b.cid))) return [200, { error: 'Only the owner or an admin can manage members' }]; invites.delete(b.cid + '|' + String(b.identity || '').trim().toLowerCase()); return [200, { ok: true }]; },
+  claim_invites(uid) { return [200, claimInvites(uid)]; },
   remove_member(uid, b) { if (!uid) return [200, { error: 'Sign in first' }]; if (b.member !== uid && !['owner', 'admin'].includes(roleOf(uid, b.cid))) return [200, { error: 'Only the owner or an admin can remove members' }]; members.delete(b.cid + '|' + b.member); return [200, { ok: true }]; }
 };
 const api = http.createServer((req, res) => {
@@ -97,6 +119,14 @@ const api = http.createServer((req, res) => {
     const p = url.pathname.replace(/^\/x\.supabase\.co/, '');
     if (p === '/auth/v1/settings') return reply(200, { external: { email: true } });
     if (p === '/auth/v1/token') { const u = Array.from(users.values()).find(x => (b.email && x.email === b.email) || (b.phone && x.phone === b.phone)); if (!u || u.password !== b.password) return reply(400, { error: 'invalid_grant' }); return reply(200, sessionFor(u)); }
+    if (p === '/functions/v1/invite') {
+      if (!uid) return reply(401, { error: 'Sign in first' });
+      const [, r] = rpc.set_member(uid, { cid: b.cid, identity: b.identity, role_in: b.role });
+      if (r.error) return reply(200, r);
+      if (!r.email) return reply(200, Object.assign({}, r, { mailed: false, mail_error: 'No email address to write to' }));
+      mails.push({ to: r.email, invited: !!r.invited, role: r.role, company: r.company, by: r.by });
+      return reply(200, Object.assign({}, r, { mailed: true }));
+    }
     if (p.startsWith('/rest/v1/rpc/')) { const fn = rpc[p.slice('/rest/v1/rpc/'.length)]; if (!fn) return reply(404, { message: 'function not found' }); const [st, out] = fn(uid, b); return reply(st, out); }
     if (p === '/rest/v1/books') {
       if (!uid) return reply(401, { message: 'JWT' });
@@ -118,7 +148,7 @@ const api = http.createServer((req, res) => {
 
 function start(port) { return new Promise(r => api.listen(port || 0, () => r(api.address().port))); }
 function stop() { api.close(); }
-module.exports = { start, stop, api, ANON, users, profiles, tokens, companies, members, books, makeUser, pwHash, roleOf, mayWrite };
+module.exports = { start, stop, api, ANON, users, profiles, tokens, companies, members, invites, mails, books, makeUser, pwHash, roleOf, mayWrite };
 if (require.main === module) {
   const u1 = makeUser('Asha', '9876543210', 'a@example.com', 'Test@123'), u2 = makeUser('Bala', '9876543211', 'b@example.com', 'Test@123');
   start(+process.argv[2] || 8096).then(port => console.log(['stand-in Supabase on port ' + port, '  address  http://<host>:' + port + '/x.supabase.co   anon key  ' + ANON, '  accounts 9876543210 (Asha) and 9876543211 (Bala), password Test@123', '  ids ' + u1.id + ' ' + u2.id].join(String.fromCharCode(10))));

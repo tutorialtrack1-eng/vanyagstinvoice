@@ -92,7 +92,9 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
 
   console.log('members and roles');
   r = await A.Companies.rpc('set_member', { cid: beta, identity: '9000000000', role_in: 'viewer' });
-  check('an unknown account cannot be added', /No BlitzBook account/.test(r.error), r);
+  check('an unknown mobile number is invited', r.ok && r.invited && r.identity === '9000000000' && r.role === 'viewer' && r.company === 'Beta Supplies' && r.by === 'Asha', r);
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'nobody', role_in: 'viewer' });
+  check('neither a mobile number nor an email cannot be invited', /No BlitzBook account/.test(r.error), r);
   r = await A.Companies.rpc('set_member', { cid: beta, identity: '9876543211', role_in: 'viewer' });
   check('Bala added as viewer', r.ok && r.name === 'Bala' && r.role === 'viewer', r);
   const B = browser(url); B.signIn({ name: 'Bala', phone: '9876543211', email: 'b@example.com', password: pwHash('Test@123'), createdAt: Date.now() });
@@ -125,7 +127,40 @@ const pur = (no, supplier, taxable, paidBy) => ({ kind: 'PUR', no, date: '20/06/
   r = await B.Companies.rpc('set_member', { cid: beta, identity: 'a@example.com', role_in: 'viewer' });
   check('a sales member cannot manage members', /Only the owner or an admin/.test(r.error), r);
   const lm = await A.Companies.rpc('list_members', { cid: beta });
-  check('members listed, owner first', lm.length === 2 && lm[0].role === 'owner' && lm[0].name === 'Asha' && lm[1].role === 'sales' && lm[1].phone === '9876543211', lm);
+  check('members listed, owner first, invitations last', lm.length === 3 && lm[0].role === 'owner' && lm[0].name === 'Asha' && lm[1].role === 'sales' && lm[1].phone === '9876543211' && lm[2].invited && lm[2].phone === '9000000000' && lm[2].user_id === null, lm);
+
+  console.log('invitations');
+  // The invite function: set_member, then the email (the stand-in keeps the mails it would send)
+  r = await A.Companies.invite(beta, 'chitra@example.com', 'accountant');
+  check('an email without an account is invited and mailed', r.ok && r.invited && r.mailed && standin.mails.length === 1 && standin.mails[0].to === 'chitra@example.com' && standin.mails[0].invited && standin.mails[0].role === 'accountant' && standin.mails[0].company === 'Beta Supplies' && standin.mails[0].by === 'Asha', [r, standin.mails]);
+  check('the owner is told so', /chitra@example.com has no BlitzBook account yet: invited as Accountant. An email tells them/.test(A.Companies.inviteText(r, 'chitra@example.com')), A.Companies.inviteText(r, 'chitra@example.com'));
+  r = await A.Companies.invite(beta, 'b@example.com', 'sales');
+  check('a member is told by email too', r.ok && !r.invited && r.mailed && r.name === 'Bala' && standin.mails.length === 2 && standin.mails[1].to === 'b@example.com' && !standin.mails[1].invited, [r, standin.mails]);
+  check('and the owner too', A.Companies.inviteText(r, 'b@example.com') === 'Bala added as Sales; an email has told them.', A.Companies.inviteText(r, 'b@example.com'));
+  r = await A.Companies.invite(beta, '9000000001', 'viewer');
+  check('a mobile number without an account is invited, nobody mailed', r.ok && r.invited && !r.mailed && standin.mails.length === 2 && A.Companies.inviteText(r, '9000000001') === '9000000001 has no BlitzBook account yet: invited as Viewer. They get the role on registering with this mobile number.', [r, A.Companies.inviteText(r, '9000000001')]);
+  r = await B.Companies.invite(beta, 'd@example.com', 'viewer').catch(e => ({ error: e.message }));
+  check('a sales member cannot invite either', /Only the owner or an admin/.test(r.error), r);
+  let lm2 = await A.Companies.rpc('list_members', { cid: beta });
+  check('invitations are listed after the members', lm2.filter(m => m.invited).length === 3 && lm2.slice(0, 2).every(m => !m.invited) && lm2.find(m => m.email === 'chitra@example.com').role === 'accountant', lm2);
+  r = await A.Companies.rpc('set_member', { cid: beta, identity: 'Chitra@Example.com', role_in: 'hr' });
+  check('the role of an invitation can be changed', r.ok && r.invited && r.role === 'hr' && r.identity === 'chitra@example.com', r);
+  // Chitra registers with that email: the invitation becomes the membership at the first look at the companies
+  const uc = makeUser('Chitra', '9876543212', 'chitra@example.com', 'Test@123');
+  const C = browser(url); C.signIn({ name: 'Chitra', phone: '9876543212', email: 'chitra@example.com', password: pwHash('Test@123'), createdAt: Date.now() });
+  list = await C.Companies.load();
+  check('on registering, the invited company is there with the role', list.length === 2 && list.some(c => c.id === beta && c.role === 'hr' && c.owner_name === 'Asha'), list);
+  C.enter(beta);
+  check('and the books of the role open', await C.Sync.run() && C.Store.company().name === 'Beta Supplies' && C.Companies.role() === 'hr' && C.Companies.mayWrite('employees') && !C.Companies.mayWrite('invoices'), [C.Sync.lastError, C.Store.company()]);
+  lm2 = await A.Companies.rpc('list_members', { cid: beta });
+  check('the invitation is gone, the member in its place', lm2.some(m => m.user_id === uc.id && m.role === 'hr' && m.name === 'Chitra') && !lm2.some(m => m.invited && m.email === 'chitra@example.com') && lm2.filter(m => m.invited).length === 2, lm2);
+  r = await B.Companies.rpc('remove_invite', { cid: beta, identity: '9000000000' });
+  check('a sales member cannot withdraw an invitation', /Only the owner or an admin/.test(r.error), r);
+  r = await A.Companies.rpc('remove_invite', { cid: beta, identity: '9000000000' }); const r2 = await A.Companies.rpc('remove_invite', { cid: beta, identity: '9000000001' });
+  lm2 = await A.Companies.rpc('list_members', { cid: beta });
+  check('the owner withdraws invitations', r.ok && r2.ok && !lm2.some(m => m.invited) && lm2.length === 3, lm2);
+  r = await A.Companies.rpc('remove_member', { cid: beta, member: uc.id });
+  check('and removes the new member again', r.ok && !(await A.Companies.rpc('list_members', { cid: beta })).some(m => m.user_id === uc.id), r);
 
   console.log('the HR role');
   r = await A.Companies.rpc('set_member', { cid: beta, identity: 'b@example.com', role_in: 'hr' });

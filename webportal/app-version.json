@@ -1,6 +1,6 @@
 {
-  "versionCode": 15,
-  "versionName": "1.14",
-  "apk": "https://blitzbook.co.in/BlitzBook-1.14.apk",
-  "notes": "The 30-day trial now has every feature except the group statements (companies, members and GST returns included). Full access 6 months activation codes. Stock has its own group in the portal's top bar."
+  "versionCode": 16,
+  "versionName": "1.15",
+  "apk": "https://blitzbook.co.in/BlitzBook-1.15.apk",
+  "notes": "Duplicate an invoice (same buyer and items under the next number). Members can be added before they have a BlitzBook account: they are invited by email with their role. The PDF footer links to blitzbook.co.in. Portal: employees upload from CSV / Excel, the Books group is now Records."
 }

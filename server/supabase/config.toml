@@ -9,3 +9,7 @@ verify_jwt = false
 # The MCP server is opened with a BlitzBook API key, not a user token; the function checks the key itself
 [functions.mcp]
 verify_jwt = false
+
+# Adding a member mails them; the caller's token is checked by the set_member database function the function calls
+[functions.invite]
+verify_jwt = false

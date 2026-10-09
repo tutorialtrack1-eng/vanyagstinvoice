@@ -234,7 +234,7 @@
       { key: 'purchases', t: 'Purchases & Quotations' }, { key: 'contacts', t: 'Suppliers', params: { type: 'Supplier' } }, { key: 'expenses', t: 'Expenses' }] },
     { t: 'Stock', ic: 'box', items: [
       { key: 'items', t: 'Stock & Items' }, { key: 'stock', t: 'Stock in Hand' }] },
-    { t: 'Books', ic: 'book', items: [
+    { t: 'Records', ic: 'book', items: [
       { key: 'money', t: 'Receipts & Payments' }, { key: 'journal', t: 'Journal' }, { key: 'ledger', t: 'Party Ledger' },
       { key: 'pnl', t: 'Profit & Loss' }, { key: 'balance', t: 'Balance Sheet' }, { key: 'group', t: 'Group Statements' }] },
     { t: 'HR', ic: 'users', items: [

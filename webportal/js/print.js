@@ -37,7 +37,9 @@
     if (it.subInfo) p.push('Info: ' + it.subInfo);
     return p.join(' ');
   }
-  const POWERED = '<div class="pw">Powered by BlitzBook</div>';
+  // The footer of every document links to the portal; the browser's PDF keeps the link
+  const SITE = 'https://blitzbook.co.in';
+  const POWERED = '<div class="pw"><a href="' + SITE + '">Powered by BlitzBook</a></div>';
   function partyLines(p) { return String(p.name || '').split('\n').concat(String(p.address || '').split('\n')).map(s => s.trim()).filter(Boolean); }
   // The terms & conditions block of an invoice that asked for them (one numbered line per term)
   function termsBlock(inv, cls) {
@@ -243,6 +245,7 @@
     .sub { font-size: 8pt; margin-top: 2px; }
     .cg { text-align: center; font-size: 8pt; margin-top: 6px; }
     .pw { text-align: center; font-size: 7.5pt; color: #555; margin-top: 10px; letter-spacing: .3px; }
+    .pw a { color: inherit; text-decoration: none; }
     .env .env-pw { position: absolute; right: 0; bottom: 0; margin: 0; }
     img { max-width: 120px; max-height: 40px; display: block; margin-left: auto; }
     /* Standard */
@@ -336,7 +339,8 @@
       zoom.appendChild(d); body.appendChild(zoom); pg.appendChild(body);
       // The footer gets its text now so that it has its height from the start (it is filled in at the end)
       var foot = el('div', 'pfoot'); foot.appendChild(el('span', 'cont', ' ')); foot.appendChild(el('span', 'pno', 'Page 1 of 1')); pg.appendChild(foot);
-      pg.appendChild(el('div', 'pw', 'Powered by BlitzBook'));
+      // PAGINATE runs inside the print frame, so the footer is spelt out here (the same as POWERED above)
+      pg.insertAdjacentHTML('beforeend', '<div class="pw"><a href="https://blitzbook.co.in">Powered by BlitzBook</a></div>');
       inner.appendChild(pages.length ? strip() : head);
       var t = el('table', table.className), tb = el('tbody'); t.appendChild(thead.cloneNode(true)); t.appendChild(tb); inner.appendChild(t);
       document.body.appendChild(pg);
@@ -440,7 +444,7 @@
     return page(fileName(company, 'Envelope', inv.no), p.css, '8mm 10mm', '<div class="env"><div class="from"><b>From: ' + esc(String(company.name || '').toUpperCase()) + '</b><div>' + nl2br(company.address) + '</div><div>Ph: ' + esc(company.phone) + (company.gstin ? '   GSTIN: ' + esc(company.gstin) : '') + '</div></div>' +
       '<div class="to"><div>To,</div><div class="nm">' + esc(lines[0] || '') + '</div>' + lines.slice(1).map(l => '<div>' + esc(l) + '</div>').join('') + '<div>' + esc(formatState(b.state)) + '</div>' +
       (b.phone ? '<div>Ph: ' + esc(b.phone) + '</div>' : '') + (b.gstin ? '<div>GSTIN: ' + esc(String(b.gstin).toUpperCase()) + '</div>' : '') + '</div>' +
-      '<div class="ref">Ref: Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + '</div><div class="pw env-pw">Powered by BlitzBook</div></div>');
+      '<div class="ref">Ref: Invoice ' + esc(inv.no) + ' dated ' + esc(inv.date) + '</div><div class="pw env-pw"><a href="' + SITE + '">Powered by BlitzBook</a></div></div>');
   }
 
   // ------------------------------------------------------------ purchase record / quotation, in the invoice style
@@ -546,5 +550,5 @@
     return page(fileName(company, '', v.no || ''), PAPERS.A4.css, '12mm 10mm', body);
   }
 
-  global.Print = { PAPERS, SHEETS, LAYOUTS, html, open, show, preview, docTitle, envelope, purchase, note, voucher, table, page, head, signBlock, POWERED };
+  global.Print = { PAPERS, SHEETS, LAYOUTS, SITE, html, open, show, preview, docTitle, envelope, purchase, note, voucher, table, page, head, signBlock, POWERED };
 })(window);

@@ -120,6 +120,15 @@ const admin = async (service, method, p, body) => { const r = await fetch(URL_ +
     s = await A.Companies.rpc('set_member', { cid: beta, identity: ub.email, role_in: 'sales' }); await B.Companies.load();
     const lm = await A.Companies.rpc('list_members', { cid: beta });
     check('members listed', Array.isArray(lm) && lm.length === 2 && lm[0].role === 'owner', lm);
+    console.log('invitations');
+    s = await A.Companies.rpc('set_member', { cid: beta, identity: 'live-invite-' + Date.now() + '@example.com', role_in: 'accountant' });
+    check('an email without an account is invited', s.ok && s.invited && s.role === 'accountant' && s.company === 'Live Beta' && s.by === 'Live Asha', s);
+    let lm2 = await A.Companies.rpc('list_members', { cid: beta });
+    check('the invitation is listed after the members', Array.isArray(lm2) && lm2.length === 3 && lm2[2].invited === true && lm2[2].email === s.identity && lm2[2].user_id === null, lm2);
+    const ri = await A.Companies.rpc('remove_invite', { cid: beta, identity: s.identity });
+    lm2 = await A.Companies.rpc('list_members', { cid: beta });
+    check('and withdrawn', ri.ok && lm2.length === 2, lm2);
+    check('claim_invites runs for the account', typeof (await B.Companies.rpc('claim_invites', {})) === 'number');
     console.log('group statements');
     for (const c of A.Companies.list()) await A.Companies.pull(c);
     const range = { a: new Date(2026, 3, 1).getTime(), b: new Date(2027, 2, 31).getTime() };

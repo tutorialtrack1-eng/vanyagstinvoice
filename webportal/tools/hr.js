@@ -80,6 +80,29 @@ const until = async (page, fn, ms) => { const t0 = Date.now(); while (Date.now()
   await page.click('.modal .mf .btn.green'); await page.waitForSelector('[data-e]');
   check('two employees listed with their gross and codes', (await page.$$('[data-e]')).length === 2 && (await page.textContent('#view')).includes('₹ 32,000.00') && (await page.textContent('#view')).includes('EMP001'));
   await page.screenshot({ path: OUT + '/hr-02-employees.png', fullPage: true });
+  // Employees from a CSV in the template's columns: Ravi is brought up to date by code (only the filled cells), Kiran
+  // is new and hourly with Ravi as manager, a row with a bad mobile number is skipped
+  const empCsv = path.join(OUT, 'employees.csv');
+  fs.writeFileSync(empCsv, 'Code,Name,Designation,Department,Joined,Left on,Phone,Email,PAN,UAN,ESI No,Pay type,Rate / hour,Basic,DA,HRA,Conveyance,Special,PF,ESI,PT,TDS / month,Bank,Account,IFSC,Manager,Address,Aadhaar,Leaves per year\n' +
+    'EMP001,Ravi Kumar,Senior Sales Executive,Sales,,,9000011111,ravi.k@example.org,,,,,,,,,,,,,,,,,,,,,\n' +
+    ',Kiran,Driver,Logistics,2026-05-01,,9123456789,,,,,Hourly,300,,,,,,No,Yes,No,0,SBI,999,SBIN0009999,EMP001,,,10\n' +
+    ',Bad Row,Clerk,,01/06/2026,,12345,,,,,Monthly,,9000,,,,,,,,,,,,,,,\n');
+  const [empChooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#eCsv')]); await empChooser.setFiles(empCsv);
+  await page.waitForSelector('.modal .mh');
+  check('the upload dialog counts the new, the known and the unreadable rows', (await page.textContent('.modal .mb')).includes('2 employees in the file: 1 new, 1 already on the list') && (await page.textContent('.modal .mb')).includes('1 row cannot be read'), await page.textContent('.modal .mb'));
+  await page.click('.modal .mf .btn.green'); await page.waitForSelector('.istats');
+  const empRes = await page.textContent('.modal .mb');
+  check('result: 1 inserted, 1 updated, 1 skipped with the reason', /1\s*Inserted/.test(empRes.replace(/\s+/g, ' ')) && /1\s*Updated/.test(empRes.replace(/\s+/g, ' ')) && /1\s*Skipped/.test(empRes.replace(/\s+/g, ' ')) && empRes.includes('Bad Row') && empRes.includes('not 10 digits'), empRes);
+  await page.click('.modal .mf .btn'); await page.waitForSelector('[data-e]');
+  check('Ravi keeps his pay and gets the new designation and contact; Kiran is hourly, EMP003, with Ravi as manager', await page.evaluate(() => { const r = HR.employees(true).find(e => e.code === 'EMP001'), k = HR.employees(true).find(e => e.name === 'Kiran'); return r.designation === 'Senior Sales Executive' && r.department === 'Sales' && r.basic === 20000 && r.hra === 8000 && r.phone === '9000011111' && r.email === 'ravi.k@example.org' && r.pan === 'ABCDE1234F' && !!k && k.payType === 'hourly' && k.hourlyRate === 300 && k.code === 'EMP003' && k.managerId === r.id && k.manager === 'Ravi Kumar' && k.doj === '01/05/2026' && k.pf === false && k.esi === true && k.pt === false && k.leavesPerYear === 10 && k.bankIfsc === 'SBIN0009999' && k.active === true; }), await page.evaluate(() => HR.employees(true).map(e => [e.code, e.name, e.payType, e.hourlyRate, e.manager, e.doj])));
+  check('the template downloads with the same columns', await page.evaluate(() => { let got = null; const was = UI.download; UI.download = (n, c) => { got = [n, c]; }; document.getElementById('eTpl').click(); UI.download = was; return got && got[0] === 'BlitzBook_Employees_Template.csv' && got[1].startsWith('Code,Name,Designation,Department,Joined,Left on,Phone,Email,PAN,UAN,ESI No,Pay type,Rate / hour,Basic,DA,HRA,Conveyance,Special,PF,ESI,PT,TDS / month,Bank,Account,IFSC,Manager,Address,Aadhaar,Leaves per year\n') && got[1].split('\n').length === 4; }));
+  // the same file again changes nothing; then Kiran goes so the payroll below counts as before
+  const [empChooser2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#eCsv')]); await empChooser2.setFiles(empCsv);
+  await page.waitForSelector('.modal .mh'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('.istats');
+  const empRes2 = (await page.textContent('.modal .mb')).replace(/\s+/g, ' ');
+  check('uploaded again: both unchanged, the bad row skipped', /2\s*Unchanged/.test(empRes2) && /0\s*Inserted/.test(empRes2) && /0\s*Updated/.test(empRes2), empRes2);
+  await page.click('.modal .mf .btn'); await page.waitForSelector('[data-e]');
+  await page.evaluate(() => Store.delete('employees', HR.employees(true).find(e => e.name === 'Kiran').id)); await page.evaluate(() => App.go('employees')); await page.waitForSelector('#eAdd');
   await page.evaluate(() => App.go('attendance', { month: '2026-10' })); await page.waitForSelector('.attgrid');
   check('the grid marks Sundays off and the 2nd a holiday', await page.evaluate(() => { const r = document.querySelector('.attgrid tbody tr'); return r.querySelector('[data-d="4"] .att').textContent === 'W' && r.querySelector('[data-d="2"] .att').textContent === 'H' && r.querySelector('[data-d="1"] .att').textContent === 'P'; }));
   await page.click('.attgrid tbody tr:first-child td[data-d="5"]'); await page.waitForSelector('.attgrid'); // P -> A

@@ -188,10 +188,29 @@ by `user_id`; the rules on `books` check the role per record:
   that lists the claim (`reimbIds` on the payroll row), never written to the claim; viewer: nothing. The subscription record
   `sub` is never written in another company: everybody there runs on the owner's subscription, which a member
   may read (`k = 'sub'` of the owner) while the header names one of the owner's companies.
-- Functions: `my_companies()` (also makes the account's first company row), `create_company(name, group)`
-  (25 per owner), `update_company(id, name, group)`, `delete_company(id)` (owner, never the first company; the
-  books go with it), `list_members(id)`, `set_member(id, mobile or email, role)` (owner / admin; the account must
-  be registered already; 50 per company), `remove_member(id, user)` (owner / admin, or oneself).
+- Functions: `my_companies()` (also makes the account's first company row and claims the invitations addressed
+  to the account), `create_company(name, group)` (25 per owner), `update_company(id, name, group)`,
+  `delete_company(id)` (owner, never the first company; the books go with it), `list_members(id)` (the owner,
+  the members, then the invitations with `invited: true`), `set_member(id, mobile or email, role)` (owner /
+  admin; 50 per company, invitations included), `remove_member(id, user)` (owner / admin, or oneself),
+  `remove_invite(id, mobile or email)`, `claim_invites()`.
+- Invitations: `set_member` for a mobile number or email that no account has keeps it with the role in
+  `company_invites` and answers `invited: true`; when an account with that mobile number or email appears, its
+  first `my_companies()` turns the invitation into the membership. The email that tells the person is sent by
+  the **invite edge function** (`functions/invite`): the clients call `POST /functions/v1/invite {cid, identity,
+  role}` with the user's token, the function calls `set_member` as that user and mails the address (a new
+  person: who added them, the company, the role, register at the portal with this email; a member: the role
+  they now have). Deploy and give it the SMTP account (the one that sends the OTPs does):
+
+  ```
+  npx supabase functions deploy invite --workdir server --project-ref cufdskrmhdenppoxfhnk --no-verify-jwt
+  npx supabase secrets set --project-ref cufdskrmhdenppoxfhnk SMTP_USER=yourname@gmail.com SMTP_PASS=<app password>
+  ```
+
+  `SMTP_HOST` (smtp.gmail.com), `SMTP_PORT` (465), `SMTP_FROM` and `PORTAL_URL` (https://blitzbook.co.in) have
+  those defaults. Without the function or the secrets the clients still add or invite through `set_member`;
+  nobody is mailed and the owner is told so. A mobile number of someone not registered cannot be mailed either:
+  the invitation waits for an account with that number.
 - `create_company` and `set_member` need the owner on a yearly plan or longer (`is_yearly`: the owner's `sub`
   record has a `yearly_until` ahead or more than 300 days of validity), as the clients require.
 - The company name in `companies` follows the company profile record (`books_company_name` trigger).

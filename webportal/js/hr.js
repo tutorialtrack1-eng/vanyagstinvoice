@@ -27,6 +27,15 @@
   const STATUS = { P: 'Present', A: 'Absent (LOP)', L: 'Leave', HD: 'Half day', W: 'Weekly off', H: 'Holiday' };
   const CYCLE = ['P', 'A', 'L', 'HD', 'W', 'H'];
   const RB_CATS = ['Travel', 'Food', 'Phone / Internet', 'Medical', 'Stationery', 'Other'];
+  // The employees upload: the template's columns, the headings accepted for each field (letters only, lower case; the
+  // Excel export's headings are among them), and the sample rows of the template
+  const EMP_COLUMNS = ['Code', 'Name', 'Designation', 'Department', 'Joined', 'Left on', 'Phone', 'Email', 'PAN', 'UAN', 'ESI No', 'Pay type', 'Rate / hour', 'Basic', 'DA', 'HRA', 'Conveyance', 'Special', 'PF', 'ESI', 'PT', 'TDS / month', 'Bank', 'Account', 'IFSC', 'Manager', 'Address', 'Aadhaar', 'Leaves per year'];
+  const EMP_HEADS = { code: ['code', 'empcode', 'employeecode'], name: ['name', 'fullname', 'employee', 'employeename'], designation: ['designation', 'title', 'role'], department: ['department', 'dept'], doj: ['joined', 'dateofjoining', 'doj', 'joiningdate', 'joining'], dol: ['lefton', 'dateofleaving', 'dol', 'left', 'leavingdate'],
+    phone: ['phone', 'mobile', 'mobilenumber', 'phonenumber'], email: ['email', 'emailaddress', 'mail'], pan: ['pan'], uan: ['uan', 'uanpf', 'pfuan'], esiNo: ['esino', 'esinumber', 'esiip', 'ipnumber'], payType: ['paytype', 'pay', 'type'], hourlyRate: ['ratehour', 'rateperhour', 'hourlyrate', 'rate'],
+    basic: ['basic', 'basicsalary'], da: ['da', 'dearnessallowance'], hra: ['hra'], conveyance: ['conveyance'], special: ['special', 'specialallowance', 'other', 'otherallowance'], pf: ['pf', 'pfapplies'], esi: ['esi', 'esiapplies'], pt: ['pt', 'professionaltax', 'ptapplies'], tds: ['tdsmonth', 'tds', 'tdspermonth'],
+    bankName: ['bank', 'bankname'], bankAccount: ['account', 'accountnumber', 'accountno', 'bankaccount'], bankIfsc: ['ifsc', 'ifsccode'], manager: ['manager', 'reportingmanager', 'reportsto'], address: ['address'], aadhaar: ['aadhaar', 'aadhar'], leavesPerYear: ['leavesperyear', 'leaves', 'paidleave', 'paidleaveperyear'] };
+  const EMP_SAMPLE = [['EMP001', 'Ravi Kumar', 'Accountant', 'Accounts', '01/04/2026', '', '9876543210', 'ravi@gmail.com', 'ABCDE1234F', '100123456789', '', 'Monthly', '', '20000', '2000', '10000', '1600', '3000', 'Yes', 'Yes', 'Yes', '0', 'HDFC Bank', '50100012345678', 'HDFC0001234', '', '12 MG Road Vijayawada', '', '12'],
+    ['EMP002', 'Sita Devi', 'Packer', 'Warehouse', '15/04/2026', '', '9123456789', '', '', '', '', 'Hourly', '150', '', '', '', '', '', 'Yes', 'Yes', 'No', '0', 'SBI', '30012345678', 'SBIN0001234', 'EMP001', '', '', '12']];
   // Monthly professional tax slabs: [upper limit of the monthly salary, tax]; '*' = and above
   const PT = {
     'Andhra Pradesh': [[15000, 0], [20000, 150], ['*', 200]], 'Telangana': [[15000, 0], [20000, 150], ['*', 200]],
@@ -213,19 +222,83 @@
     // ------------------------------------------------------------ employees
     screenEmployees() {
       const list = this.employees(true), month = thisMonth();
-      const root = App.view(App.header('Employees', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="eAdd">+ Add Employee</button><button class="btn sm outline" id="eAtt">Attendance</button><button class="btn sm outline" id="eTs">Timesheets</button><button class="btn sm outline" id="ePay">Payroll</button><button class="btn sm outline" id="eSet">HR Settings</button><button class="btn sm outline" id="eXls">Export Excel</button></div>') +
+      const root = App.view(App.header('Employees', '<div class="btnrow" style="margin:0"><button class="btn sm green" id="eAdd">+ Add Employee</button><button class="btn sm outline" id="eCsv">Upload CSV / Excel</button><button class="btn sm outline" id="eTpl">Template</button><button class="btn sm outline" id="eAtt">Attendance</button><button class="btn sm outline" id="eTs">Timesheets</button><button class="btn sm outline" id="ePay">Payroll</button><button class="btn sm outline" id="eSet">HR Settings</button><button class="btn sm outline" id="eXls">Export Excel</button></div>') +
         '<div class="hint" style="margin-bottom:10px">The people on the payroll: a monthly salary structure or a rate per hour (paid from the weekly timesheets), PF / ESI / PT, bank details, and an offer letter for each.</div>' +
         Ledger.listTable(['Code', 'Name', 'Designation', 'Joined', '#Pay', 'PF', 'ESI', 'Leave left', ''], list.map(e => { const g = this.structure(e), lb = this.leaveBalance(e, month), hourly = this.hourly(e);
           return '<tr' + (e.active === false ? ' class="muted"' : '') + '>' + Ledger.td('Code', esc(e.code || '-')) + Ledger.td('Name', '<b>' + esc(e.name) + '</b>' + (e.active === false ? ' <span class="pill bad">Left</span>' : '') + (e.phone ? '<div class="small muted">' + esc(e.phone) + '</div>' : '')) + Ledger.td('Designation', esc(e.designation || '-') + (e.department ? '<div class="small muted">' + esc(e.department) + '</div>' : '')) + Ledger.td('Joined', esc(e.doj || '-')) +
             Ledger.td('Pay', hourly ? '<b>' + money(num(e.hourlyRate)) + '</b> / hour<div class="small muted">timesheet</div>' : '<b>' + money(g) + '</b> / month', 'num') + Ledger.td('PF', e.pf === false ? '-' : '<span class="pill ok">Yes</span>') + Ledger.td('ESI', e.esi === false ? '-' : g <= num(this.settings().esiCeiling) ? '<span class="pill ok">Yes</span>' : '<span class="pill">Above ceiling</span>') + Ledger.td('Leave', lb.left + ' of ' + lb.quota) +
             '<td class="actions"><button class="btn sm outline" data-e="' + esc(e.id) + '">Edit</button><button class="btn sm outline" data-offer="' + esc(e.id) + '">Offer letter</button><button class="btn sm red" data-d="' + esc(e.id) + '">Delete</button></td></tr>'; }), 'No employees yet. Add the people on your payroll.'));
       App.wireBack(root);
-      $('#eAdd').onclick = () => this.editEmployee(null); $('#eAtt').onclick = () => App.go('attendance'); $('#eTs').onclick = () => App.go('timesheets'); $('#ePay').onclick = () => App.go('payroll'); $('#eSet').onclick = () => App.go('hrsettings');
+      $('#eAdd').onclick = () => this.editEmployee(null); $('#eAtt').onclick = () => App.go('attendance');
+      $('#eCsv').onclick = () => UI.pickSheet(rows => this.importRows(rows));
+      $('#eTpl').onclick = () => { UI.download('BlitzBook_Employees_Template.csv', EMP_COLUMNS.join(',') + '\n' + EMP_SAMPLE.map(r => r.join(',')).join('\n') + '\n', 'text/csv'); UI.toast('Template downloaded'); }; $('#eTs').onclick = () => App.go('timesheets'); $('#ePay').onclick = () => App.go('payroll'); $('#eSet').onclick = () => App.go('hrsettings');
       $('#eXls').onclick = () => UI.xls('Employees', ['Code', 'Name', 'Designation', 'Department', 'Joined', 'Phone', 'Email', 'PAN', 'UAN', 'ESI No', 'Pay type', 'Rate / hour', 'Basic', 'DA', 'HRA', 'Conveyance', 'Special', 'Gross', 'PF', 'ESI', 'PT', 'TDS / month', 'Bank', 'Account', 'IFSC'],
         list.map(e => [e.code, e.name, e.designation, e.department, e.doj, e.phone, e.email, e.pan, e.uan, e.esiNo, this.hourly(e) ? 'Hourly' : 'Monthly', num(e.hourlyRate), num(e.basic), num(e.da), num(e.hra), num(e.conveyance), num(e.special), this.structure(e), e.pf === false ? 'No' : 'Yes', e.esi === false ? 'No' : 'Yes', e.pt === false ? 'No' : 'Yes', num(e.tds), e.bankName, e.bankAccount, e.bankIfsc]));
       $$('[data-e]', root).forEach(b => b.onclick = () => this.editEmployee(Store.find('employees', b.dataset.e)));
       $$('[data-offer]', root).forEach(b => b.onclick = () => this.offerLetter(Store.find('employees', b.dataset.offer)));
       $$('[data-d]', root).forEach(b => b.onclick = () => { const e = Store.find('employees', b.dataset.d); UI.confirm('Delete Employee', 'Delete ' + e.name + '? Their attendance, timesheets and reimbursements go too; finalised payrolls keep their lines. To keep the history, mark them as left instead (Edit).', () => { ['attendance', 'timesheets', 'reimbursements'].forEach(col => Store.list(col).filter(a => a.empId === e.id).forEach(a => Store.delete(col, a.id))); Store.delete('employees', e.id); UI.toast('Employee deleted'); this.screenEmployees(); }, 'Delete'); });
+    },
+    /* Employees from a CSV / Excel file in the template's columns (the Excel export reads back too; extra columns are
+       ignored, missing ones are left alone). An employee already on the list is matched by code, else by name: Upsert
+       brings the filled-in cells of the row up to date (a blank cell changes nothing), Insert only leaves them as they
+       are. "Manager" names the reporting manager by code or name, from the list or the file. "Left on" marks an
+       employee as left. Pay type Monthly needs a Basic, Hourly a Rate / hour; PF / ESI / PT take Yes or No. */
+    importRows(rows) {
+      const head = rows.length ? rows[0].map(c => String(c == null ? '' : c).trim().toLowerCase().replace(/[^a-z]/g, '')) : [];
+      const at = {}; Object.keys(EMP_HEADS).forEach(k => { at[k] = head.findIndex(h => EMP_HEADS[k].includes(h)); });
+      if (at.name < 0) { UI.alert('Upload Employees', 'The first row has to carry the column headings, with at least Name. Download the template for the columns.'); return; }
+      const cell = (r, k) => at[k] >= 0 && r[at[k]] != null ? String(r[at[k]]).trim() : '';
+      const yes = (v) => /^(y|yes|true|1)$/i.test(v), s = this.settings();
+      const recs = [], bad = [];
+      rows.slice(1).forEach((r, i) => {
+        const name = cell(r, 'name'); if (!name) return;
+        const f = { name }, given = (k, v) => { if (v !== '') f[k] = v; };
+        ['code', 'designation', 'department', 'address', 'uan', 'esiNo', 'bankName', 'bankAccount'].forEach(k => given(k, cell(r, k)));
+        given('phone', cell(r, 'phone').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '')); given('email', cell(r, 'email').toLowerCase()); given('pan', cell(r, 'pan').toUpperCase()); given('aadhaar', cell(r, 'aadhaar').replace(/\s/g, '')); given('bankIfsc', cell(r, 'bankIfsc').toUpperCase());
+        given('doj', U.sheetDate(cell(r, 'doj'))); const dol = U.sheetDate(cell(r, 'dol')); if (cell(r, 'dol')) { f.dol = dol; f.active = false; }
+        const pt = cell(r, 'payType'); if (pt) f.payType = /hour/i.test(pt) ? 'hourly' : 'monthly';
+        ['hourlyRate', 'basic', 'da', 'hra', 'conveyance', 'special', 'tds', 'leavesPerYear'].forEach(k => { const v = cell(r, k); if (v !== '') f[k] = num(v); });
+        ['pf', 'esi', 'pt'].forEach(k => { const v = cell(r, k); if (v !== '') f[k] = yes(v); });
+        const mgr = cell(r, 'manager'); if (mgr) f.managerRef = mgr;
+        const line = 'Row ' + (i + 2) + ' (' + name + ')';
+        if (f.phone && !/^[6-9][0-9]{9}$/.test(f.phone)) { bad.push(line + ': the mobile number is not 10 digits'); return; }
+        if (f.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(f.pan)) { bad.push(line + ': PAN is 10 characters, e.g. ABCDE1234F'); return; }
+        if (f.doj && !U.dateMs(f.doj)) { bad.push(line + ': the joining date is not a date (dd/mm/yyyy)'); return; }
+        recs.push(f);
+      });
+      if (!recs.length && !bad.length) { UI.alert('Upload Employees', 'No employees found in the file. The columns are ' + EMP_COLUMNS.join(', ') + ' (download the template).'); return; }
+      const list = Store.list('employees'), lower = (v) => String(v || '').trim().toLowerCase();
+      const match = (f) => (f.code && list.find(e => lower(e.code) === lower(f.code))) || list.find(e => lower(e.name) === lower(f.name)) || null;
+      const known = recs.filter(f => match(f)).length;
+      UI.modal({ title: 'Upload Employees', focus: false, body: '<p>' + recs.length + ' employee' + (recs.length === 1 ? '' : 's') + ' in the file: <b>' + (recs.length - known) + '</b> new, <b>' + known + '</b> already on the list (by code or name).' + (bad.length ? ' <b>' + bad.length + '</b> row' + (bad.length === 1 ? '' : 's') + ' cannot be read and will be skipped.' : '') + '</p>' + UI.modeField('Employees') +
+          '<div class="hint">Upsert changes only the cells that are filled in; a blank cell leaves the value as it is. A row with "Left on" marks the employee as left.</div>',
+        buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Upload', cls: 'green', onClick: (bg) => {
+          const mode = UI.modeOf(bg), r = { inserted: 0, updated: 0, unchanged: 0, skipped: bad.length, lines: bad.slice() };
+          let max = 0; list.forEach(x => { const m = /(\d+)$/.exec(x.code || ''); if (m) max = Math.max(max, +m[1]); });
+          const later = [];
+          recs.forEach(f => {
+            const ref = f.managerRef; delete f.managerRef;
+            const ex = match(f);
+            if (!ex) {
+              const hourly = f.payType === 'hourly';
+              if (hourly ? !(num(f.hourlyRate) > 0) : !(num(f.basic) > 0)) { r.skipped++; r.lines.push(f.name + ': ' + (hourly ? 'needs a rate per hour' : 'needs a basic salary (or pay type Hourly with a rate)')); return; }
+              const e = Object.assign({ code: '', designation: '', department: '', doj: U.today(), dol: '', phone: '', email: '', address: '', pan: '', aadhaar: '', uan: '', esiNo: '', bankName: '', bankAccount: '', bankIfsc: '', payType: 'monthly', hourlyRate: 0, metro: !!s.metro, basic: 0, da: 0, hra: null, conveyance: 0, special: 0, pf: true, esi: true, pt: true, tds: 0, leavesPerYear: num(s.leavesPerYear), active: true, managerId: '', manager: '' }, f);
+              if (!e.code) e.code = 'EMP' + String(++max).padStart(3, '0');
+              if (e.hra == null) e.hra = hourly ? 0 : this.hraOf(e.basic, e.metro);
+              list.push(Object.assign(e, { id: U.uid(), createdAt: Date.now() })); r.inserted++;
+              if (ref) later.push([e, ref]);
+              return;
+            }
+            if (mode === 'insert') { r.skipped++; r.lines.push(f.name + ': already on the list, left as it is'); return; }
+            if (ref) later.push([ex, ref]);
+            if (Object.keys(f).every(k => k === 'name' ? lower(ex.name) === lower(f.name) : String(ex[k] == null ? '' : ex[k]) === String(f[k]))) { r.unchanged++; return; }
+            Object.assign(ex, f, { updatedAt: Date.now() }); r.updated++;
+          });
+          // Reporting managers, once every employee of the file is on the list
+          later.forEach(([e, ref]) => { const m = list.find(x => x !== e && (lower(x.code) === lower(ref) || lower(x.name) === lower(ref))); if (m) { e.managerId = m.id; e.manager = m.name; } else r.lines.push(e.name + ': manager "' + ref + '" not found, left without one'); });
+          Store.saveList('employees', list);
+          UI.importResult('Employees uploaded', r, () => this.screenEmployees());
+        } }] });
     },
     editEmployee(e) {
       const fresh = !e, s = this.settings();

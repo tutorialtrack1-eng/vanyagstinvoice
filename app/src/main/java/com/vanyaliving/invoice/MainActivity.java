@@ -2578,6 +2578,15 @@ public class MainActivity extends Activity implements Sync.Listener {
         layoutBtn.setAllCaps(false);
         layoutBtn.setTextSize(12.5f);
         pRow.addView(layoutBtn, challanLp);
+        // A saved invoice again: the same buyer and goods as a new invoice under the next number
+        duplicateBtn = new Button(this);
+        duplicateBtn.setText("DUPLICATE");
+        styleButton(duplicateBtn, BLUE);
+        duplicateBtn.setAllCaps(false);
+        duplicateBtn.setTextSize(12.5f);
+        duplicateBtn.setVisibility(View.GONE);
+        duplicateBtn.setOnClickListener(v -> duplicateInvoice());
+        pRow.addView(duplicateBtn, challanLp);
         // Challan mode: a saved, still open challan can become a sales invoice
         makeInvoiceBtn = new Button(this);
         makeInvoiceBtn.setText("MAKE INVOICE");
@@ -3768,7 +3777,7 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void poweredBy(Canvas c, Paint p, float centerX, float y) {
         float size = p.getTextSize(); int color = p.getColor();
         p.setTextSize(7.5f); p.setColor(0xFF555555);
-        center(c, p, "Powered by BlitzBook", centerX, y, false);
+        center(c, p, "Powered by BlitzBook  \u00b7  https://blitzbook.co.in", centerX, y, false);
         p.setTextSize(size); p.setColor(color);
     }
 
@@ -3893,6 +3902,20 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     private void loadInvoiceByNumber(String no) { loadDocByNumber(false, no, true); }
+
+    // The open invoice as a new one: the same buyer, consignee, goods, payment mode and RCM under the next number and
+    // today's date. What belonged to the original consignment (delivery note, order, reference / e-way bill, vehicle,
+    // LR) is left blank. Save then inserts the new invoice; the original stays as it is.
+    private void duplicateInvoice() {
+        if (editingChallan) return;
+        String src = invoiceNo.getText().toString().trim(), next = nextSalesInvoiceNo();
+        loadingInvoice = true; invoiceNo.setText(next); loadingInvoice = false;
+        invoiceDate.setText(today());
+        deliveryNote.setText(""); buyerOrderNo.setText(""); buyerOrderDate.setText(""); referenceNoDate.setText(""); vehicleNumber.setText(""); lrNo.setText(""); lrDate.setText("");
+        fromChallanNo = "";
+        if (duplicateBtn != null) duplicateBtn.setVisibility(View.GONE);
+        Toast.makeText(this, "Copy of invoice " + src + " as " + next + " dated today. Check it and Save.", Toast.LENGTH_LONG).show();
+    }
     private void loadChallanByNumber(String no) { loadDocByNumber(true, no, true); }
 
     // Fills the form from a saved invoice (or, with challan, a saved delivery challan). announce: remember the
@@ -3906,6 +3929,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             c.close();
             clearInvoiceForm();
             if (challan) { challanInvoiceNo = ""; refreshChallanStatus(); }
+            if (duplicateBtn != null) duplicateBtn.setVisibility(View.GONE);
             return false;
         }
         loadingInvoice = true;
@@ -3965,6 +3989,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             ic.close();
             if (rows.isEmpty()) addItemRow();
             recalc();
+            if (duplicateBtn != null) duplicateBtn.setVisibility(challan ? View.GONE : View.VISIBLE);
             if (announce) {
                 remember((challan ? "challan:" : "invoice:") + no);
                 Toast.makeText(this, "Existing " + (challan ? "challan " : "invoice ") + no + " loaded", Toast.LENGTH_SHORT).show();
@@ -7227,6 +7252,8 @@ public class MainActivity extends Activity implements Sync.Listener {
     // Delivery challan mode of the invoice screen: the same form reads and writes challans / challan_items under a
     // DC number (DC-0001 onwards). A challan can be turned into an invoice, which it then names in invoice_no.
     private boolean editingChallan = false;
+    // Duplicate: shown while a saved invoice is open
+    private Button duplicateBtn;
     private String challanInvoiceNo = "", fromChallanNo = "";
     private LinearLayout invNoField, paymentField, statusField;
     private TextView invSecTitle, challanStatus;
@@ -8931,6 +8958,14 @@ public class MainActivity extends Activity implements Sync.Listener {
                 .setPositiveButton("Save", (d, w) -> companyAction(parent, () -> Supabase.updateCompany(this, userId, c.optString("id"), c.optString("name"), eGroup.getText().toString().trim()), "Saved", null)).show();
     }
     // The people with access to a company; the owner and admins add, change and remove them
+    // What to tell the person who added a member about what happened (the invite function's answer)
+    private String inviteText(JSONObject r, String id) {
+        String who = r.optString("name").isEmpty() ? (r.optString("identity").isEmpty() ? id : r.optString("identity")) : r.optString("name"), role = roleLabel(r.optString("role"));
+        boolean mailed = r.optBoolean("mailed"); String why = r.optString("mail_error");
+        if (r.optBoolean("invited")) return who + " has no BlitzBook account yet: invited as " + role + ". " + (mailed ? "An email tells them to register with this address; the company is theirs to open the moment they do." : "They get the role on registering with this " + (who.contains("@") ? "email" + (why.isEmpty() ? "" : " (no email sent: " + why + ")") : "mobile number") + ".");
+        return who + " added as " + role + (mailed ? "; an email has told them." : why.isEmpty() ? "." : " (no email sent: " + why + ").");
+    }
+
     private void showMembersDialog(JSONObject c) {
         boolean manage = ("owner".equals(c.optString("role")) || "admin".equals(c.optString("role"))) && yearly();
         String cid = c.optString("id"), me = Supabase.myUid(this, userId);
@@ -8940,12 +8975,12 @@ public class MainActivity extends Activity implements Sync.Listener {
         box.addView(boundedScroll(listBox, manage ? 0.35 : 0.55), new LinearLayout.LayoutParams(-1, -2));
         EditText eId = null; Spinner sRole = null;
         if (manage) {
-            eId = edit("Mobile number or email of a BlitzBook account", false); eId.setSingleLine(true);
+            eId = edit("Mobile number or email", false); eId.setSingleLine(true);
             sRole = new Spinner(this);
             sRole.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, java.util.Arrays.copyOfRange(ROLE_LABELS, 1, ROLE_LABELS.length)));
             sRole.setSelection(5);
             box.addView(field("Add a member", eId)); box.addView(field("Role", sRole));
-            TextView hint = new TextView(this); hint.setText("They must have a BlitzBook account already. The company then appears under Companies in their login, and they work in it on your subscription."); hint.setTextSize(11.5f); hint.setPadding(0, dp(4), 0, 0);
+            TextView hint = new TextView(this); hint.setText("Someone with a BlitzBook account gets the role at once and an email saying so. Someone without one is invited: an email tells them who added them and in what role, and asks them to register at blitzbook.co.in (or in this app) with that email; the company appears under Companies in their login the moment they do. They work in it on your subscription."); hint.setTextSize(11.5f); hint.setPadding(0, dp(4), 0, 0);
             box.addView(hint);
         }
         final EditText fId = eId; final Spinner fRole = sRole;
@@ -8963,22 +8998,22 @@ public class MainActivity extends Activity implements Sync.Listener {
                 if (fList == null) { TextView e = new TextView(this); e.setText(fErr); e.setTextSize(13); e.setTextColor(RED); listBox.addView(e); return; }
                 for (int i = 0; i < fList.length(); i++) {
                     JSONObject m = fList.optJSONObject(i); if (m == null) continue;
-                    boolean owner = "owner".equals(m.optString("role"));
+                    boolean owner = "owner".equals(m.optString("role")), invited = m.optBoolean("invited");
+                    final String identity = m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone");
                     LinearLayout r = row(); r.setPadding(dp(4), dp(8), dp(4), dp(8));
                     LinearLayout txt = new LinearLayout(this); txt.setOrientation(LinearLayout.VERTICAL);
-                    TextView nm = new TextView(this); nm.setText((m.optString("name").isEmpty() ? "-" : m.optString("name")) + (m.optString("user_id").equals(me) ? " (you)" : "")); nm.setTextSize(14); nm.setTypeface(Typeface.DEFAULT, Typeface.BOLD); nm.setTextColor(0xFF263238);
-                    TextView sub = new TextView(this); sub.setText(roleLabel(m.optString("role")) + "  \u00b7  " + (m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone") + (m.optString("email").isEmpty() ? "" : "  \u00b7  " + m.optString("email")))); sub.setTextSize(11.5f); sub.setTextColor(0xFF607D8B);
+                    TextView nm = new TextView(this); nm.setText((m.optString("name").isEmpty() ? (invited ? "Invited" : "-") : m.optString("name")) + (!invited && m.optString("user_id").equals(me) ? " (you)" : "")); nm.setTextSize(14); nm.setTypeface(Typeface.DEFAULT, Typeface.BOLD); nm.setTextColor(invited ? 0xFF607D8B : 0xFF263238);
+                    TextView sub = new TextView(this); sub.setText(roleLabel(m.optString("role")) + "  \u00b7  " + (m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone") + (m.optString("email").isEmpty() ? "" : "  \u00b7  " + m.optString("email"))) + (invited ? "\nNo BlitzBook account yet; gets the role on registering with this " + (m.optString("email").isEmpty() ? "mobile number" : "email") : "")); sub.setTextSize(11.5f); sub.setTextColor(0xFF607D8B);
                     txt.addView(nm); txt.addView(sub);
                     r.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
                     if (manage && !owner) {
                         Button more = new Button(this); more.setText("\u22ee"); more.setAllCaps(false); styleButton(more, 0xFF607D8B); more.setMinWidth(dp(48)); more.setMinimumWidth(dp(48));
-                        more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(m.optString("name")).setItems(new String[]{"Make admin", "Make accountant", "Make sales", "Make manager", "Make HR", "Make viewer", "Remove from company"}, (d, w) -> {
-                            String identity = m.optString("phone").isEmpty() ? m.optString("email") : m.optString("phone");
+                        more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(invited ? identity : m.optString("name")).setItems(new String[]{"Make admin", "Make accountant", "Make sales", "Make manager", "Make HR", "Make viewer", invited ? "Withdraw invitation" : "Remove from company"}, (d, w) -> {
                             new Thread(() -> {
                                 String e2 = null;
-                                try { if (w == 6) Supabase.removeMember(this, userId, cid, m.optString("user_id")); else Supabase.setMember(this, userId, cid, identity, ROLES[w + 1]); } catch (Exception ex) { e2 = ex.getMessage(); }
+                                try { if (w == 6) { if (invited) Supabase.removeInvite(this, userId, cid, identity); else Supabase.removeMember(this, userId, cid, m.optString("user_id")); } else Supabase.setMember(this, userId, cid, identity, ROLES[w + 1]); } catch (Exception ex) { e2 = ex.getMessage(); }
                                 final String fe = e2;
-                                runOnUiThread(() -> { Toast.makeText(this, fe == null ? (w == 6 ? "Member removed" : "Role changed") : fe, Toast.LENGTH_LONG).show(); draw[0].run(); });
+                                runOnUiThread(() -> { Toast.makeText(this, fe == null ? (w == 6 ? (invited ? "Invitation withdrawn" : "Member removed") : "Role changed") : fe, Toast.LENGTH_LONG).show(); draw[0].run(); });
                             }).start();
                         }).show());
                         r.addView(more);
@@ -8992,9 +9027,9 @@ public class MainActivity extends Activity implements Sync.Listener {
             String role = ROLES[fRole.getSelectedItemPosition() + 1];
             new Thread(() -> {
                 JSONObject r = null; String err = null;
-                try { r = Supabase.setMember(this, userId, cid, id, role); } catch (Exception e) { err = e.getMessage(); }
+                try { r = Supabase.inviteMember(this, userId, cid, id, role); } catch (Exception e) { err = e.getMessage(); }
                 final JSONObject fr = r; final String fErr = err;
-                runOnUiThread(() -> { if (!dialog.isShowing()) return; if (fr == null) { Toast.makeText(this, fErr, Toast.LENGTH_LONG).show(); return; } Toast.makeText(this, (fr.optString("name").isEmpty() ? id : fr.optString("name")) + " added as " + roleLabel(role), Toast.LENGTH_LONG).show(); fId.setText(""); draw[0].run(); });
+                runOnUiThread(() -> { if (!dialog.isShowing()) return; if (fr == null) { Toast.makeText(this, fErr, Toast.LENGTH_LONG).show(); return; } Toast.makeText(this, inviteText(fr, id), Toast.LENGTH_LONG).show(); fId.setText(""); draw[0].run(); });
             }).start();
         }); });
         dialog.show();

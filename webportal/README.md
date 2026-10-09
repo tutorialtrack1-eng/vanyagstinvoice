@@ -48,7 +48,7 @@ Everything the app has:
   tiles Invoice, Sales, Items, Customer, Supplier, Purchase, Expense, Journal, Reports. The top bar is
   Dashboard and six groups that drop down on hover (or a tap on a phone): Sales (New Invoice, Sales,
   Delivery Challans, Credit / Debit Notes, Customers, Sales Report, Outstanding & Ageing), Purchases
-  (Purchases & Quotations, Suppliers, Expenses), Stock (Stock & Items, Stock in Hand), Books (Receipts & Payments,
+  (Purchases & Quotations, Suppliers, Expenses), Stock (Stock & Items, Stock in Hand), Records (Receipts & Payments,
   Journal, Party Ledger, Profit & Loss, Balance Sheet, Group Statements), HR (Employees, Attendance, Timesheets,
   Reimbursements, Payroll, HR Settings) and Company (Company Profile,
   Companies, GST Returns, Export / Import, AI Access, Subscription); the company chip, dark mode and Logout
@@ -64,7 +64,8 @@ Everything the app has:
 - Printing: Save keeps the invoice and moves on to the next invoice number, Print / PDF prints straight away with the layout picked from previews under Print Settings (A4 unless changed); delivery challan for any invoice (also from the Challan button in Sales), envelopes
   (DL, C5, #10), purchase record / quotation, credit and debit notes; paper sizes A4 / A5 / Letter / Legal;
   e-way bill warning above ₹50,000 (₹1,00,000 in Maharashtra, Delhi, Tamil Nadu and Bihar). The browser's
-  print dialog saves the PDF. Every printout ends with "Powered by BlitzBook". While the print dialog is up the
+  print dialog saves the PDF. Every printout ends with "Powered by BlitzBook", a link to <https://blitzbook.co.in>
+  that the PDF keeps (the app's PDFs print the address beside it). While the print dialog is up the
   page title is the document number and date ("Invoice 0001 - 03/10/2026"), so a browser header line or the
   PDF's title shows that and not the portal's own title. On the Classic layout the last page fills the room
   above the totals with the item columns, so the totals, bank details and signature sit at the foot of the
@@ -74,6 +75,10 @@ Everything the app has:
   and a *Payment Due Date*; a Credit invoice gets the date filled in from the credit period until one is
   typed. Both layouts print the due date beside the payment mode and the numbered terms at the foot. The
   terms are kept with the invoice as saved (`due_date`, `terms` in the sync row; the app leaves them as they are).
+- Duplicate (Sales list, and on an open invoice): a new invoice with the same buyer, consignee, goods, payment mode
+  and terms under the next number and today's date, ready to check and Save; what belonged to the original
+  consignment (delivery note, order, e-way bill / reference, vehicle, LR) is left blank and the due date follows the
+  new date. The original invoice is not touched.
 - Delivery challans (Sales > Delivery Challans): goods sent out before or without an invoice, numbered
   DC-0001 onwards in the same editor (no rate needed), printed as a challan, turned into a Credit invoice with
   Make Invoice (the invoice carries the challan number under Delivery Note and the challan shows which
@@ -114,8 +119,12 @@ Everything the app has:
 
 - **Companies** (top bar) lists every company the account owns or has been given a role in, grouped. *New
   company* makes another company owned by the account (its profile is then filled in under Company Profile);
-  *Group / name* puts a company in a group; *Members* adds other BlitzBook accounts by mobile number or email
-  with a role and changes or removes them; *Delete* (owner) removes a company with all its books; *Leave*
+  *Group / name* puts a company in a group; *Members* adds people by mobile number or email with a role and
+  changes or removes them. Someone with a BlitzBook account gets the role at once and an email saying so; someone
+  without one is **invited**: the server keeps the mobile number or email with the role, an email tells them who
+  added them to which company in what role and asks them to register at blitzbook.co.in (or in the app) with that
+  email, and the company is theirs to open the moment they do (the invitation is listed under Members until then
+  and can be withdrawn; `server/supabase/functions/invite` sends the mail); *Delete* (owner) removes a company with all its books; *Leave*
   drops a company one was invited to. The company chip in the top bar (and *Switch company* on the dashboard)
   switches between companies; the chip shows the role in another owner's company.
 - Roles: **Owner** everything, members, subscription, deleting the company; **Admin** everything in the books,
