@@ -308,7 +308,7 @@ create or replace function public.update_company(cid uuid, name_in text, group_i
 language plpgsql security definer set search_path = public as $$
 declare nm text := left(trim(coalesce(name_in, '')), 120); g text := left(trim(coalesce(group_in, '')), 80);
 begin
-  if public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can change the company'); end if;
+  if coalesce(public.company_role(cid), '') not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can change the company'); end if;
   update public.companies set group_name = g, name = case when nm <> '' and not exists (select 1 from public.books b where b.user_id = cid and b.k = 'company' and coalesce(b.d ->> 'company_name', '') <> '') then nm else name end
   where id = cid;
   return jsonb_build_object('ok', true);
@@ -360,14 +360,14 @@ grant execute on function public.list_members(uuid) to authenticated;
 create or replace function public.set_member(cid uuid, identity text, role_in text) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare p public.profiles%rowtype; r text := lower(trim(coalesce(role_in, ''))); own uuid; ident text := lower(trim(coalesce(identity, '')));
-        co text; by text; n int;
+        co text; adder text; n int;
 begin
-  if public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
+  if coalesce(public.company_role(cid), '') not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
   if not public.is_yearly(coalesce((select owner_id from public.companies where id = cid), cid)) then return jsonb_build_object('error', 'Members come with the yearly plan and longer (the owner of the company has to be on it)'); end if;
   if r not in ('admin', 'accountant', 'sales', 'manager', 'hr', 'viewer') then return jsonb_build_object('error', 'Role must be admin, accountant, sales, manager, hr or viewer'); end if;
   select owner_id into own from public.companies where id = cid;
   select coalesce(name, '') into co from public.companies where id = cid;
-  select coalesce(name, '') into by from public.profiles where id = auth.uid();
+  select coalesce(name, '') into adder from public.profiles where id = auth.uid();
   select * into p from public.profiles where phone = ident or lower(email) = ident limit 1;
   if not found then
     -- No account yet: an invitation by email or 10-digit mobile number
@@ -378,7 +378,7 @@ begin
     if n + (select count(*) from public.company_invites x where x.company_id = cid and x.identity <> ident) >= 50 then return jsonb_build_object('error', 'A company can have 50 members'); end if;
     insert into public.company_invites (company_id, identity, role, invited_by) values (cid, ident, r, auth.uid())
       on conflict on constraint company_invites_pkey do update set role = excluded.role, invited_by = excluded.invited_by, created_at = now();
-    return jsonb_build_object('ok', true, 'invited', true, 'identity', ident, 'email', case when ident like '%@%' then ident else '' end, 'name', '', 'role', r, 'company', co, 'by', by);
+    return jsonb_build_object('ok', true, 'invited', true, 'identity', ident, 'email', case when ident like '%@%' then ident else '' end, 'name', '', 'role', r, 'company', co, 'by', adder);
   end if;
   if p.id = coalesce(own, cid) then return jsonb_build_object('error', 'That is the owner of the company'); end if;
   if (select count(*) from public.company_members where company_id = cid) >= 50 and not exists (select 1 from public.company_members where company_id = cid and user_id = p.id) then
@@ -387,7 +387,7 @@ begin
   insert into public.company_members (company_id, user_id, role, added_by) values (cid, p.id, r, auth.uid())
     on conflict (company_id, user_id) do update set role = excluded.role;
   delete from public.company_invites x where x.company_id = cid and x.identity in (ident, coalesce(p.phone, ''), lower(coalesce(p.email, '')));
-  return jsonb_build_object('ok', true, 'user_id', p.id, 'name', coalesce(p.name, ''), 'email', coalesce(p.email, ''), 'role', r, 'company', co, 'by', by);
+  return jsonb_build_object('ok', true, 'user_id', p.id, 'name', coalesce(p.name, ''), 'email', coalesce(p.email, ''), 'role', r, 'company', co, 'by', adder);
 end $$;
 grant execute on function public.set_member(uuid, text, text) to authenticated;
 
@@ -395,7 +395,7 @@ grant execute on function public.set_member(uuid, text, text) to authenticated;
 create or replace function public.remove_invite(cid uuid, identity text) returns jsonb
 language plpgsql security definer set search_path = public as $$
 begin
-  if public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
+  if coalesce(public.company_role(cid), '') not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can manage members'); end if;
   delete from public.company_invites x where x.company_id = cid and x.identity = lower(trim(coalesce(remove_invite.identity, '')));
   return jsonb_build_object('ok', true);
 end $$;
@@ -431,7 +431,7 @@ create or replace function public.remove_member(cid uuid, member uuid) returns j
 language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is null then return jsonb_build_object('error', 'Sign in first'); end if;
-  if member <> auth.uid() and public.company_role(cid) not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can remove members'); end if;
+  if member <> auth.uid() and coalesce(public.company_role(cid), '') not in ('owner', 'admin') then return jsonb_build_object('error', 'Only the owner or an admin can remove members'); end if;
   delete from public.company_members where company_id = cid and user_id = member;
   return jsonb_build_object('ok', true);
 end $$;
