@@ -1,5 +1,6 @@
 /* BlitzBook web portal - GST returns. Fetches the sales invoices, credit notes, purchases and expenses of a return
-   period from the books and writes the two JSON files the GST portal takes (Returns > Offline tool > Upload JSON):
+   period from the books and writes the two JSON files the GST portal takes (Returns > Upload JSON), in the layout of
+   its own offline tools:
      - GSTR-1, the outward supplies: B2B (registered buyers, invoice by invoice), B2CL (inter-state invoices above
        Rs 1,00,000 to unregistered buyers), B2CS (every other sale, summed by state and rate), credit notes (CDNR for
        registered buyers, CDNUR for B2CL invoices, the rest netted into B2CS as the rules say), nil-rated supplies,
@@ -47,8 +48,8 @@
   function posOf(party, seller) { return U.stateCode(party.state) || (valid(party.gstin) ? valid(party.gstin).slice(0, 2) : '') || seller; }
   const byNo = (a, b) => U.dateMs(a.date) - U.dateMs(b.date) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true });
   const tax = (txval, rt, intra) => intra ? { iamt: 0, camt: r2(txval * rt / 200), samt: r2(txval * rt / 200) } : { iamt: r2(txval * rt / 100), camt: 0, samt: 0 };
-  // An invoice / note line as the portal's file writes it: all four tax amounts, zeros included
-  const det = (txval, rt, intra) => Object.assign({ txval: r2(txval), rt }, tax(txval, rt, intra), { csamt: 0 });
+  // An invoice / note line as the offline tool's itm_det: CGST + SGST on an intra-state line, IGST on an inter-state one
+  const det = (txval, rt, intra) => { const t = tax(txval, rt, intra); return Object.assign({ txval: r2(txval), rt }, intra ? { camt: t.camt, samt: t.samt } : { iamt: t.iamt }, { csamt: 0 }); };
   const addTo = (o, d, sign) => { ['txval', 'iamt', 'camt', 'samt'].forEach(k => { o[k] = r2(o[k] + (sign || 1) * num(d[k])); }); };
   const zero = () => ({ txval: 0, iamt: 0, camt: 0, samt: 0 });
   // First-to-last document numbers of a series, for table 13
@@ -88,11 +89,11 @@
         if (ctin) {
           table = 'B2B'; count.b2b++;
           if (!b2b.has(ctin)) b2b.set(ctin, { ctin, inv: [] });
-          b2b.get(ctin).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, pos, rchrg: inv.rcm ? 'Y' : 'N', inv_typ: 'R', flag: 'N', itms });
+          b2b.get(ctin).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, pos, rchrg: inv.rcm ? 'Y' : 'N', inv_typ: 'R', itms });
         } else if (!intra && val > B2CL_LIMIT) {
           table = 'B2CL'; count.b2cl++;
           if (!b2cl.has(pos)) b2cl.set(pos, { pos, inv: [] });
-          b2cl.get(pos).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, flag: 'N', itms });
+          b2cl.get(pos).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, itms });
         } else {
           table = 'B2CS'; count.b2cs++;
           itms.forEach(x => addTo(b2csEntry(intra, pos, x.itm_det.rt), x.itm_det));
@@ -108,16 +109,16 @@
       const pos = ref ? posOf(ref.buyer, seller) : ctin ? ctin.slice(0, 2) : seller;
       const intra = num(n.igst) > 0 ? false : num(n.cgst) > 0 || num(n.sgst) > 0 ? true : pos === seller;
       const rt = num(n.rate), txval = r2(n.taxable), val = r2(n.total);
-      const d = { txval, rt, iamt: intra ? 0 : r2(n.igst), camt: intra ? r2(n.cgst) : 0, samt: intra ? r2(n.sgst) : 0, csamt: 0 };
+      const d = Object.assign({ txval, rt }, intra ? { camt: r2(n.cgst), samt: r2(n.sgst) } : { iamt: r2(n.igst) }, { csamt: 0 });
       addTo(cn, d); count.cn++;
       let table;
       if (ctin) {
         table = 'CDNR';
         if (!cdnr.has(ctin)) cdnr.set(ctin, { ctin, nt: [] });
-        cdnr.get(ctin).nt.push({ ntty: 'C', nt_num: String(n.no), nt_dt: dt(n.date), d_flag: 'Y', rchrg: 'N', inv_typ: 'R', val, pos, flag: 'N', itms: [{ num: 1, itm_det: d }] });
+        cdnr.get(ctin).nt.push({ nt_num: String(n.no), nt_dt: dt(n.date), ntty: 'C', val, pos, rchrg: 'N', inv_typ: 'R', itms: [{ num: 1, itm_det: d }] });
       } else if (!intra && ref && (num(ref.totals.rounded) || num(ref.totals.grand)) > B2CL_LIMIT) {
         table = 'CDNUR';
-        cdnur.push({ typ: 'B2CL', ntty: 'C', nt_num: String(n.no), nt_dt: dt(n.date), d_flag: 'Y', val, pos, flag: 'N', itms: [{ num: 1, itm_det: d }] });
+        cdnur.push({ typ: 'B2CL', ntty: 'C', nt_num: String(n.no), nt_dt: dt(n.date), val, pos, itms: [{ num: 1, itm_det: d }] });
       } else {
         table = 'B2CS (netted)';
         if (rt > 0) addTo(b2csEntry(intra, pos, rt), d, -1);
@@ -141,38 +142,34 @@
     cdnur.forEach(n => n.itms.forEach(x => addUnreg(n.pos, { txval: -x.itm_det.txval, iamt: -num(x.itm_det.iamt) })));
     b2cs.forEach(e => { if (e.sply_ty === 'INTER') addUnreg(e.pos, e); });
     const nilTotal = r2(nil.INTRB2B + nil.INTRB2C + nil.INTRAB2B + nil.INTRAB2C);
-    // Aggregate turnover, as the GST portal's file carries it: gt = the financial year before the period's,
-    // cur_gt = the period's financial year up to the end of the period (invoice values, net of credit notes)
-    const end = new Date(p.to), fyStart = new Date(end.getMonth() < 3 ? end.getFullYear() - 1 : end.getFullYear(), 3, 1).getTime();
-    const prevStart = new Date(new Date(fyStart).getFullYear() - 1, 3, 1).getTime();
-    const turnover = (a, b) => r2(Biz.invoices().filter(i => Books.inRange(i.date, a, b)).reduce((s, i) => s + (num(i.totals.rounded) || num(i.totals.grand)), 0) - Store.list('notes').filter(n => n.kind === 'CN' && Books.inRange(n.date, a, b)).reduce((s, n) => s + num(n.total), 0));
-    const gt = turnover(prevStart, fyStart - 1), curGt = turnover(fyStart, p.to);
     return { p, invs, cns, dns, purchases, expenses, challans, b2b: Array.from(b2b.values()), b2cl: Array.from(b2cl.values()), b2cs: Array.from(b2cs.values()), cdnr: Array.from(cdnr.values()), cdnur, nil, nilTotal, hsn: { b2b: Array.from(hsn.b2b.values()), b2c: Array.from(hsn.b2c.values()) },
-      out, rcm, cn, net, inRcm, itc, itcRcm, unreg: Array.from(unreg.values()).filter(u => u.txval > 0), count, warn, rows, gt, curGt };
+      out, rcm, cn, net, inRcm, itc, itcRcm, unreg: Array.from(unreg.values()).filter(u => u.txval > 0), count, warn, rows };
   }
 
   // ------------------------------------------------------------ the two files
-  /* The layout of the GST portal's own GSTR-1 file (returns_<date>_R1_<gstin>_offline_others_0.json): gstin, the
-     return period, filing type (M monthly / Q quarterly), aggregate turnover of the previous and the current
-     financial year, the supply tables (every record flagged N, no action taken on it yet), nil-rated supplies in
-     the portal's four rows, the HSN summary as hsn_b2b / hsn_b2c with the unit code alone, a document-issue table
-     that lists all twelve document types (empty ones included) and the date of the file. The portal adds its own
-     checksum to a downloaded file; an uploaded one carries none. */
+  /* The file the GST portal's Upload JSON takes is the one its own Returns Offline Tool (V3.2.4) generates, and the
+     portal rejects anything else ("File could not be uploaded! Download the latest version of Offline tool").
+     Read from the tool's code (utility/common.js, utility/returnStructure.js): gstin, fp, version "GST3.2.4" and
+     hash "hash" (literal), then only the sections with data; no filing type, file date, turnover (asked only for
+     2017-18), flags or checksums (those are the portal's own, in the file it lets you download). Lines carry CGST +
+     SGST or IGST, never both. Since May 2025 the HSN summary is hsn_b2b / hsn_b2c with the unit code alone (NA
+     for services). Table 13 lists only the document types issued, each with its name. */
+  const DOC_TYPES = ['Invoices for outward supply', 'Invoices for inward supply from unregistered person', 'Revised Invoice', 'Debit Note', 'Credit Note', 'Receipt Voucher', 'Payment Voucher', 'Refund Voucher',
+    'Delivery Challan for job work', 'Delivery Challan for supply on approval', 'Delivery Challan in case of liquid gas', 'Delivery Challan in case other than by way of supply (excluding at S no. 9 to 11)'];
+  const GSTR1_VERSION = 'GST3.2.4';
   function gstr1(d, gstin) {
-    const t = new Date();
-    const j = { gstin, fp: d.p.fp, filing_typ: d.p.q ? 'Q' : 'M', gt: d.gt, cur_gt: d.curGt };
+    const j = { gstin, fp: d.p.fp, version: GSTR1_VERSION, hash: 'hash' };
     if (d.b2b.length) j.b2b = d.b2b;
     if (d.b2cl.length) j.b2cl = d.b2cl;
-    if (d.b2cs.length) j.b2cs = d.b2cs.map(e => Object.assign({ sply_ty: e.sply_ty, rt: e.rt, typ: 'OE', pos: e.pos, txval: e.txval }, e.sply_ty === 'INTRA' ? { camt: e.camt, samt: e.samt } : { iamt: e.iamt }, { csamt: 0, flag: 'N' }));
+    if (d.b2cs.length) j.b2cs = d.b2cs.map(e => Object.assign({ sply_ty: e.sply_ty, rt: e.rt, typ: 'OE', pos: e.pos, txval: e.txval }, e.sply_ty === 'INTRA' ? { camt: e.camt, samt: e.samt } : { iamt: e.iamt }, { csamt: 0 }));
     if (d.cdnr.length) j.cdnr = d.cdnr;
     if (d.cdnur.length) j.cdnur = d.cdnur;
-    if (d.nilTotal > 0) j.nil = { flag: 'N', inv: ['INTRAB2B', 'INTRAB2C', 'INTRB2B', 'INTRB2C'].map(sply_ty => ({ sply_ty, expt_amt: 0, nil_amt: d.nil[sply_ty], ngsup_amt: 0 })) };
-    const hsnRows = (list) => list.map((h, n) => ({ num: n + 1, hsn_sc: h.hsn_sc, desc: h.desc, uqc: h.uqc, qty: h.qty, txval: h.txval, rt: h.rt, iamt: h.iamt, camt: h.camt, samt: h.samt, csamt: 0 }));
-    if (d.hsn.b2b.length || d.hsn.b2c.length) j.hsn = { flag: 'N', hsn_b2b: hsnRows(d.hsn.b2b), hsn_b2c: hsnRows(d.hsn.b2c) };
-    // Table 13: every document type 1-12, the ones issued carrying their series (1 invoices, 5 credit notes, 12 delivery challans)
-    const issued = { 1: series(d.invs), 5: series(d.cns), 12: series(d.challans) };
-    j.doc_issue = { flag: 'N', doc_det: Array.from({ length: 12 }, (_, i) => { const s = issued[i + 1]; return { docs: s ? [Object.assign({ num: 1 }, s, { cancel: 0, net_issue: s.totnum })] : [], doc_num: i + 1 }; }) };
-    j.fil_dt = U.pad(t.getDate()) + '-' + U.pad(t.getMonth() + 1) + '-' + t.getFullYear();
+    if (d.nilTotal > 0) j.nil = { inv: ['INTRB2B', 'INTRB2C', 'INTRAB2B', 'INTRAB2C'].filter(k => d.nil[k] > 0).map(sply_ty => ({ sply_ty, expt_amt: 0, nil_amt: d.nil[sply_ty], ngsup_amt: 0 })) };
+    const hsnRows = (list) => list.map((h, n) => ({ num: n + 1, hsn_sc: h.hsn_sc, desc: h.desc, uqc: h.uqc, qty: h.qty, rt: h.rt, txval: h.txval, iamt: h.iamt, samt: h.samt, camt: h.camt, csamt: 0 }));
+    if (d.hsn.b2b.length || d.hsn.b2c.length) { j.hsn = {}; if (d.hsn.b2b.length) j.hsn.hsn_b2b = hsnRows(d.hsn.b2b); if (d.hsn.b2c.length) j.hsn.hsn_b2c = hsnRows(d.hsn.b2c); }
+    // Table 13: the document types issued (1 invoices, 5 credit notes, 12 delivery challans), each one series
+    const issued = [[1, d.invs], [5, d.cns], [12, d.challans]].map(([n, list]) => [n, series(list)]).filter(([, s]) => s);
+    if (issued.length) j.doc_issue = { doc_det: issued.map(([n, s]) => ({ doc_num: n, doc_typ: DOC_TYPES[n - 1], docs: [Object.assign({ num: 1 }, s, { cancel: 0, net_issue: s.totnum })] })) };
     return j;
   }
   function gstr3b(d, gstin) {
@@ -211,7 +208,8 @@
     download(which, d, gstin) {
       const j = which === '3B' ? gstr3b(d, gstin) : gstr1(d, gstin);
       // Named as the GST offline tool names its own files: returns_<ddmmyyyy>_R1_<gstin>_offline.json, GSTR3B_<gstin>_<period>.json
-      UI.download(which === '3B' ? 'GSTR3B_' + gstin + '_' + d.p.fp + '.json' : 'returns_' + j.fil_dt.replace(/-/g, '') + '_R1_' + gstin + '_offline.json', JSON.stringify(j, null, 2), 'application/json');
+      const t = new Date(), today = U.pad(t.getDate()) + U.pad(t.getMonth() + 1) + t.getFullYear();
+      UI.download(which === '3B' ? 'GSTR3B_' + gstin + '_' + d.p.fp + '.json' : 'returns_' + today + '_R1_' + gstin + '_offline.json', JSON.stringify(j, null, 2), 'application/json');
       UI.toast('GSTR-' + which + ' JSON for ' + d.p.label + ' downloaded. Check it in the GST offline tool before filing.', 5000, 'ok');
       return j;
     },
