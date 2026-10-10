@@ -3,7 +3,7 @@
      - GSTR-1, the outward supplies: B2B (registered buyers, invoice by invoice), B2CL (inter-state invoices above
        Rs 1,00,000 to unregistered buyers), B2CS (every other sale, summed by state and rate), credit notes (CDNR for
        registered buyers, CDNUR for B2CL invoices, the rest netted into B2CS as the rules say), nil-rated supplies,
-       the HSN summary and the documents issued;
+       the HSN summary (table 12, B2B and B2C lines apart since April 2025) and the documents issued;
      - GSTR-3B, the monthly summary: outward taxable supplies (3.1 a), nil-rated (3.1 c), inward supplies under
        reverse charge (3.1 d), inter-state supplies to unregistered persons by state (3.2) and the input tax credit
        (4 A: reverse charge and all other ITC, net of debit notes).
@@ -16,11 +16,10 @@
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   // An inter-state invoice to an unregistered buyer above this is reported invoice by invoice (B2CL), Rs 1,00,000 since 1 August 2024
   const B2CL_LIMIT = 100000;
-  // The unit names the GST portal writes
-  const UQC = { BAG: 'BAG-BAGS', BAL: 'BAL-BALE', BDL: 'BDL-BUNDLES', BKL: 'BKL-BUCKLES', BOU: 'BOU-BILLION OF UNITS', BOX: 'BOX-BOX', BTL: 'BTL-BOTTLES', BUN: 'BUN-BUNCHES', CAN: 'CAN-CANS', CBM: 'CBM-CUBIC METERS', CCM: 'CCM-CUBIC CENTIMETERS', CMS: 'CMS-CENTIMETERS',
-    CTN: 'CTN-CARTONS', DOZ: 'DOZ-DOZENS', DRM: 'DRM-DRUMS', GGK: 'GGK-GREAT GROSS', GMS: 'GMS-GRAMMES', GRS: 'GRS-GROSS', GYD: 'GYD-GROSS YARDS', KGS: 'KGS-KILOGRAMS', KLR: 'KLR-KILOLITRE', KME: 'KME-KILOMETRE', LTR: 'LTR-LITRES', MLT: 'MLT-MILILITRE', MTR: 'MTR-METERS',
-    MTS: 'MTS-METRIC TON', NOS: 'NOS-NUMBERS', PAC: 'PAC-PACKS', PCS: 'PCS-PIECES', PRS: 'PRS-PAIRS', QTL: 'QTL-QUINTAL', ROL: 'ROL-ROLLS', SET: 'SET-SETS', SQF: 'SQF-SQUARE FEET', SQM: 'SQM-SQUARE METERS', SQY: 'SQY-SQUARE YARDS', TBS: 'TBS-TABLETS',
-    TGM: 'TGM-TEN GROSS', THD: 'THD-THOUSANDS', TON: 'TON-TONNES', TUB: 'TUB-TUBES', UGS: 'UGS-US GALLONS', UNT: 'UNT-UNITS', YDS: 'YDS-YARDS', OTH: 'OTH-OTHERS' };
+  // The unit codes the GST portal's JSON carries (the code alone, "PCS", not the "PCS-PIECES" label of the Excel template);
+  // services (SAC, 99...) go with "NA" and no quantity
+  const UQC = ['BAG', 'BAL', 'BDL', 'BKL', 'BOU', 'BOX', 'BTL', 'BUN', 'CAN', 'CBM', 'CCM', 'CMS', 'CTN', 'DOZ', 'DRM', 'GGK', 'GMS', 'GRS', 'GYD', 'KGS', 'KLR', 'KME', 'LTR', 'MLT', 'MTR', 'MTS', 'NOS', 'PAC', 'PCS', 'PRS', 'QTL', 'ROL', 'SET', 'SQF', 'SQM', 'SQY', 'TBS', 'TGM', 'THD', 'TON', 'TUB', 'UGS', 'UNT', 'YDS', 'OTH'];
+  const uqcOf = (hsn, uqc) => /^99/.test(hsn) ? 'NA' : UQC.includes(String(uqc || 'NOS').toUpperCase()) ? String(uqc || 'NOS').toUpperCase() : 'OTH';
 
   // ------------------------------------------------------------ return periods
   // {fp: 'MMYYYY' (the month, or the last month of a quarter), from / to in ms, label, q}
@@ -48,7 +47,8 @@
   function posOf(party, seller) { return U.stateCode(party.state) || (valid(party.gstin) ? valid(party.gstin).slice(0, 2) : '') || seller; }
   const byNo = (a, b) => U.dateMs(a.date) - U.dateMs(b.date) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true });
   const tax = (txval, rt, intra) => intra ? { iamt: 0, camt: r2(txval * rt / 200), samt: r2(txval * rt / 200) } : { iamt: r2(txval * rt / 100), camt: 0, samt: 0 };
-  const det = (txval, rt, intra) => { const t = tax(txval, rt, intra); return Object.assign({ txval: r2(txval), rt }, intra ? { camt: t.camt, samt: t.samt } : { iamt: t.iamt }, { csamt: 0 }); };
+  // An invoice / note line as the portal's file writes it: all four tax amounts, zeros included
+  const det = (txval, rt, intra) => Object.assign({ txval: r2(txval), rt }, tax(txval, rt, intra), { csamt: 0 });
   const addTo = (o, d, sign) => { ['txval', 'iamt', 'camt', 'samt'].forEach(k => { o[k] = r2(o[k] + (sign || 1) * num(d[k])); }); };
   const zero = () => ({ txval: 0, iamt: 0, camt: 0, samt: 0 });
   // First-to-last document numbers of a series, for table 13
@@ -60,7 +60,7 @@
     const invs = Biz.invoices().filter(i => inRange(i.date)).sort(byNo);
     const notes = Store.list('notes').filter(n => inRange(n.date)).sort(byNo), cns = notes.filter(n => n.kind === 'CN'), dns = notes.filter(n => n.kind === 'DN');
     const purchases = Store.list('purchases').filter(x => x.kind === 'PUR' && inRange(x.date)), expenses = Store.list('expenses').filter(x => inRange(x.date)), challans = Store.list('challans').filter(d => inRange(d.date));
-    const b2b = new Map(), b2cl = new Map(), b2cs = new Map(), cdnr = new Map(), cdnur = [], hsn = new Map();
+    const b2b = new Map(), b2cl = new Map(), b2cs = new Map(), cdnr = new Map(), cdnur = [], hsn = { b2b: new Map(), b2c: new Map() };
     const nil = { INTRB2B: 0, INTRB2C: 0, INTRAB2B: 0, INTRAB2C: 0 };
     const out = zero(), rcm = zero(), cn = zero(), count = { b2b: 0, b2cl: 0, b2cs: 0, nil: 0, cn: 0, noHsn: 0 };
     const b2csKey = (intra, pos, rt) => (intra ? 'INTRA' : 'INTER') + '|' + pos + '|' + rt;
@@ -74,10 +74,10 @@
         const txval = r2(it.taxable), rt = num(it.gst); if (txval <= 0) return;
         if (!String(it.hsn || '').trim()) count.noHsn++;
         if (rt === 0) nilAmt = r2(nilAmt + txval); else { const k = String(rt); byRate.set(k, r2((byRate.get(k) || 0) + txval)); }
-        // Table 12, HSN-wise, by HSN, rate and unit (nil-rated lines included)
-        const hk = String(it.hsn || '').trim() + '|' + rt + '|' + (it.uqc || 'NOS');
-        let h = hsn.get(hk); if (!h) { h = Object.assign({ hsn_sc: String(it.hsn || '').trim(), desc: String(it.desc || '').trim().slice(0, 30), uqc: UQC[String(it.uqc || 'NOS').toUpperCase()] || UQC.OTH, qty: 0, rt }, zero()); hsn.set(hk, h); }
-        h.qty = r2(h.qty + num(it.qty)); addTo(h, det(txval, rt, intra));
+        // Table 12, HSN-wise, by HSN, rate and unit (nil-rated lines included), registered buyers apart from the rest
+        const hsn_sc = String(it.hsn || '').trim(), uqc = uqcOf(hsn_sc, it.uqc), hk = hsn_sc + '|' + rt + '|' + uqc, hm = ctin ? hsn.b2b : hsn.b2c;
+        let h = hm.get(hk); if (!h) { h = Object.assign({ hsn_sc, desc: String(it.desc || '').trim().slice(0, 30), uqc, qty: 0, rt }, zero()); hm.set(hk, h); }
+        if (uqc !== 'NA') h.qty = r2(h.qty + num(it.qty)); addTo(h, det(txval, rt, intra));
       });
       if (nilAmt > 0) { const k = (intra ? 'INTRA' : 'INTR') + (ctin ? 'B2B' : 'B2C'); nil[k] = r2(nil[k] + nilAmt); count.nil++; }
       const itms = Array.from(byRate.entries()).sort((a, b) => num(a[0]) - num(b[0])).map(([k, txval], n) => ({ num: n + 1, itm_det: det(txval, num(k), intra) }));
@@ -88,11 +88,11 @@
         if (ctin) {
           table = 'B2B'; count.b2b++;
           if (!b2b.has(ctin)) b2b.set(ctin, { ctin, inv: [] });
-          b2b.get(ctin).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, pos, rchrg: inv.rcm ? 'Y' : 'N', inv_typ: 'R', itms });
+          b2b.get(ctin).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, pos, rchrg: inv.rcm ? 'Y' : 'N', inv_typ: 'R', flag: 'N', itms });
         } else if (!intra && val > B2CL_LIMIT) {
           table = 'B2CL'; count.b2cl++;
           if (!b2cl.has(pos)) b2cl.set(pos, { pos, inv: [] });
-          b2cl.get(pos).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, itms });
+          b2cl.get(pos).inv.push({ inum: String(inv.no), idt: dt(inv.date), val, flag: 'N', itms });
         } else {
           table = 'B2CS'; count.b2cs++;
           itms.forEach(x => addTo(b2csEntry(intra, pos, x.itm_det.rt), x.itm_det));
@@ -108,16 +108,16 @@
       const pos = ref ? posOf(ref.buyer, seller) : ctin ? ctin.slice(0, 2) : seller;
       const intra = num(n.igst) > 0 ? false : num(n.cgst) > 0 || num(n.sgst) > 0 ? true : pos === seller;
       const rt = num(n.rate), txval = r2(n.taxable), val = r2(n.total);
-      const d = Object.assign({ txval, rt }, intra ? { camt: r2(n.cgst), samt: r2(n.sgst) } : { iamt: r2(n.igst) }, { csamt: 0 });
+      const d = { txval, rt, iamt: intra ? 0 : r2(n.igst), camt: intra ? r2(n.cgst) : 0, samt: intra ? r2(n.sgst) : 0, csamt: 0 };
       addTo(cn, d); count.cn++;
       let table;
       if (ctin) {
         table = 'CDNR';
         if (!cdnr.has(ctin)) cdnr.set(ctin, { ctin, nt: [] });
-        cdnr.get(ctin).nt.push({ ntty: 'C', nt_num: String(n.no), nt_dt: dt(n.date), p_gst: 'N', rchrg: 'N', inv_typ: 'R', val, pos, itms: [{ num: 1, itm_det: d }] });
+        cdnr.get(ctin).nt.push({ ntty: 'C', nt_num: String(n.no), nt_dt: dt(n.date), d_flag: 'Y', rchrg: 'N', inv_typ: 'R', val, pos, flag: 'N', itms: [{ num: 1, itm_det: d }] });
       } else if (!intra && ref && (num(ref.totals.rounded) || num(ref.totals.grand)) > B2CL_LIMIT) {
         table = 'CDNUR';
-        cdnur.push({ typ: 'B2CL', ntty: 'C', nt_num: String(n.no), nt_dt: dt(n.date), p_gst: 'N', val, pos, itms: [{ num: 1, itm_det: d }] });
+        cdnur.push({ typ: 'B2CL', ntty: 'C', nt_num: String(n.no), nt_dt: dt(n.date), d_flag: 'Y', val, pos, flag: 'N', itms: [{ num: 1, itm_det: d }] });
       } else {
         table = 'B2CS (netted)';
         if (rt > 0) addTo(b2csEntry(intra, pos, rt), d, -1);
@@ -147,26 +147,28 @@
     const prevStart = new Date(new Date(fyStart).getFullYear() - 1, 3, 1).getTime();
     const turnover = (a, b) => r2(Biz.invoices().filter(i => Books.inRange(i.date, a, b)).reduce((s, i) => s + (num(i.totals.rounded) || num(i.totals.grand)), 0) - Store.list('notes').filter(n => n.kind === 'CN' && Books.inRange(n.date, a, b)).reduce((s, n) => s + num(n.total), 0));
     const gt = turnover(prevStart, fyStart - 1), curGt = turnover(fyStart, p.to);
-    return { p, invs, cns, dns, purchases, expenses, challans, b2b: Array.from(b2b.values()), b2cl: Array.from(b2cl.values()), b2cs: Array.from(b2cs.values()), cdnr: Array.from(cdnr.values()), cdnur, nil, nilTotal, hsn: Array.from(hsn.values()),
+    return { p, invs, cns, dns, purchases, expenses, challans, b2b: Array.from(b2b.values()), b2cl: Array.from(b2cl.values()), b2cs: Array.from(b2cs.values()), cdnr: Array.from(cdnr.values()), cdnur, nil, nilTotal, hsn: { b2b: Array.from(hsn.b2b.values()), b2c: Array.from(hsn.b2c.values()) },
       out, rcm, cn, net, inRcm, itc, itcRcm, unreg: Array.from(unreg.values()).filter(u => u.txval > 0), count, warn, rows, gt, curGt };
   }
 
   // ------------------------------------------------------------ the two files
   /* The layout of the GST portal's own GSTR-1 file (returns_<date>_R1_<gstin>_offline_others_0.json): gstin, the
      return period, filing type (M monthly / Q quarterly), aggregate turnover of the previous and the current
-     financial year, the supply tables, a document-issue table that lists all twelve document types (empty
-     ones included) and the date of the file. The portal adds its own checksum to a downloaded file; an
-     uploaded one carries none. */
+     financial year, the supply tables (every record flagged N, no action taken on it yet), nil-rated supplies in
+     the portal's four rows, the HSN summary as hsn_b2b / hsn_b2c with the unit code alone, a document-issue table
+     that lists all twelve document types (empty ones included) and the date of the file. The portal adds its own
+     checksum to a downloaded file; an uploaded one carries none. */
   function gstr1(d, gstin) {
     const t = new Date();
     const j = { gstin, fp: d.p.fp, filing_typ: d.p.q ? 'Q' : 'M', gt: d.gt, cur_gt: d.curGt };
     if (d.b2b.length) j.b2b = d.b2b;
     if (d.b2cl.length) j.b2cl = d.b2cl;
-    if (d.b2cs.length) j.b2cs = d.b2cs.map(e => Object.assign({ sply_ty: e.sply_ty, rt: e.rt, typ: 'OE', pos: e.pos, txval: e.txval }, e.sply_ty === 'INTRA' ? { camt: e.camt, samt: e.samt } : { iamt: e.iamt }, { csamt: 0 }));
+    if (d.b2cs.length) j.b2cs = d.b2cs.map(e => Object.assign({ sply_ty: e.sply_ty, rt: e.rt, typ: 'OE', pos: e.pos, txval: e.txval }, e.sply_ty === 'INTRA' ? { camt: e.camt, samt: e.samt } : { iamt: e.iamt }, { csamt: 0, flag: 'N' }));
     if (d.cdnr.length) j.cdnr = d.cdnr;
     if (d.cdnur.length) j.cdnur = d.cdnur;
-    if (d.nilTotal > 0) j.nil = { inv: ['INTRB2B', 'INTRB2C', 'INTRAB2B', 'INTRAB2C'].map(sply_ty => ({ sply_ty, nil_amt: d.nil[sply_ty], expt_amt: 0, ngsup_amt: 0 })) };
-    if (d.hsn.length) j.hsn = { data: d.hsn.map((h, n) => ({ num: n + 1, hsn_sc: h.hsn_sc, desc: h.desc, uqc: h.uqc, qty: h.qty, txval: h.txval, rt: h.rt, iamt: h.iamt, camt: h.camt, samt: h.samt, csamt: 0 })) };
+    if (d.nilTotal > 0) j.nil = { flag: 'N', inv: ['INTRAB2B', 'INTRAB2C', 'INTRB2B', 'INTRB2C'].map(sply_ty => ({ sply_ty, expt_amt: 0, nil_amt: d.nil[sply_ty], ngsup_amt: 0 })) };
+    const hsnRows = (list) => list.map((h, n) => ({ num: n + 1, hsn_sc: h.hsn_sc, desc: h.desc, uqc: h.uqc, qty: h.qty, txval: h.txval, rt: h.rt, iamt: h.iamt, camt: h.camt, samt: h.samt, csamt: 0 }));
+    if (d.hsn.b2b.length || d.hsn.b2c.length) j.hsn = { flag: 'N', hsn_b2b: hsnRows(d.hsn.b2b), hsn_b2c: hsnRows(d.hsn.b2c) };
     // Table 13: every document type 1-12, the ones issued carrying their series (1 invoices, 5 credit notes, 12 delivery challans)
     const issued = { 1: series(d.invs), 5: series(d.cns), 12: series(d.challans) };
     j.doc_issue = { flag: 'N', doc_det: Array.from({ length: 12 }, (_, i) => { const s = issued[i + 1]; return { docs: s ? [Object.assign({ num: 1 }, s, { cancel: 0, net_issue: s.totnum })] : [], doc_num: i + 1 }; }) };
@@ -208,7 +210,8 @@
     },
     download(which, d, gstin) {
       const j = which === '3B' ? gstr3b(d, gstin) : gstr1(d, gstin);
-      UI.download('GSTR' + which + '_' + gstin + '_' + d.p.fp + '.json', JSON.stringify(j, null, 2), 'application/json');
+      // Named as the GST offline tool names its own files: returns_<ddmmyyyy>_R1_<gstin>_offline.json, GSTR3B_<gstin>_<period>.json
+      UI.download(which === '3B' ? 'GSTR3B_' + gstin + '_' + d.p.fp + '.json' : 'returns_' + j.fil_dt.replace(/-/g, '') + '_R1_' + gstin + '_offline.json', JSON.stringify(j, null, 2), 'application/json');
       UI.toast('GSTR-' + which + ' JSON for ' + d.p.label + ' downloaded. Check it in the GST offline tool before filing.', 5000, 'ok');
       return j;
     },
@@ -239,7 +242,7 @@
       '<div class="hint" style="margin-bottom:12px">Fetched from the books for <b>' + esc(d.p.label) + '</b> (return period ' + esc(d.p.fp) + ', GSTIN ' + esc(gstin) + '): ' + d.invs.length + ' invoice' + (d.invs.length === 1 ? '' : 's') + ', ' + d.cns.length + ' credit note' + (d.cns.length === 1 ? '' : 's') + ', ' + d.purchases.length + ' purchase' + (d.purchases.length === 1 ? '' : 's') + ', ' + d.expenses.length + ' expense' + (d.expenses.length === 1 ? '' : 's') + '. Open each JSON in the GST portal\'s offline tool, check the figures and upload.</div>' +
       '<div class="grid2"><div class="card white"><div class="hd">GSTR-1 - Outward supplies</div><div class="bd"><div class="kv">' +
       k('B2B invoices (registered buyers, table 4)', d.count.b2b) + k('B2CL invoices (inter-state above ' + money(B2CL_LIMIT) + ', table 5)', d.count.b2cl) + k('B2CS sales (summed by state and rate, table 7)', d.count.b2cs) + k('Credit notes (tables 9B / 7)', d.count.cn) +
-      k('Nil-rated supplies (table 8)', money(d.nilTotal)) + k('HSN lines (table 12)', d.hsn.length) + k('Taxable value (before credit notes)', money(d.out.txval)) + (d.rcm.txval ? k('Of which under reverse charge (tax paid by buyers)', money(d.rcm.txval)) : '') +
+      k('Nil-rated supplies (table 8)', money(d.nilTotal)) + k('HSN lines (table 12)', d.hsn.b2b.length + d.hsn.b2c.length) + k('Taxable value (before credit notes)', money(d.out.txval)) + (d.rcm.txval ? k('Of which under reverse charge (tax paid by buyers)', money(d.rcm.txval)) : '') +
       k('IGST', money(d.out.iamt)) + k('CGST', money(d.out.camt)) + k('SGST', money(d.out.samt)) + '</div></div></div>' +
       '<div class="card white"><div class="hd">GSTR-3B - Summary</div><div class="bd"><div class="kv">' +
       k('3.1(a) Outward taxable supplies, net of credit notes', money(d.net.txval)) + k('      Tax on them', money(outTax)) + k('3.1(c) Nil-rated / exempt', money(d.nilTotal)) + k('3.1(d) Inward supplies under reverse charge', money(d.inRcm.txval)) + k('      Tax payable on them', money(rcmTax)) +
