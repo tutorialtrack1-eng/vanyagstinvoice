@@ -43,7 +43,7 @@
   function billsOf(kind, party) {
     const k = lower(party); if (!k) return [];
     if (kind === 'receipt') return Biz.outstanding().open.filter(r => lower(r.party) === k).map(r => ({ no: r.no, date: r.date, amount: r.balance, days: r.days }));
-    return Store.list('purchases').filter(p => p.kind === 'PUR' && p.paidBy === 'Credit' && lower(p.supplier) === k).map(p => ({ no: p.no, date: p.date, amount: num(p.total) - num(p.tds) }));
+    return Books.payables().open.filter(r => lower(r.party) === k).map(r => ({ no: r.no, date: r.date, amount: r.balance, days: r.days }));
   }
 
   const Money = {

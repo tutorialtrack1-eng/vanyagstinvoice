@@ -213,6 +213,20 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await page.click('#qNew'); await page.fill('#pRows tr [data-k=name]', 'Wooden Chair'); await page.fill('#pRows tr [data-k=qty]', '2'); await page.fill('#pRows tr [data-k=rate]', '1500'); await page.click('.modal .mf .btn.green');
   await page.waitForSelector('[data-conv]'); await page.click('[data-conv]'); await page.click('.modal .mf .btn.red');
   check('quotation becomes a purchase', await page.evaluate(() => Store.list('purchases').map(p => p.no).sort().join()) === 'PUR-0001,PUR-0002');
+  // what is bought counts in stock without ticking anything; the supplier on a bill becomes a contact; a credit bill is owed until paid
+  check('purchase lines count as stock by default', await page.evaluate(() => { const s = Books.stock(null); return s.some(l => l.name === 'Wooden Chair' && l.purchased === 2) && s.some(l => l.name.startsWith('Air Fryer') && l.purchased === 10); }), await page.evaluate(() => Books.stock(null).map(l => [l.name, l.purchased])));
+  check('the purchases list shows what is owed on the credit bill', (await page.textContent('table.list')).includes('20,880.00 due'), (await page.textContent('table.list')).replace(/\s+/g, ' ').slice(0, 220));
+  await page.click('#pNew'); await page.fill('#pSup', 'Fresh Supplier Ltd'); await page.fill('#pRows tr [data-k=name]', 'Kettle'); await page.fill('#pRows tr [data-k=qty]', '1'); await page.fill('#pRows tr [data-k=rate]', '500'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  check('a new supplier on a bill becomes a Supplier contact', await page.evaluate(() => { const c = Store.list('contacts').find(x => x.name === 'Fresh Supplier Ltd'); return !!c && c.type === 'Supplier'; }));
+  await page.evaluate(() => { const p = Store.list('purchases').find(x => x.supplier === 'Fresh Supplier Ltd'); Store.delete('purchases', p.id); Store.saveList('contacts', Store.list('contacts').filter(c => c.name !== 'Fresh Supplier Ltd')); Store.saveList('items', Store.list('items').filter(i => i.name !== 'Kettle')); });
+  await page.evaluate(() => App.go('payables')); await page.waitForSelector('[data-pay]');
+  check('supplier outstanding: the credit bill, 20,880 owed', (await page.textContent('.buckets')).includes('20,880.00') && await page.evaluate(() => Books.payables().open.length === 1 && Books.payables().open[0].balance === 20880), await page.evaluate(() => Books.payables().open));
+  await page.click('[data-pay]'); await page.waitForSelector('#vParty');
+  check('payment opens against the bill with its balance', (await page.inputValue('#vAmt')) === '20880.00' && (await page.inputValue('#vRef')) === 'PUR-0001', [await page.inputValue('#vAmt'), await page.inputValue('#vRef')]);
+  await page.click('.modal .mf .btn.green'); await page.waitForSelector('.buckets');
+  check('the payment settles the bill', await page.evaluate(() => Books.payables().open.length === 0) && (await page.textContent('#view')).includes('Nothing is owed'), await page.evaluate(() => Books.payables().open));
+  await page.evaluate(() => { const j = Store.list('journal').find(x => x.vtype === 'payment'); Store.delete('journal', j.id); });
+  await page.evaluate(() => App.go('purchases')); await page.waitForSelector('table.list');
   fs.writeFileSync(OUT + '/print-purchase.html', await page.evaluate(() => Print.purchase(Store.list('purchases')[0], Store.company(), 'A4')));
   await page.evaluate(() => App.go('notes', { kind: 'CN' })); await page.click('#nNew'); await page.fill('#nParty', 'The Chef Store - Banjara Hills'); await page.fill('#nRef', 'OFFSI27-00001'); await page.fill('#nTax', '1000'); await page.selectOption('#nRate', '18');
   check('credit note total', (await page.textContent('#nTotal')).includes('1,180.00'), await page.textContent('#nTotal'));
@@ -311,6 +325,13 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   const shots = [['sales', '06-sales'], ['items', '07-items'], ['purchases', '08-purchases'], ['expenses', '09-expenses'], ['journal', '10-journal'], ['money', '16a-money'], ['salesReport', '11-sales-report'], ['pnl', '12-pnl'], ['balance', '13-balance'], ['stock', '14-stock'], ['backup', '17-backup']];
   for (const [r, n] of shots) { await page.evaluate((r) => App.go(r), r); await page.waitForTimeout(80); await page.screenshot({ path: OUT + '/' + n + '.png', fullPage: true }); }
   await page.evaluate(() => App.go('contacts', { type: 'Customer' })); await page.screenshot({ path: OUT + '/15-contacts.png', fullPage: true });
+  // sales report: the buyer's name only, further columns on request
+  await page.evaluate(() => App.go('salesReport', { range: Reports.rangeOf('01/01/2020', '31/12/2030') })); await page.waitForSelector('table.list');
+  check('sales report shows the buyer name without the address', (await page.textContent('table.list td[data-l="Buyer Name"]')).trim() === 'The Chef Store - Banjara Hills', await page.textContent('table.list td[data-l="Buyer Name"]'));
+  await page.click('#rCols'); await page.waitForSelector('#rc0'); await page.check('#rc0'); await page.check('#rc11'); await page.check('#rc12'); await page.click('.modal .mf .btn.green'); await page.waitForSelector('table.list');
+  const rh = await page.evaluate(() => Array.from(document.querySelectorAll('table.list th')).map(t => t.textContent).join());
+  check('chosen columns: GSTIN, Outstanding and Status join the report', rh === 'Invoice No,Date,Buyer Name,GSTIN,Taxable Value,GST Amount,Grand Total,Outstanding,Status', rh);
+  await page.evaluate(() => Store.set('sales_report_cols', [], true));
   await page.evaluate(() => App.go('pnl'));
   const pnl = (await page.textContent('.kv')).replace(/\s+/g, ' ');
   check('profit & loss', pnl.includes('Sales (1 invoices, before GST)₹ 27,319.83') && pnl.includes('Less: Credit notes (1)₹ 1,000.00') && pnl.includes('Purchases (2 bills, before GST)₹ 21,000.00') && pnl.includes('Rent₹ 10,000.00') && pnl.includes('NET LOSS₹ 4,680.17'), pnl.slice(0, 420));

@@ -272,6 +272,52 @@ final class Ledger {
         return out;
     }
 
+    /** What has been paid against each purchase bill number: the payment vouchers' allocations (an older payment
+     *  counts in full against the one bill it names). */
+    static Map<String, Double> paidByPurchase(SQLiteDatabase db) {
+        Map<String, Double> out = new HashMap<>();
+        for (JournalVoucher v : journal(db)) if (v.isPayment()) for (Object[] a : v.allocations()) add(out, ((String) a[0]).toLowerCase(Locale.ROOT), (Double) a[1]);
+        return out;
+    }
+
+    /** Every credit purchase bill with what is still owed on it: [bill no, date, supplier, payable, due, days], oldest
+     *  first. Due = the bill (less TDS) less the payments knocked off against it and the debit notes adjusted to it on
+     *  account; days = the age of the bill today. */
+    static List<Object[]> payables(SQLiteDatabase db) {
+        Map<String, Double> paid = paidByPurchase(db);
+        Cursor n = db.query("notes", new String[]{"ref_no", "total"}, "kind=? AND settlement='Credit'", new String[]{NOTE_DEBIT}, null, null, null);
+        while (n.moveToNext()) if (!n.isNull(0)) add(paid, n.getString(0).trim().toLowerCase(Locale.ROOT), n.getDouble(1));
+        n.close();
+        List<Object[]> out = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        for (Purchase p : purchases(db)) {
+            if (!KIND_PURCHASE.equalsIgnoreCase(p.kind) || !isCredit(p.paymentMode) || p.docNo.trim().isEmpty()) continue;
+            Double g = paid.get(p.docNo.trim().toLowerCase(Locale.ROOT));
+            double payable = Math.round(p.payable() * 100) / 100.0;
+            double due = Math.max(0, Math.round((payable - (g == null ? 0 : g)) * 100) / 100.0);
+            Date d = parseDate(p.date);
+            int days = d == null ? 0 : (int) Math.max(0, (now - d.getTime()) / 86400000L);
+            out.add(new Object[]{p.docNo.trim(), p.date, p.supplier.trim(), payable, due, days});
+        }
+        java.util.Collections.sort(out, (a, b) -> { Date da = parseDate((String) a[1]), dbb = parseDate((String) b[1]); long x = da == null ? 0 : da.getTime(), y = dbb == null ? 0 : dbb.getTime(); return x != y ? Long.compare(x, y) : ((String) a[0]).compareTo((String) b[0]); });
+        return out;
+    }
+
+    /** Purchase lines (not quotations or uploaded stock) that are not counted as stock: the count of such lines. */
+    static int purchaseLinesNotInStock(SQLiteDatabase db) {
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM purchase_items i JOIN purchases p ON p.id=i.purchase_id WHERE IFNULL(i.is_stock,0)=0 AND p.kind=?", new String[]{KIND_PURCHASE});
+        int n = c.moveToFirst() ? c.getInt(0) : 0;
+        c.close();
+        return n;
+    }
+
+    /** Marks every line of every purchase as stock, so what was bought counts in stock in hand. Returns lines changed. */
+    static int countAllPurchasesAsStock(SQLiteDatabase db) {
+        int n = purchaseLinesNotInStock(db);
+        db.execSQL("UPDATE purchase_items SET is_stock=1 WHERE purchase_id IN (SELECT id FROM purchases WHERE kind=?)", new Object[]{KIND_PURCHASE});
+        return n;
+    }
+
     static void saveJournal(SQLiteDatabase db, JournalVoucher v) {
         ContentValues cv = new ContentValues();
         cv.put("date", v.date); cv.put("narration", v.narration);

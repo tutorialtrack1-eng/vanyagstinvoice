@@ -43,6 +43,18 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
   typed); anything not knocked off stays on account of the customer. The receipt voucher lists the invoices and
   what is still due on each. Credit notes adjusted on account reduce the invoice they are against; the
   dashboard's credit outstanding and the Sales list show what is really due.
+- Purchases flow through the books: every item on a purchase counts in stock in hand (the Stock tick on each line is
+  on from the start; untick it for a service) and Stock in Hand has a one-tap "Count all purchases as stock" for bills
+  recorded earlier; the supplier on a bill joins the Supplier contacts (a known supplier gets a blank GSTIN filled);
+  the item list shows the quantity in hand; the contact lists show what each party owes or is owed.
+- Supplier Outstanding & Ageing (Purchases > Outstanding, Reports, the dashboard's "Payable to suppliers"): every
+  credit purchase bill with what is still owed on it after the payments knocked off against it and the debit notes
+  adjusted to it, grouped by supplier, with its age (0-30, 31-60, 61-90, over 90 days; over 30 is overdue). The
+  purchases list shows "due" or "settled" on each credit bill. + Payment records money paid to a supplier knocked
+  off against their open bills (oldest first, or as typed), the rest on account; Excel and PDF.
+- Sales Report - Invoice Wise shows the buyer's name only, and a Columns button adds GSTIN, state, phone, payment
+  mode, PO number, items, CGST / SGST / IGST, received, outstanding and status (Paid, Due or Overdue with the age)
+  to the table, Excel and PDF; the choice is kept.
 - HR & payroll (web portal, with the Full access plans: accounts + HR at Rs 599 a month, Rs 4999 a year or
   Rs 7999 for 2 years; the HR and Manager roles of a company open only these): employees on a monthly
   salary or a rate per hour, with PF / ESI / PT / TDS and bank details, HRA set from basic (40%, 50% in a metro)

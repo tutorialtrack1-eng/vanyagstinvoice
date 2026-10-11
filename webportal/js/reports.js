@@ -28,23 +28,56 @@
   }
 
   // ------------------------------------------------------------ sales report, invoice wise
+  // Further columns the report can carry (Columns button); the choice is kept in this browser. Text columns sit
+  // before the amounts, the status after them. Excel, PDF and CSV carry the same columns as the table.
+  const REPORT_TEXT_COLS = ['GSTIN', 'State', 'Phone', 'Payment Mode', 'PO No', 'Due Date', 'Items'];
+  const REPORT_NUM_COLS = ['CGST', 'SGST', 'IGST', 'Received', 'Outstanding', 'Status'];
+  const reportColumns = () => (Store.get('sales_report_cols', []) || []).filter(c => REPORT_TEXT_COLS.includes(c) || REPORT_NUM_COLS.includes(c));
+  function chooseReportColumns(onDone) {
+    const chosen = reportColumns(), all = REPORT_TEXT_COLS.concat(REPORT_NUM_COLS);
+    UI.modal({ title: 'Report Columns', body: '<div class="hint" style="margin-bottom:8px">Further columns for the invoice-wise sales report. Excel, PDF and CSV carry the same columns.</div><div class="grid2 keep2">' + all.map((c, i) => '<div>' + UI.check('rc' + i, c, chosen.includes(c)) + '</div>').join('') + '</div>',
+      buttons: [{ label: 'Cancel', cls: 'outline' }, { label: 'Apply', cls: 'green', onClick: (bg) => { Store.set('sales_report_cols', all.filter((c, i) => UI.val('rc' + i, bg)), true); onDone(); } }] });
+  }
   App.routes.salesReport = function (p) {
     const r = p.range || periodRange(0);
     const invs = Store.list('invoices').filter(i => i.kind === 'invoice' && Books.inRange(i.date, r.a, r.b)).sort((a, b) => U.dateMs(a.date) - U.dateMs(b.date) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }));
+    const chosen = reportColumns(), has = (c) => chosen.includes(c);
+    // What is still due on each credit invoice, when a column needs it
+    const due = has('Received') || has('Outstanding') || has('Status') ? new Map(Biz.outstanding().all.map(x => [x.no, x])) : new Map();
+    const now = Date.now();
     // Under reverse charge no GST is collected, so the register shows none
-    const rows = invs.map(i => ({ no: i.no, date: i.date, buyer: String(i.buyer.name || '').replace(/\n/g, ' '), taxable: num(i.totals.taxable), gst: i.rcm ? 0 : num(i.totals.cgst) + num(i.totals.sgst) + num(i.totals.igst), grand: num(i.totals.grand) }));
+    const rows = invs.map(i => {
+      const total = num(i.totals.rounded) || num(i.totals.grand), o = due.get(i.no), outstanding = o ? o.balance : 0;
+      const cgst = i.rcm ? 0 : num(i.totals.cgst), sgst = i.rcm ? 0 : num(i.totals.sgst), igst = i.rcm ? 0 : num(i.totals.igst);
+      const days = Math.max(0, Math.floor((now - U.dateMs(i.date)) / 86400000)), overdue = i.dueDate && U.dateMs(i.dueDate) ? U.dateMs(i.dueDate) < now : days > 30;
+      return { no: i.no, date: i.date, buyer: Books.partyName(i.buyer.name), gstin: i.buyer.gstin || '', state: U.stateName(i.buyer.state || '') || '', phone: i.buyer.phone || '', mode: (i.payment || '') + (i.rcm ? ' (RCM)' : ''), po: (i.other && i.other.orderNo) || '', dueDate: i.dueDate || '', items: i.items.map(x => String(x.desc || '').trim()).filter(Boolean).join(', '),
+        taxable: num(i.totals.taxable), cgst, sgst, igst, gst: cgst + sgst + igst, grand: num(i.totals.grand), received: U.round2(total - outstanding), outstanding, status: !o || outstanding <= 0.005 ? 'Paid' : (overdue ? 'Overdue ' : 'Due ') + days + ' days' };
+    });
+    // The columns in order: the fixed three, the chosen text columns, the amounts (with the chosen GST parts and dues), the status
+    const cols = [['Invoice No', 'no'], ['Date', 'date'], ['Buyer Name', 'buyer', 'title']];
+    const TEXT = { GSTIN: 'gstin', State: 'state', Phone: 'phone', 'Payment Mode': 'mode', 'PO No': 'po', 'Due Date': 'dueDate', Items: 'items' };
+    REPORT_TEXT_COLS.forEach(c => { if (has(c)) cols.push([c, TEXT[c]]); });
+    cols.push(['Taxable Value', 'taxable', 'num']);
+    ['CGST', 'SGST', 'IGST'].forEach(c => { if (has(c)) cols.push([c, c.toLowerCase(), 'num']); });
+    cols.push(['GST Amount', 'gst', 'num'], ['Grand Total', 'grand', 'num']);
+    if (has('Received')) cols.push(['Received', 'received', 'num']);
+    if (has('Outstanding')) cols.push(['Outstanding', 'outstanding', 'num']);
+    if (has('Status')) cols.push(['Status', 'status']);
     const sum = (k) => rows.reduce((s, x) => s + x[k], 0);
-    const headers = ['Invoice No', 'Date', 'Buyer Name', 'Taxable Value', 'GST Amount', 'Grand Total'];
-    const root = App.view(App.header('Sales Report - Invoice Wise', '<div class="btnrow" style="margin:0"><button class="btn sm outline" id="rPeriod">' + esc(r.label) + '</button><button class="btn sm green" id="rXls">Export Excel</button><button class="btn sm blue" id="rPdf">PDF</button><button class="btn sm outline" id="rCsv">CSV</button></div>') +
-      '<div class="card white"><div class="bd"><div class="kv">' + kv('Period', esc(r.from + ' to ' + r.to)) + kv('Invoices', rows.length) + kv('Taxable', money(sum('taxable'))) + kv('GST', money(sum('gst'))) + kv('Grand Total', money(sum('grand')), 'tot') + '</div></div></div>' +
-      '<div class="tablewrap">' + (rows.length ? '<table class="list cards"><thead><tr>' + headers.map((h, n) => '<th class="' + (n > 2 ? 'num' : '') + '">' + h + '</th>').join('') + '</tr></thead><tbody>' +
-        rows.map(x => '<tr><td data-l="Invoice"><b>' + esc(x.no) + '</b></td><td data-l="Date">' + esc(x.date) + '</td><td data-l="Buyer">' + esc(U.titleCase(x.buyer)) + '</td><td class="num" data-l="Taxable">' + money(x.taxable) + '</td><td class="num" data-l="GST">' + money(x.gst) + '</td><td class="num" data-l="Total">' + money(x.grand) + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">No invoices in this period.</div>') + '</div>');
+    const headers = cols.map(c => c[0]), right = cols.map((c, n) => c[2] === 'num' ? n : -1).filter(n => n >= 0);
+    const cell = (x, c) => c[2] === 'num' ? money(x[c[1]]) : esc(c[2] === 'title' ? U.titleCase(x[c[1]]) : x[c[1]]);
+    const root = App.view(App.header('Sales Report - Invoice Wise', '<div class="btnrow" style="margin:0"><button class="btn sm outline" id="rPeriod">' + esc(r.label) + '</button><button class="btn sm outline" id="rCols">Columns' + (chosen.length ? ' (' + chosen.length + ')' : '') + '</button><button class="btn sm green" id="rXls">Export Excel</button><button class="btn sm blue" id="rPdf">PDF</button><button class="btn sm outline" id="rCsv">CSV</button></div>') +
+      '<div class="card white"><div class="bd"><div class="kv">' + kv('Period', esc(r.from + ' to ' + r.to)) + kv('Invoices', rows.length) + kv('Taxable', money(sum('taxable'))) + kv('GST', money(sum('gst'))) + kv('Grand Total', money(sum('grand')), 'tot') + (has('Outstanding') ? kv('Outstanding', money(sum('outstanding'))) : '') + '</div></div></div>' +
+      '<div class="tablewrap">' + (rows.length ? '<table class="list cards"><thead><tr>' + cols.map((c, n) => '<th class="' + (c[2] === 'num' ? 'num' : '') + '">' + esc(c[0]) + '</th>').join('') + '</tr></thead><tbody>' +
+        rows.map(x => '<tr>' + cols.map((c, n) => '<td class="' + (c[2] === 'num' ? 'num' : '') + '" data-l="' + esc(c[0]) + '">' + (n === 0 ? '<b>' + cell(x, c) + '</b>' : cell(x, c)) + '</td>').join('') + '</tr>').join('') + '</tbody></table>' : '<div class="empty">No invoices in this period.</div>') + '</div>');
     App.wireBack(root);
     $('#rPeriod').onclick = () => pickPeriod('Sales Report', r, (rg) => App.go('salesReport', { range: rg }));
-    const flat = () => rows.map(x => [x.no, x.date, x.buyer, U.indianNumber(x.taxable), U.indianNumber(x.gst), U.indianNumber(x.grand)]);
+    $('#rCols').onclick = () => chooseReportColumns(() => App.go('salesReport', { range: r }));
+    const flat = () => rows.map(x => cols.map(c => c[2] === 'num' ? U.indianNumber(x[c[1]]) : x[c[1]]));
+    const totals = cols.map((c, n) => n === 0 ? 'Total' : c[2] === 'num' && c[1] !== 'status' ? U.indianNumber(sum(c[1])) : '');
     $('#rXls').onclick = () => UI.xls('Sales_Report', headers, flat());
-    $('#rPdf').onclick = () => UI.pdf('Sales Report - Invoice Wise', 'Period: ' + r.from + ' to ' + r.to + '   ·   ' + rows.length + ' invoices', headers, flat(), { right: [3, 4, 5], total: ['Total', '', '', U.indianNumber(sum('taxable')), U.indianNumber(sum('gst')), U.indianNumber(sum('grand'))] });
-    $('#rCsv').onclick = () => UI.download('BlitzBook_Sales_Report_' + U.stamp() + '.csv', UI.csv([headers].concat(rows.map(x => [x.no, x.date, x.buyer, x.taxable.toFixed(2), x.gst.toFixed(2), x.grand.toFixed(2)]))), 'text/csv');
+    $('#rPdf').onclick = () => UI.pdf('Sales Report - Invoice Wise', 'Period: ' + r.from + ' to ' + r.to + '   ·   ' + rows.length + ' invoices', headers, flat(), { right, total: totals });
+    $('#rCsv').onclick = () => UI.download('BlitzBook_Sales_Report_' + U.stamp() + '.csv', UI.csv([headers].concat(rows.map(x => cols.map(c => c[2] === 'num' ? x[c[1]].toFixed(2) : x[c[1]])))), 'text/csv');
   };
 
   // ------------------------------------------------------------ outstanding & ageing, customer wise
@@ -77,6 +110,37 @@
     $('#agPdf').onclick = () => UI.pdf('Outstanding & Ageing', 'As at ' + asAt + '   ·   ' + BUCKETS.map((b, i) => b + ': ' + money(sums[i])).join('   ·   '), headers, agRows(), { right: [3, 5, 6, 7], total: ['Total outstanding', '', '', '', '', '', '', U.indianNumber(total)] });
     $$('[data-rct]', root).forEach(b => b.onclick = () => { const r = open.find(x => x.id === b.dataset.rct); Money.edit('receipt', { party: r.party, ref: r.no, amount: r.balance }, () => App.go('aging', { asAt })); });
     $$('[data-open]', root).forEach(b => b.onclick = () => App.go('invoice', { id: b.dataset.open }));
+  };
+
+  // ------------------------------------------------------------ supplier outstanding & ageing
+  // Every credit purchase bill with something still owed on it (Books.payables), grouped by supplier, with its age
+  // and the age bucket totals; a payment can be recorded straight from a line. The mirror of the customer screen.
+  App.routes.payables = function (p) {
+    const asAt = p.asAt || U.today(), o = Books.payables(U.dateMs(asAt)), open = o.open.slice().sort((a, b) => a.party.localeCompare(b.party) || U.dateMs(a.date) - U.dateMs(b.date));
+    const sums = [0, 0, 0, 0]; open.forEach(r => sums[r.bucket] += r.balance);
+    const total = sums.reduce((s, v) => s + v, 0);
+    const groups = new Map(); open.forEach(r => { const k = r.party.toLowerCase(); if (!groups.has(k)) groups.set(k, { party: r.party, rows: [], total: 0 }); groups.get(k).rows.push(r); groups.get(k).total += r.balance; });
+    const onAccount = new Map(o.onAccount.map(x => [x.party.toLowerCase(), x.amount]));
+    const headers = ['Supplier', 'Bill', 'Date', 'Days', 'Age', 'Bill Amount', 'Paid', 'Balance Due'];
+    const body = [];
+    groups.forEach(g => {
+      body.push('<tr class="grp"><td colspan="7" data-l="Supplier"><b>' + esc(g.party) + '</b>' + (onAccount.has(g.party.toLowerCase()) ? '<span class="small muted">   ·   ' + money(onAccount.get(g.party.toLowerCase())) + ' paid on account, not mapped to a bill</span>' : '') + '</td><td class="num" data-l="Due"><b>' + money(g.total) + '</b></td><td></td></tr>');
+      g.rows.forEach(r => body.push('<tr><td></td><td data-l="Bill"><b>' + esc(r.no) + '</b></td><td data-l="Date">' + esc(r.date) + '</td><td class="num" data-l="Days">' + r.days + '</td><td data-l="Age"><span class="pill ' + (r.bucket === 0 ? 'ok' : r.bucket === 1 ? '' : r.bucket === 2 ? 'warn' : 'bad') + '">' + BUCKETS[r.bucket] + '</span></td><td class="num" data-l="Bill Amount">' + money(r.total) + '</td><td class="num" data-l="Paid">' + money(r.paid + r.noted) + (r.noted ? '<div class="small muted">incl. debit notes ' + money(r.noted) + '</div>' : '') + '</td><td class="num" data-l="Balance"><b>' + money(r.balance) + '</b></td>' +
+        '<td class="actions"><button class="btn sm green" data-pay="' + esc(r.id) + '">+ Payment</button></td></tr>'));
+    });
+    const root = App.view(App.header('Supplier Outstanding & Ageing', '<div class="btnrow" style="margin:0"><div class="inline"><label class="muted small" for="pyDate">as at</label>' + UI.input('pyDate', U.toIso(asAt), { type: 'date', attrs: ' style="width:170px;min-height:36px"' }) + '</div><button class="btn sm outline" id="pyMoney">Payments</button><button class="btn sm outline" id="pyBills">Purchases</button><button class="btn sm green" id="pyXls">Export Excel</button><button class="btn sm blue" id="pyPdf">PDF</button></div>') +
+      '<div class="buckets">' + BUCKETS.map((b, i) => '<div class="bucket b' + i + '"><div class="k">' + b + '</div><div class="v">' + money(sums[i]) + '</div><div class="s">' + open.filter(r => r.bucket === i).length + ' bill' + (open.filter(r => r.bucket === i).length === 1 ? '' : 's') + '</div></div>').join('') +
+      '<div class="bucket tot"><div class="k">Total payable</div><div class="v">' + money(total) + '</div><div class="s">' + open.length + ' open credit bill' + (open.length === 1 ? '' : 's') + ', ' + groups.size + ' supplier' + (groups.size === 1 ? '' : 's') + '</div></div></div>' +
+      '<div class="hint" style="margin-bottom:10px">A payment recorded against a bill number clears that bill; a payment without one stays on account of the supplier and is shown under the supplier. Age counts from the bill date to the date chosen; a bill over 30 days old is overdue.</div>' +
+      '<div class="tablewrap">' + (open.length ? '<table class="list cards aging"><thead><tr>' + headers.map((h, n) => '<th class="' + (n >= 3 && n !== 4 ? 'num' : '') + '">' + h + '</th>').join('') + '<th></th></tr></thead><tbody>' + body.join('') + '</tbody></table>' : '<div class="empty">Nothing is owed on credit purchase bills' + (o.all.length ? ' as at ' + esc(asAt) : '') + '.</div>') + '</div>');
+    App.wireBack(root);
+    $('#pyDate').onchange = e => { if (e.target.value) App.go('payables', { asAt: U.fromIso(e.target.value) }); };
+    $('#pyMoney').onclick = () => App.go('money', { kind: 'payment' });
+    $('#pyBills').onclick = () => App.go('purchases');
+    const pyRows = () => open.map(r => [r.party, r.no, r.date, r.days, BUCKETS[r.bucket], U.indianNumber(r.total), U.indianNumber(r.paid + r.noted), U.indianNumber(r.balance)]);
+    $('#pyXls').onclick = () => UI.xls('Supplier_Outstanding', headers, pyRows());
+    $('#pyPdf').onclick = () => UI.pdf('Supplier Outstanding & Ageing', 'As at ' + asAt + '   ·   ' + BUCKETS.map((b, i) => b + ': ' + money(sums[i])).join('   ·   '), headers, pyRows(), { right: [3, 5, 6, 7], total: ['Total payable', '', '', '', '', '', '', U.indianNumber(total)] });
+    $$('[data-pay]', root).forEach(b => b.onclick = () => { const r = open.find(x => x.id === b.dataset.pay); Money.edit('payment', { party: r.party, ref: r.no, amount: r.balance }, () => App.go('payables', { asAt })); });
   };
 
   // ------------------------------------------------------------ party ledger (supplier / customer reconciliation)

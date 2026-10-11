@@ -233,7 +233,7 @@ table.list .actions button { margin-left: 4px; }
 .hero .sheet u { position: absolute; right: 16px; bottom: 16px; width: 74px; height: 30px; border-radius: 10px; background: #fff; box-shadow: 0 8px 16px -6px rgba(15,23,42,.4); }
 .hero .coin { position: absolute; left: -14px; top: 0; width: 62px; height: 62px; border-radius: 50%; display: grid; place-items: center; font-size: 28px; font-weight: 800; color: #92400E; background: linear-gradient(135deg, #FDE68A, #F59E0B); border: 3px solid rgba(255,255,255,.75); box-shadow: 0 16px 28px -10px rgba(146,64,14,.7); animation: float 6s ease-in-out infinite; }
 @media (max-width: 1020px) { .hero .art { display: none; } }
-.stats { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 0 0 8px; }
+.stats { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 0 0 8px; }
 .stat { position: relative; overflow: hidden; display: flex; align-items: center; gap: 16px; min-width: 0; padding: 20px; border-radius: 22px; background: rgba(255,255,255,.94); border: 1px solid #fff; backdrop-filter: blur(14px); box-shadow: var(--shadow); transition: transform .2s, box-shadow .2s; }
 .stat:hover { transform: translateY(-3px); box-shadow: 0 22px 40px -20px var(--a); }
 .stat::after { content: ""; position: absolute; right: -36px; top: -46px; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(circle, var(--b), transparent 70%); opacity: .2; }

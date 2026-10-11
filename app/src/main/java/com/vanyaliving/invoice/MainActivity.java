@@ -262,6 +262,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             else if (last.equals("journal") && !Subscription.isLite(this, userId)) showJournalDialog();
             else if (last.equals("items") && !Subscription.isLite(this, userId)) showItemMasterDialog();
             else if (last.equals("stock") && !Subscription.isLite(this, userId)) showStockDialog();
+            else if (last.equals("payables") && !Subscription.isLite(this, userId)) showSupplierOutstanding();
             else if (last.startsWith("contacts:")) showContactListFiltered(last.substring(9));
             else if (last.startsWith("notes:")) showNotesDialog(last.substring(6));
         } catch (Exception e) { remember("dashboard"); }
@@ -1879,6 +1880,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         figures.setPadding(dp(4), dp(18), dp(4), dp(8));
         root.addView(figures);
         root.addView(statsRow());
+        if (!Subscription.isLite(this, userId) && !role().equals("sales")) root.addView(statsRow2());
     }
 
     private TextView chip(String text, int bg, int fg) {
@@ -1918,6 +1920,28 @@ public class MainActivity extends Activity implements Sync.Listener {
         r.addView(statCard("Invoices", String.valueOf(count), 0xFF43A047), weightLp(0.7f));
         if (Subscription.isLite(this, userId)) r.addView(statCard("Invoices left", Subscription.invoicesLeft(this, userId) + " of " + Subscription.invoiceQuota(this, userId), 0xFFF9A825), weightLp(1.25f));
         else r.addView(statCard("Credit outstanding", money(credit), 0xFFFB8C00), weightLp(1.25f));
+        return r;
+    }
+
+    // Purchases of the month and what is owed to suppliers on credit purchase bills, under the sales figures
+    private LinearLayout statsRow2() {
+        Calendar n = Calendar.getInstance();
+        n.set(Calendar.DAY_OF_MONTH, 1);
+        n.set(Calendar.HOUR_OF_DAY, 0); n.set(Calendar.MINUTE, 0); n.set(Calendar.SECOND, 0); n.set(Calendar.MILLISECOND, 0);
+        Date from = n.getTime();
+        double bought = 0, payable = 0; int bills = 0, open = 0;
+        try {
+            for (Ledger.Purchase p : Ledger.purchases(dbHelper.getReadableDatabase())) if (!p.isQuotation() && Ledger.inRange(p.date, from, null)) { bought += p.total; bills++; }
+            for (Object[] r : Ledger.payables(dbHelper.getReadableDatabase())) if ((Double) r[4] > 0.005) { payable += (Double) r[4]; open++; }
+        } catch (Exception ignored) {}
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setPadding(0, dp(8), 0, 0);
+        r.addView(statCard("Purchases this month", money(bought), 0xFFF9A825), weightLp(1.25f));
+        r.addView(statCard("Bills", String.valueOf(bills), 0xFF8E24AA), weightLp(0.7f));
+        LinearLayout pay = statCard(open > 0 ? "Payable to suppliers (" + open + " open, tap)" : "Payable to suppliers", money(payable), 0xFFE53935);
+        pay.setOnClickListener(v -> showSupplierOutstanding());
+        r.addView(pay, weightLp(1.25f));
         return r;
     }
 
@@ -2194,13 +2218,14 @@ public class MainActivity extends Activity implements Sync.Listener {
     private void showReportsMenu() {
         if (Subscription.isLite(this, userId)) { showSalesReport(); return; }
         // A sales member gets the sales side of the reports
-        String[] opts = role().equals("sales") ? new String[]{"Sales Report", "Party Ledger"} : new String[]{"Sales Report", "Party Ledger", "Profit & Loss", "Balance Sheet", "Stock in Hand", "Group Statements"};
+        String[] opts = role().equals("sales") ? new String[]{"Sales Report", "Party Ledger"} : new String[]{"Sales Report", "Party Ledger", "Supplier Outstanding", "Profit & Loss", "Balance Sheet", "Stock in Hand", "Group Statements"};
         new AlertDialog.Builder(this).setTitle("Reports").setItems(opts, (d, w) -> {
             if (w == 0) showSalesReport();
             else if (w == 1) showPartyLedger(null, null, null, null);
-            else if (w == 2) showProfitAndLoss();
-            else if (w == 3) showBalanceSheet();
-            else if (w == 4) showStockDialog();
+            else if (w == 2) showSupplierOutstanding();
+            else if (w == 3) showProfitAndLoss();
+            else if (w == 4) showBalanceSheet();
+            else if (w == 5) showStockDialog();
             else showGroupStatements();
         }).show();
     }
@@ -5206,6 +5231,9 @@ public class MainActivity extends Activity implements Sync.Listener {
                 db.query("contacts", null, "type=?", new String[]{"Supplier"}, null, null, "name ASC") :
                 db.query("contacts", null, "type=? OR type IS NULL OR type=''", new String[]{"Customer"}, null, null, "name ASC");
 
+        // What each party owes (invoices) or is owed (purchase bills) after receipts, payments and notes, by name
+        Map<String, Double> balances = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        try { balances.putAll(Ledger.balanceSheet(db, null).parties); } catch (Exception ignored) {}
         LinearLayout rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
         rootBox.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -5300,7 +5328,9 @@ public class MainActivity extends Activity implements Sync.Listener {
                 }
 
                 TextView tv = new TextView(this);
-                tv.setText(String.format(Locale.US, "%s (%s)\nPh: %s | GST: %s\nState: %s%s", name, type, phone, gstin, state, tds ? " | TDS " + formatQty(tdsRate) + "%" : ""));
+                Double bal = name == null ? null : balances.get(name.trim());
+                String owed = bal == null || Math.abs(bal) < 0.005 ? "" : "\n" + (bal > 0 ? "Owes you " : "You owe ") + money(Math.abs(bal));
+                tv.setText(String.format(Locale.US, "%s (%s)\nPh: %s | GST: %s\nState: %s%s%s", name, type, phone, gstin, state, tds ? " | TDS " + formatQty(tdsRate) + "%" : "", owed));
                 tv.setTextSize(13);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
 
@@ -5649,6 +5679,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         cc.close();
 
         Cursor c = db.query("items_master", null, "IFNULL(hidden,0)=0", null, null, null, "item_name ASC");
+        // Quantity in hand (purchases less sales) by item name, for a glance at stock on the master list
+        Map<String, Ledger.StockLine> inHand = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        try { for (Ledger.StockLine sl : Ledger.stock(db, null)) inHand.put(sl.name, sl); } catch (Exception ignored) {}
         LinearLayout rootBox = new LinearLayout(this);
         rootBox.setOrientation(LinearLayout.VERTICAL);
         rootBox.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -5665,7 +5698,13 @@ public class MainActivity extends Activity implements Sync.Listener {
         styleButton(selectBtn, itemSelectMode ? GREEN : NAVY);
         selectBtn.setTextSize(12);
         selectBtn.setOnClickListener(v -> { itemSelectMode = !itemSelectMode; selectedItemIds.clear(); showItemMasterDialog(); });
+        Button stockBtn = new Button(this);
+        stockBtn.setText("Stock in Hand");
+        styleButton(stockBtn, GREEN);
+        stockBtn.setTextSize(12);
+        stockBtn.setOnClickListener(v -> showStockDialog());
         topBtns.addView(addBtn, weightLp());
+        topBtns.addView(stockBtn, weightLp());
         topBtns.addView(selectBtn, weightLp());
         rootBox.addView(topBtns);
 
@@ -5715,7 +5754,9 @@ public class MainActivity extends Activity implements Sync.Listener {
                 TextView tv = new TextView(this);
                 int codeCol = c.getColumnIndex("item_code");
                 String code = codeCol >= 0 && c.getString(codeCol) != null ? c.getString(codeCol).trim() : "";
-                tv.setText(String.format(Locale.US, "%s%s\nHSN: %s | GST: %s%% | ₹ %.2f%s%s", code.isEmpty() ? "" : "[" + code + "]  ", name, hsn == null ? "" : hsn, gst, price, chargesGst() ? " incl." : "", cat.isEmpty() ? "" : " | " + cat));
+                Ledger.StockLine stockLine = inHand.get(name);
+                String stockText = stockLine == null ? "" : "\nIn hand: " + formatQty(stockLine.onHand()) + (stockLine.uqc.isEmpty() ? "" : " " + stockLine.uqc) + " (bought " + formatQty(stockLine.purchased) + ", sold " + formatQty(stockLine.sold) + ")";
+                tv.setText(String.format(Locale.US, "%s%s\nHSN: %s | GST: %s%% | ₹ %.2f%s%s%s", code.isEmpty() ? "" : "[" + code + "]  ", name, hsn == null ? "" : hsn, gst, price, chargesGst() ? " incl." : "", cat.isEmpty() ? "" : " | " + cat, stockText));
                 tv.setTextSize(13);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
                 if (itemSelectMode) {
@@ -6201,44 +6242,110 @@ public class MainActivity extends Activity implements Sync.Listener {
         loadingInvoice = false;
     }
 
+    // Optional columns of the invoice-wise sales report: text columns before the amounts, the status after them
+    private static final String[] REPORT_TEXT_COLS = {"GSTIN", "State", "Phone", "Payment Mode", "PO No", "Items"};
+    private static final String[] REPORT_NUM_COLS = {"CGST", "SGST", "IGST", "Received", "Outstanding", "Status"};
+
+    private Set<String> reportColumns() {
+        Set<String> out = new LinkedHashSet<>();
+        for (String c : prefs.getString("sales_report_cols", "").split(",")) if (!c.trim().isEmpty()) out.add(c.trim());
+        return out;
+    }
+
+    /** Which optional columns the sales report shows (GSTIN, state, outstanding and so on); the choice is kept. */
+    private void chooseReportColumns(String from, String to) {
+        List<String> all = new ArrayList<>(Arrays.asList(REPORT_TEXT_COLS)); all.addAll(Arrays.asList(REPORT_NUM_COLS));
+        Set<String> chosen = reportColumns();
+        boolean[] on = new boolean[all.size()];
+        for (int i = 0; i < on.length; i++) on[i] = chosen.contains(all.get(i));
+        new AlertDialog.Builder(this).setTitle("Report Columns")
+                .setMultiChoiceItems(all.toArray(new String[0]), on, (d, w, checked) -> on[w] = checked)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Apply", (d, w) -> {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < on.length; i++) if (on[i]) sb.append(sb.length() == 0 ? "" : ",").append(all.get(i));
+                    prefs.edit().putString("sales_report_cols", sb.toString()).apply();
+                    generateReport(from, to);
+                }).show();
+    }
+
+    private static String colStr(Cursor c, String col) { int i = c.getColumnIndex(col); return i >= 0 && !c.isNull(i) ? c.getString(i) : ""; }
+    private static double colDbl(Cursor c, String col) { int i = c.getColumnIndex(col); return i >= 0 && !c.isNull(i) ? c.getDouble(i) : 0; }
+
+    private AlertDialog salesReportDialog;
+
+    /** The invoice-wise sales report for a period: the buyer's name (not the address), the amounts and whichever
+     *  further columns were chosen (Columns button): GSTIN, state, phone, payment mode, PO number, items, the GST
+     *  parts, received, outstanding and status. Excel and PDF carry the same columns. */
     private void generateReport(String from, String to) {
         try {
             SimpleDateFormat sdf = new SimpleDateFormat("dd/MM/yyyy", Locale.US);
             Date fromDate = sdf.parse(from);
             Date toDate = sdf.parse(to);
             SQLiteDatabase db = dbHelper.getReadableDatabase();
+            Set<String> chosen = reportColumns();
+            List<String> headers = new ArrayList<>(Arrays.asList("Invoice No", "Date", "Buyer Name"));
+            for (String col : REPORT_TEXT_COLS) if (chosen.contains(col)) headers.add(col);
+            int firstNumberCol = headers.size();
+            headers.add("Taxable Value");
+            for (String col : new String[]{"CGST", "SGST", "IGST"}) if (chosen.contains(col)) headers.add(col);
+            headers.add("GST Amount"); headers.add("Grand Total");
+            if (chosen.contains("Received")) headers.add("Received");
+            if (chosen.contains("Outstanding")) headers.add("Outstanding");
+            if (chosen.contains("Status")) headers.add("Status");
+            // What is still due on each credit invoice, and the item names of each invoice, when those columns are on
+            Map<String, Double> dues = new HashMap<>();
+            if (chosen.contains("Received") || chosen.contains("Outstanding") || chosen.contains("Status")) for (Object[] r : Ledger.outstanding(db)) dues.put(((String) r[0]).toLowerCase(Locale.ROOT), (Double) r[4]);
+            Map<Long, String> itemNames = new HashMap<>();
+            if (chosen.contains("Items")) {
+                Cursor ic = db.rawQuery("SELECT invoice_id, particulars FROM invoice_items ORDER BY invoice_id, id", null);
+                while (ic.moveToNext()) { long id = ic.getLong(0); String nm = ic.isNull(1) ? "" : ic.getString(1).trim(); if (nm.isEmpty()) continue; String cur = itemNames.get(id); itemNames.put(id, cur == null ? nm : cur + ", " + nm); }
+                ic.close();
+            }
             Cursor c = db.query("invoices", null, null, null, null, null, "date ASC, invoice_no ASC");
-
-            ArrayList<ReportRow> reportRows = new ArrayList<>();
+            List<Object[]> rowsRaw = new ArrayList<>(); // a String or a Double per column
             double totalTaxable = 0, totalGst = 0, totalGrand = 0;
-
-            int dateIdx = c.getColumnIndex("date");
-            int taxIdx = c.getColumnIndex("taxable_value");
-            int cgstIdx = c.getColumnIndex("cgst");
-            int sgstIdx = c.getColumnIndex("sgst");
-            int igstIdx = c.getColumnIndex("igst");
-            int grandIdx = c.getColumnIndex("grand_total");
-            int noIdx = c.getColumnIndex("invoice_no");
-            int buyerIdx = c.getColumnIndex("buyer_name_addr");
-
+            long now = System.currentTimeMillis();
             while (c.moveToNext()) {
-                String dStr = dateIdx >= 0 ? c.getString(dateIdx) : "";
+                String dStr = colStr(c, "date");
                 try {
                     Date d = sdf.parse(dStr);
-                    if (d != null && !d.before(fromDate) && !d.after(toDate)) {
-                        double tax = taxIdx >= 0 ? c.getDouble(taxIdx) : 0;
-                        double gst = 0;
-                        if (cgstIdx >= 0) gst += c.getDouble(cgstIdx);
-                        if (sgstIdx >= 0) gst += c.getDouble(sgstIdx);
-                        if (igstIdx >= 0) gst += c.getDouble(igstIdx);
-                        double grand = grandIdx >= 0 ? c.getDouble(grandIdx) : 0;
-                        String no = noIdx >= 0 ? c.getString(noIdx) : "";
-                        String buyer = buyerIdx >= 0 ? c.getString(buyerIdx).replace("\n", " ") : "";
-                        reportRows.add(new ReportRow(no, dStr, buyer, tax, gst, grand));
-                        totalTaxable += tax;
-                        totalGst += gst;
-                        totalGrand += grand;
+                    if (d == null || d.before(fromDate) || d.after(toDate)) continue;
+                    double tax = colDbl(c, "taxable_value"), cgst = colDbl(c, "cgst"), sgst = colDbl(c, "sgst"), igst = colDbl(c, "igst");
+                    // Under reverse charge no GST is collected, so the register shows none
+                    boolean rcm = colDbl(c, "rcm") == 1;
+                    if (rcm) { cgst = 0; sgst = 0; igst = 0; }
+                    double gst = cgst + sgst + igst, grand = colDbl(c, "grand_total"), rounded = colDbl(c, "rounded_total");
+                    double total = rounded == 0 ? grand : rounded;
+                    String no = colStr(c, "invoice_no"), mode = colStr(c, "payment_mode");
+                    Double due = dues.get(no.trim().toLowerCase(Locale.ROOT));
+                    double outstanding = due == null ? 0 : due, received = total - outstanding;
+                    List<Object> row = new ArrayList<>();
+                    row.add(no); row.add(dStr); row.add(titleCase(Ledger.partyName(colStr(c, "buyer_name_addr"))));
+                    for (String col : REPORT_TEXT_COLS) {
+                        if (!chosen.contains(col)) continue;
+                        switch (col) {
+                            case "GSTIN": row.add(colStr(c, "buyer_gstin")); break;
+                            case "State": row.add(colStr(c, "buyer_state")); break;
+                            case "Phone": row.add(colStr(c, "buyer_phone")); break;
+                            case "Payment Mode": row.add(mode + (rcm ? " (RCM)" : "")); break;
+                            case "PO No": row.add(colStr(c, "order_no")); break;
+                            default: { String names = itemNames.get(c.getLong(c.getColumnIndexOrThrow("id"))); row.add(names == null ? "" : names); }
+                        }
                     }
+                    row.add(tax);
+                    if (chosen.contains("CGST")) row.add(cgst);
+                    if (chosen.contains("SGST")) row.add(sgst);
+                    if (chosen.contains("IGST")) row.add(igst);
+                    row.add(gst); row.add(grand);
+                    if (chosen.contains("Received")) row.add(received);
+                    if (chosen.contains("Outstanding")) row.add(outstanding);
+                    if (chosen.contains("Status")) {
+                        int days = (int) Math.max(0, (now - d.getTime()) / 86400000L);
+                        row.add(due == null || outstanding <= 0.005 ? "Paid" : (days > 30 ? "Overdue " : "Due ") + days + " days");
+                    }
+                    rowsRaw.add(row.toArray());
+                    totalTaxable += tax; totalGst += gst; totalGrand += grand;
                 } catch (Exception ignored) {}
             }
             c.close();
@@ -6246,42 +6353,49 @@ public class MainActivity extends Activity implements Sync.Listener {
             LinearLayout box = new LinearLayout(this);
             box.setOrientation(LinearLayout.VERTICAL);
             box.setPadding(dp(12), dp(8), dp(12), dp(4));
-
+            LinearLayout top = row(); top.setGravity(Gravity.CENTER_VERTICAL);
             TextView summary = new TextView(this);
             summary.setText("Period: " + from + " to " + to +
-                    "\nInvoices: " + reportRows.size() +
+                    "\nInvoices: " + rowsRaw.size() +
                     "\nTaxable: " + money(totalTaxable) +
                     "\nGST: " + money(totalGst) +
                     "\nGrand Total: " + money(totalGrand));
             summary.setTextSize(14);
             summary.setPadding(dp(4), dp(4), dp(4), dp(12));
-            box.addView(summary);
+            top.addView(summary, new LinearLayout.LayoutParams(0, -2, 1f));
+            // Further columns: GSTIN, state, phone, payment mode, PO number, items, the GST parts, received, outstanding, status
+            Button colsBtn = smallButton("Columns" + (chosen.isEmpty() ? "" : " (" + chosen.size() + ")"), NAVY, 11.5f);
+            colsBtn.setPadding(dp(10), 0, dp(10), 0);
+            colsBtn.setOnClickListener(v -> chooseReportColumns(from, to));
+            top.addView(colsBtn, new LinearLayout.LayoutParams(-2, dp(34)));
+            box.addView(top);
 
             ScrollView vScroll = new ScrollView(this);
             HorizontalScrollView hScroll = new HorizontalScrollView(this);
             TableLayout table = new TableLayout(this);
 
             TableRow head = new TableRow(this);
-            String[] headers = {"Invoice No", "Date", "Buyer Name", "Taxable Value", "GST Amount", "Grand Total"};
             for (String h : headers) head.addView(reportCell(h, true));
             table.addView(head);
 
             List<String[]> excelRows = new ArrayList<>();
-            for (ReportRow r : reportRows) {
+            for (Object[] r : rowsRaw) {
                 TableRow tr = new TableRow(this);
-                tr.addView(reportCell(r.invoiceNo, false));
-                tr.addView(reportCell(r.date, false));
-                tr.addView(reportCell(titleCase(r.buyer), false));
-                tr.addView(reportCell(money(r.taxable), false));
-                tr.addView(reportCell(money(r.gst), false));
-                tr.addView(reportCell(money(r.grand), false));
+                String[] out = new String[r.length];
+                for (int i = 0; i < r.length; i++) {
+                    boolean num = r[i] instanceof Double;
+                    tr.addView(reportCell(num ? money((Double) r[i]) : String.valueOf(r[i]), false));
+                    out[i] = num ? indianNumber((Double) r[i]) : String.valueOf(r[i]);
+                }
                 table.addView(tr);
-                excelRows.add(new String[]{r.invoiceNo, r.date, r.buyer, indianNumber(r.taxable), indianNumber(r.gst), indianNumber(r.grand)});
+                excelRows.add(out);
             }
             hScroll.addView(table);
             vScroll.addView(hScroll);
             box.addView(vScroll, new LinearLayout.LayoutParams(-1, dp(360)));
 
+            String[] hdr = headers.toArray(new String[0]);
+            if (salesReportDialog != null && salesReportDialog.isShowing()) salesReportDialog.dismiss();
             AlertDialog dialog = new AlertDialog.Builder(this)
                     .setTitle("Sales Report - Invoice Wise")
                     .setView(box)
@@ -6289,10 +6403,10 @@ public class MainActivity extends Activity implements Sync.Listener {
                     .setNeutralButton("PDF", null)
                     .setPositiveButton("Export Excel", null)
                     .create();
-
+            salesReportDialog = dialog;
             dialog.setOnShowListener(d -> {
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> exportRowsAsExcel("Sales_Report", headers, excelRows));
-                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> exportRowsAsPdf("Sales_Report", "Sales Report - Invoice Wise", "Period: " + from + " to " + to, headers, excelRows, 3));
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> exportRowsAsExcel("Sales_Report", hdr, excelRows));
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> exportRowsAsPdf("Sales_Report", "Sales Report - Invoice Wise", "Period: " + from + " to " + to, hdr, excelRows, firstNumberCol));
             });
             dialog.show();
         } catch (Exception e) {
@@ -6309,15 +6423,6 @@ public class MainActivity extends Activity implements Sync.Listener {
         t.setGravity(Gravity.CENTER_VERTICAL);
         t.setBackgroundColor(header ? 0xFFE7EBEF : Color.WHITE);
         return t;
-    }
-
-    private static class ReportRow {
-        String invoiceNo, date, buyer;
-        double taxable, gst, grand;
-        ReportRow(String invoiceNo, String date, String buyer, double taxable, double gst, double grand) {
-            this.invoiceNo = invoiceNo; this.date = date; this.buyer = buyer;
-            this.taxable = taxable; this.gst = gst; this.grand = grand;
-        }
     }
 
     /**
@@ -6730,6 +6835,16 @@ public class MainActivity extends Activity implements Sync.Listener {
         ledgerBtn.setOnClickListener(v -> showPartyLedger(null, "Supplier", null, null));
         topBtns.addView(addPurchase, weightLp()); topBtns.addView(addQuote, weightLp()); topBtns.addView(stockBtn, weightLp()); topBtns.addView(dnBtn, weightLp()); topBtns.addView(ledgerBtn, weightLp());
         rootBox.addView(topBtns);
+        LinearLayout topBtns2 = row();
+        Button outBtn = new Button(this); outBtn.setText("Outstanding"); styleButton(outBtn, SLATE); outBtn.setTextSize(12);
+        outBtn.setOnClickListener(v -> showSupplierOutstanding());
+        Button payBtn = new Button(this); payBtn.setText("+ Payment"); styleButton(payBtn, RED); payBtn.setTextSize(12);
+        payBtn.setOnClickListener(v -> showPaymentDialog("", "", 0));
+        topBtns2.addView(outBtn, weightLp()); topBtns2.addView(payBtn, weightLp());
+        rootBox.addView(topBtns2);
+        // What is still owed on each credit purchase bill (payments knocked off against it bring it down)
+        Map<String, Object[]> dues = new HashMap<>();
+        try { for (Object[] r : Ledger.payables(dbHelper.getReadableDatabase())) dues.put(((String) r[0]).toLowerCase(Locale.ROOT), r); } catch (Exception ignored) {}
 
         LinearLayout listContainer = new LinearLayout(this);
         listContainer.setOrientation(LinearLayout.VERTICAL);
@@ -6748,6 +6863,8 @@ public class MainActivity extends Activity implements Sync.Listener {
             sb.append(p.supplier.isEmpty() ? "(no supplier)" : p.supplier).append("  ·  ").append(money(p.total)).append("  ·  ").append(p.paymentMode);
             if (p.rcm) sb.append("  ·  RCM GST ").append(money(p.gst));
             if (p.tds > 0) sb.append("  ·  TDS ").append(money(p.tds)).append(" (payable ").append(money(p.payable())).append(")");
+            Object[] due = dues.get(p.docNo.trim().toLowerCase(Locale.ROOT));
+            if (due != null) sb.append("  ·  ").append((Double) due[4] > 0.005 ? "due " + money((Double) due[4]) + " (" + due[5] + " days" + ((Integer) due[5] > 30 ? ", overdue" : "") + ")" : "settled");
             // Stock items are shown on the card so they are visible at a glance
             if (p.hasStock()) {
                 sb.append("\nStock: ");
@@ -6768,7 +6885,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                             p.kind = Ledger.KIND_PURCHASE;
                             p.docNo = Ledger.nextDocNo(dbHelper.getReadableDatabase(), Ledger.KIND_PURCHASE);
                             Ledger.savePurchase(dbHelper.getWritableDatabase(), p);
-                            addStockItemsToMaster(p);
+                            addStockItemsToMaster(p); addSupplierToContacts(p);
                             showPurchasesDialog();
                         }).show());
                 LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, dp(32));
@@ -6799,6 +6916,181 @@ public class MainActivity extends Activity implements Sync.Listener {
     }
 
     private String formatQty(double q) { return q == Math.floor(q) ? String.valueOf((long) q) : String.format(Locale.US, "%.2f", q); }
+
+    private static int bucketOf(int days) { return days <= 30 ? 0 : days <= 60 ? 1 : days <= 90 ? 2 : 3; }
+    private static long dateMs(String d) { Date x = Ledger.parseDate(d); return x == null ? 0 : x.getTime(); }
+    private static final String[] AGE_BUCKETS = {"0 - 30 days", "31 - 60 days", "61 - 90 days", "Over 90 days"};
+
+    private AlertDialog supplierOutDialog;
+
+    /** Supplier outstanding and ageing: every credit purchase bill with something still owed on it, grouped by
+     *  supplier, with its age and the age-bucket totals; a payment can be recorded from a line. Excel and PDF. */
+    private void showSupplierOutstanding() {
+        remember("payables");
+        List<Object[]> open = new ArrayList<>();
+        for (Object[] r : Ledger.payables(dbHelper.getReadableDatabase())) if ((Double) r[4] > 0.005) open.add(r);
+        java.util.Collections.sort(open, (a, b) -> { int c = ((String) a[2]).compareToIgnoreCase((String) b[2]); return c != 0 ? c : Long.compare(dateMs((String) a[1]), dateMs((String) b[1])); });
+        double[] sums = new double[4]; int[] counts = new int[4]; double total = 0;
+        for (Object[] r : open) { int b = bucketOf((Integer) r[5]); sums[b] += (Double) r[4]; counts[b]++; total += (Double) r[4]; }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(8), dp(12), dp(4));
+        StringBuilder sum = new StringBuilder();
+        sum.append("Total payable: ").append(money(total)).append("  ·  ").append(open.size()).append(" open bill").append(open.size() == 1 ? "" : "s");
+        for (int i = 0; i < 4; i++) sum.append('\n').append(AGE_BUCKETS[i]).append(": ").append(money(sums[i])).append(" (").append(counts[i]).append(")");
+        TextView summary = new TextView(this); summary.setText(sum.toString()); summary.setTextSize(13); summary.setPadding(dp(4), dp(4), dp(4), dp(8));
+        box.addView(summary);
+        TextView hint = new TextView(this);
+        hint.setText("A payment knocked off against a bill clears that bill; one without a bill stays on account of the supplier. Age counts from the bill date to today; a bill over 30 days old is overdue.");
+        hint.setTextSize(11); hint.setTextColor(0xFF607D8B); hint.setPadding(dp(4), 0, dp(4), dp(6));
+        box.addView(hint);
+        List<String[]> rowsOut = new ArrayList<>();
+        LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
+        if (open.isEmpty()) {
+            TextView tv = new TextView(this); tv.setText("Nothing is owed on credit purchase bills."); tv.setTextSize(13); tv.setPadding(dp(8), dp(16), dp(8), dp(16));
+            list.addView(tv);
+        }
+        String lastParty = null;
+        for (Object[] r : open) {
+            String party = (String) r[2]; int days = (Integer) r[5]; double payable = (Double) r[3], due = (Double) r[4];
+            if (!party.equalsIgnoreCase(lastParty)) {
+                double pt = 0; for (Object[] x : open) if (((String) x[2]).equalsIgnoreCase(party)) pt += (Double) x[4];
+                TextView head = new TextView(this); head.setText((party.isEmpty() ? "(no supplier)" : party) + "  ·  " + money(pt)); head.setTextSize(13); head.setTypeface(Typeface.DEFAULT, Typeface.BOLD); head.setTextColor(NAVY); head.setPadding(dp(4), dp(10), dp(4), dp(2));
+                list.addView(head); lastParty = party;
+            }
+            LinearLayout line = row(); line.setPadding(0, dp(4), 0, dp(4)); line.setGravity(Gravity.CENTER_VERTICAL);
+            TextView tv = new TextView(this);
+            tv.setText(String.format(Locale.US, "%s  ·  %s  ·  %d days (%s)\nBill %s  ·  paid %s  ·  due %s", r[0], r[1], days, AGE_BUCKETS[bucketOf(days)], money(payable), money(payable - due), money(due)));
+            tv.setTextSize(12); if (days > 30) tv.setTextColor(RED);
+            line.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+            Button pay = smallButton("Pay", GREEN, 10.5f); pay.setPadding(dp(8), 0, dp(8), 0);
+            pay.setOnClickListener(v -> showPaymentDialog(party, (String) r[0], due));
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-2, dp(32)); plp.setMargins(dp(4), 0, 0, 0);
+            line.addView(pay, plp);
+            list.addView(line); list.addView(divider());
+            rowsOut.add(new String[]{party, (String) r[0], (String) r[1], String.valueOf(days), AGE_BUCKETS[bucketOf(days)], indianNumber(payable), indianNumber(payable - due), indianNumber(due)});
+        }
+        ScrollView sc = new ScrollView(this); sc.addView(list);
+        box.addView(sc, new LinearLayout.LayoutParams(-1, dp(320)));
+        String[] headers = {"Supplier", "Bill", "Date", "Days", "Age", "Bill Amount", "Paid", "Balance Due"};
+        if (supplierOutDialog != null && supplierOutDialog.isShowing()) supplierOutDialog.dismiss();
+        supplierOutDialog = new AlertDialog.Builder(this).setTitle("Supplier Outstanding").setView(box)
+                .setNegativeButton("Close", null).setNeutralButton("PDF", null).setPositiveButton("Export Excel", null).create();
+        final double fTotal = total; final AlertDialog dlg = supplierOutDialog;
+        dlg.setOnShowListener(d -> {
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> exportRowsAsExcel("Supplier_Outstanding", headers, rowsOut));
+            dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> { List<String[]> rr = new ArrayList<>(rowsOut); rr.add(new String[]{"Total outstanding", "", "", "", "", "", "", indianNumber(fTotal)}); exportRowsAsPdf("Supplier_Outstanding", "Supplier Outstanding & Ageing", "As at " + today() + "  ·  " + open.size() + " open bill" + (open.size() == 1 ? "" : "s"), headers, rr, 3); });
+        });
+        dlg.show();
+    }
+
+    /** A payment to a supplier, knocked off against their open credit purchase bills (oldest first, or as typed);
+     *  what is not knocked off stays on account of the supplier. Cash leaves the cash book, anything else the bank.
+     *  Saved as a payment voucher (the portal's Payments) and printed. */
+    private void showPaymentDialog(String party, String ref, double amount) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(14), dp(8), dp(14), dp(8));
+        EditText eNo = edit("Payment No", false); eNo.setText(nextVoucherNo("PMT"));
+        EditText eDate = dateEdit("");
+        AccountPicker eParty = new AccountPicker(party);
+        EditText eAmt = edit("0.00", true); eAmt.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        if (amount > 0) eAmt.setText(String.format(Locale.US, "%.2f", amount));
+        Spinner eMode = spinner(RECEIPT_MODES);
+        eMode.setSelection(1);
+        EditText eBank = edit("UTR, cheque no (optional)", false);
+        EditText eNarr = edit("optional", false);
+        LinearLayout r1 = row(); r1.addView(field("Payment No", eNo), weightLp()); r1.addView(field("Date *", eDate), weightLp()); box.addView(r1);
+        box.addView(field("Paid to *", eParty));
+        LinearLayout r2 = row(); r2.addView(field("Amount \u20b9 *", eAmt), weightLp()); r2.addView(field("Paid from", eMode), weightLp()); box.addView(r2);
+        LinearLayout allocBox = new LinearLayout(this); allocBox.setOrientation(LinearLayout.VERTICAL);
+        TextView allocHint = new TextView(this); allocHint.setTextSize(12); allocHint.setPadding(dp(2), dp(4), dp(2), dp(2));
+        final List<Object[]> allocRows = new ArrayList<>(); // [bill no, due, EditText]
+        Runnable hint = () -> {
+            double amt = parseNum(eAmt), sum = 0;
+            for (Object[] r : allocRows) sum += parseNum((EditText) r[2]);
+            double rest = Math.round((amt - sum) * 100) / 100.0;
+            if (allocRows.isEmpty()) { allocHint.setText("No credit purchase bill of this supplier is open; the payment is kept on account."); allocHint.setTextColor(0xFF607D8B); return; }
+            allocHint.setText("Knocked off " + money(sum) + " of " + money(amt) + (rest > 0.005 ? "; " + money(rest) + " on account of the supplier" : rest < -0.005 ? "; " + money(-rest) + " more than the amount paid" : "") + ".");
+            allocHint.setTextColor(rest < -0.005 ? RED : rest > 0.005 ? 0xFF607D8B : GREEN);
+        };
+        Runnable auto = () -> {
+            double left = parseNum(eAmt);
+            for (Object[] r : allocRows) { double a = Math.min((Double) r[1], Math.max(0, left)); ((EditText) r[2]).setText(a > 0.005 ? String.format(Locale.US, "%.2f", a) : ""); left = Math.round((left - a) * 100) / 100.0; }
+            hint.run();
+        };
+        Runnable draw = () -> {
+            allocBox.removeAllViews(); allocRows.clear();
+            String who = eParty.value().trim();
+            List<Object[]> open = new ArrayList<>();
+            if (!who.isEmpty()) for (Object[] r : Ledger.payables(dbHelper.getReadableDatabase())) if (((String) r[2]).equalsIgnoreCase(who) && (Double) r[4] > 0.005) open.add(r);
+            if (!open.isEmpty()) {
+                LinearLayout head = row(); head.setPadding(dp(4), dp(6), dp(4), dp(4)); head.setBackgroundColor(0xFFE7EBEF);
+                for (String h : new String[]{"Bill", "Due", "Knock off \u20b9"}) { TextView t = new TextView(this); t.setText(h); t.setTextSize(11.5f); t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f)); }
+                allocBox.addView(head);
+                for (Object[] r : open) {
+                    LinearLayout line = row(); line.setPadding(dp(4), dp(2), dp(4), dp(2)); line.setGravity(Gravity.CENTER_VERTICAL);
+                    TextView no = new TextView(this); no.setText(r[0] + "\n" + r[1] + " · " + r[5] + " d"); no.setTextSize(12); line.addView(no, new LinearLayout.LayoutParams(0, -2, 1f));
+                    TextView due = new TextView(this); due.setText(money((Double) r[4])); due.setTextSize(12); line.addView(due, new LinearLayout.LayoutParams(0, -2, 1f));
+                    EditText e = edit("0.00", true); e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL); e.setTextSize(13);
+                    e.addTextChangedListener(new SimpleTextWatcher() { @Override public void changed() { hint.run(); } });
+                    line.addView(e, new LinearLayout.LayoutParams(0, -2, 1f));
+                    allocBox.addView(line);
+                    allocRows.add(new Object[]{r[0], r[4], e});
+                }
+                LinearLayout btns = row();
+                Button bAuto = new Button(this); bAuto.setText("Auto: oldest first"); bAuto.setAllCaps(false); bAuto.setTextSize(12); styleButton(bAuto, NAVY); bAuto.setOnClickListener(x -> auto.run());
+                Button bNone = new Button(this); bNone.setText("Clear"); bNone.setAllCaps(false); bNone.setTextSize(12); styleButton(bNone, SLATE); bNone.setOnClickListener(x -> { for (Object[] r : allocRows) ((EditText) r[2]).setText(""); hint.run(); });
+                btns.addView(bAuto, weightLp()); btns.addView(bNone, weightLp()); allocBox.addView(btns);
+                // A payment opened for one bill (Pay under Outstanding) is set against it; otherwise oldest first
+                if (!ref.isEmpty()) { double left = parseNum(eAmt); for (Object[] r : allocRows) ((EditText) r[2]).setText(((String) r[0]).equalsIgnoreCase(ref) ? String.format(Locale.US, "%.2f", Math.min((Double) r[1], left)) : ""); }
+                else auto.run();
+            }
+            allocBox.addView(allocHint);
+            hint.run();
+        };
+        eParty.onChanged = draw;
+        box.addView(field("Knock off against purchase bills", allocBox));
+        box.addView(field("Bank / UPI / Cheque ref", eBank));
+        box.addView(field("Narration", eNarr));
+        box.addView(aiNote("Cash leaves the cash book, everything else the bank book. The amounts knocked off clear what is owed on those bills; the rest stays on account of the supplier. The voucher is saved as a PDF under Downloads/BlitzBook."));
+        draw.run();
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+        AlertDialog dlg = new AlertDialog.Builder(this).setTitle("New Payment").setView(sc).setPositiveButton("Save & Print", null).setNegativeButton("Cancel", null).create();
+        dlg.setOnShowListener(d -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String who = eParty.value().trim(); double amt = parseNum(eAmt);
+            if (eDate.getText().toString().trim().isEmpty()) { eDate.setError("Date is required"); return; }
+            if (who.isEmpty()) { Toast.makeText(this, "Choose who was paid", Toast.LENGTH_SHORT).show(); return; }
+            if (amt <= 0) { eAmt.setError("Enter the amount"); eAmt.requestFocus(); return; }
+            String md = (String) eMode.getSelectedItem();
+            SQLiteDatabase db = dbHelper.getWritableDatabase();
+            Ledger.addAccount(db, who, Ledger.N_SUPPLIER);
+            Ledger.JournalVoucher j = new Ledger.JournalVoucher();
+            j.kind = "Payment"; j.docNo = eNo.getText().toString().trim(); j.date = eDate.getText().toString().trim(); j.party = who;
+            j.mode = md; j.bankRef = eBank.getText().toString().trim(); j.narration = eNarr.getText().toString().trim();
+            List<Object[]> alloc = new ArrayList<>(); double sum = 0;
+            for (Object[] r : allocRows) {
+                double a = Math.round(parseNum((EditText) r[2]) * 100) / 100.0;
+                if (a <= 0) continue;
+                if (a > (Double) r[1] + 0.005) { Toast.makeText(this, "Bill " + r[0] + " has only " + money((Double) r[1]) + " due", Toast.LENGTH_LONG).show(); return; }
+                alloc.add(new Object[]{r[0], a}); sum += a;
+            }
+            if (sum > amt + 0.005) { Toast.makeText(this, "The knock-off (" + money(sum) + ") is more than the amount paid", Toast.LENGTH_LONG).show(); return; }
+            j.setAllocations(alloc);
+            j.lines.add(new Ledger.JournalLine(who, true, amt));
+            j.lines.add(new Ledger.JournalLine("Cash".equals(md) ? "Cash" : "Bank", false, amt));
+            if (!requireWrite("journal")) return;
+            Ledger.saveJournal(db, j);
+            Toast.makeText(this, "Payment " + j.docNo + " saved", Toast.LENGTH_SHORT).show();
+            dlg.dismiss();
+            if (supplierOutDialog != null && supplierOutDialog.isShowing()) showSupplierOutstanding();
+            if (purchasesDialog != null && purchasesDialog.isShowing()) showPurchasesDialog();
+            if (journalDialog != null && journalDialog.isShowing()) showJournalDialog();
+            renderVoucherPdf(j);
+        }));
+        dlg.show();
+    }
 
     // A GSTIN whose first two digits differ from ours belongs to another state; blank counts as local
     private boolean isInterStateGstin(String gstin) {
@@ -6913,6 +7205,27 @@ public class MainActivity extends Activity implements Sync.Listener {
             cv.put("hidden", 0);
             upsertMasterItem(db, i.name, cv);
         }
+    }
+
+    // The supplier on a purchase joins the contacts as a Supplier, so the supplier list, the ledger and TDS know them;
+    // a known supplier gets a blank GSTIN filled from the bill
+    private void addSupplierToContacts(Ledger.Purchase p) {
+        if (p.isQuotation() || p.supplier.trim().isEmpty()) return;
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        Cursor c = db.query("contacts", new String[]{"id", "gstin"}, "LOWER(name)=LOWER(?)", new String[]{p.supplier.trim()}, null, null, null);
+        if (c.moveToFirst()) {
+            if ((c.isNull(1) || c.getString(1).trim().isEmpty()) && !p.supplierGstin.isEmpty()) {
+                ContentValues cv = new ContentValues(); cv.put("gstin", p.supplierGstin);
+                db.update("contacts", cv, "id=?", new String[]{String.valueOf(c.getLong(0))});
+            }
+            c.close();
+            return;
+        }
+        c.close();
+        ContentValues cv = new ContentValues();
+        cv.put("name", p.supplier.trim()); cv.put("type", "Supplier"); cv.put("gstin", p.supplierGstin);
+        cv.put("phone", ""); cv.put("email", ""); cv.put("address", ""); cv.put("state", "");
+        db.insert("contacts", null, cv);
     }
 
     private List<String> supplierNames() {
@@ -7059,7 +7372,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             p.items.clear(); p.items.addAll(items);
             if (!requireWrite("purchases")) return;
             Ledger.savePurchase(dbHelper.getWritableDatabase(), p);
-            addStockItemsToMaster(p);
+            addStockItemsToMaster(p); addSupplierToContacts(p);
             Toast.makeText(this, (quotation ? "Quotation " : "Purchase ") + p.docNo + " saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
             showPurchasesDialog();
@@ -7092,6 +7405,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             rate = compactEdit(); rate.setHint("Rate"); rate.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
             gst = new ChoiceView("GST Rate %", GST_RATES); gst.select("18"); gst.onChange = onChange;
             stock = new CheckBox(MainActivity.this); stock.setText("Stock"); stock.setTextSize(12);
+            stock.setChecked(true); // what is bought counts in stock unless unticked (a service, say); a saved line keeps its tick
             line2.addView(hsn, new LinearLayout.LayoutParams(0, dp(40), 0.9f));
             line2.addView(qty, new LinearLayout.LayoutParams(0, dp(40), 0.8f));
             line2.addView(rate, new LinearLayout.LayoutParams(0, dp(40), 1f));
@@ -7144,9 +7458,29 @@ public class MainActivity extends Activity implements Sync.Listener {
         templateBtn.setOnClickListener(v -> downloadStockTemplate());
         topBtns.addView(uploadBtn, weightLp()); topBtns.addView(templateBtn, weightLp());
         box.addView(topBtns);
+        // Purchase lines that were not ticked as stock: one tap counts everything bought as stock
+        int untagged = Ledger.purchaseLinesNotInStock(dbHelper.getReadableDatabase());
+        if (untagged > 0) {
+            Button allBtn = new Button(this);
+            allBtn.setText("Count all purchases as stock (" + untagged + " purchase line" + (untagged == 1 ? "" : "s") + " not in stock)");
+            styleButton(allBtn, BLUE); allBtn.setTextSize(12); allBtn.setAllCaps(false);
+            allBtn.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Count Purchases as Stock")
+                    .setMessage("Tick \"Stock\" on every line of every purchase, so what was bought counts in stock in hand (quantities sold on invoices are deducted)? Untick a line on its purchase later if it is not stock, a service for instance.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Count as stock", (d, w) -> {
+                        if (!requireWrite("purchases")) return;
+                        int n = Ledger.countAllPurchasesAsStock(dbHelper.getWritableDatabase());
+                        for (Ledger.Purchase p : Ledger.purchases(dbHelper.getReadableDatabase())) addStockItemsToMaster(p);
+                        itemSuggestionCache = null;
+                        Toast.makeText(this, n + " purchase line" + (n == 1 ? "" : "s") + " now count in stock", Toast.LENGTH_SHORT).show();
+                        showStockDialog();
+                    }).show());
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, -2); alp.setMargins(0, dp(6), 0, 0);
+            box.addView(allBtn, alp);
+        }
         if (lines.isEmpty()) {
             TextView emptyTv = new TextView(this);
-            emptyTv.setText("No stock items yet.\n\nWhen you record a purchase, tick \"Stock\" on the items you keep in stock. Quantities sold on invoices are deducted automatically.");
+            emptyTv.setText("No stock items yet.\n\nEvery item on a purchase counts as stock (the \"Stock\" tick on the line; untick it for a service). Quantities sold on invoices are deducted automatically.");
             emptyTv.setTextSize(13); emptyTv.setPadding(dp(8), dp(12), dp(8), dp(12));
             box.addView(emptyTv);
         } else {

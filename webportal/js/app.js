@@ -725,8 +725,10 @@
     const salesMonth = month.reduce((s, i) => s + total(i), 0);
     // What customers still owe on credit invoices, after the receipts mapped to them
     const open = Biz.outstanding().open, credit = open.reduce((s, r) => s + r.balance, 0);
+    // What is still owed to suppliers on credit purchase bills, after the payments against them
+    const bills = Books.payables().open, payable = bills.reduce((s, r) => s + r.balance, 0), overdueBills = bills.filter(r => r.days > 30).length;
     const recent = []; invs.forEach(i => i.items.forEach(it => { const d = String(it.desc || '').trim(); if (d && recent.length < 8 && !recent.some(r => r.toLowerCase() === d.toLowerCase())) recent.push(d); }));
-    const stat = (id, ic, a, b, k, v, s, go) => '<div class="stat' + (go ? ' tap' : '') + '" style="--a:' + a + ';--b:' + b + '"' + (go ? ' data-go="' + go + '" role="button" tabindex="0" title="Outstanding & Ageing"' : '') + '><div class="ic-badge">' + icon(ic) + '</div><div class="meta"><div class="k">' + k + '</div><div class="v" id="' + id + '">' + v + '</div><div class="s">' + esc(s) + '</div></div></div>';
+    const stat = (id, ic, a, b, k, v, s, go) => '<div class="stat' + (go ? ' tap' : '') + '" style="--a:' + a + ';--b:' + b + '"' + (go ? ' data-go="' + go + '" role="button" tabindex="0" title="Tap for ageing"' : '') + '><div class="ic-badge">' + icon(ic) + '</div><div class="meta"><div class="k">' + k + '</div><div class="v" id="' + id + '">' + v + '</div><div class="s">' + esc(s) + '</div></div></div>';
     const root = App.view(
       '<section class="hero"><span class="orb o1"></span><span class="orb o2"></span>' +
       '<div class="art" aria-hidden="true"><div class="sheet s1"><i></i><i></i><i></i><i></i><u></u></div><div class="sheet s2"><i></i><i></i><i></i><i></i><u></u></div><div class="coin">₹</div></div>' +
@@ -743,14 +745,15 @@
       (Companies.role() === 'hr' || Companies.role() === 'manager' ? '' : '<div class="section-title">At a glance</div><div class="stats">' + stat('stSales', 'rupee', '#4F46E5', '#818CF8', 'Sales this month', U.money(salesMonth), now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })) +
       stat('stCount', 'receipt', '#059669', '#34D399', 'Invoices', month.length, 'Raised this month') +
       (Sub.isLite() ? stat('stPack', 'star', '#B45309', '#F59E0B', 'Invoices left', Sub.invoicesLeft() + ' of ' + Sub.invoiceQuota(), (Sub.packUntil() ? 'Use by ' + U.pad(new Date(Sub.packUntil()).getDate()) + '/' + U.pad(new Date(Sub.packUntil()).getMonth() + 1) + '/' + new Date(Sub.packUntil()).getFullYear() : 'In your invoice pack') + ' · credit and debit notes count · tap to buy more', 'subscription')
-        : stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging')) + '</div>'));
-    countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money);
+        : stat('stCredit', 'wallet', '#EA580C', '#FBBF24', 'Credit outstanding', U.money(credit), open.length ? 'Due on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') + ' · tap for ageing' : 'Nothing due on credit invoices', 'aging')) +
+      (Sub.isLite() || Companies.role() === 'sales' ? '' : stat('stPayable', 'cart', '#BE123C', '#F43F5E', 'Payable to suppliers', U.money(payable), bills.length ? 'Owed on ' + bills.length + ' bill' + (bills.length === 1 ? '' : 's') + (overdueBills ? ', ' + overdueBills + ' overdue' : '') + ' · tap for ageing' : 'Nothing owed on credit purchases', 'payables')) + '</div>'));
+    countUp($('#stSales'), salesMonth, U.money); countUp($('#stCount'), month.length, v => String(Math.round(v))); countUp($('#stCredit'), credit, U.money); if ($('#stPayable')) countUp($('#stPayable'), payable, U.money);
     if ($('#coSwitch')) $('#coSwitch').onclick = () => Companies.switcher();
     $$('[data-go]', root).forEach(el => el.onclick = () => {
       const k = el.dataset.go;
       if (k === 'reports') {
         // Only the reports the role may open (a sales member gets the sales side)
-        const all = [['Sales Report', 'salesReport'], ['Outstanding & Ageing', 'aging'], ['Party Ledger', 'ledger'], ['Profit & Loss', 'pnl'], ['Balance Sheet', 'balance'], ['Stock in Hand', 'stock'], ['Group Statements', 'group']].filter(r => Companies.mayOpen(r[1]));
+        const all = [['Sales Report', 'salesReport'], ['Outstanding & Ageing', 'aging'], ['Supplier Outstanding', 'payables'], ['Party Ledger', 'ledger'], ['Profit & Loss', 'pnl'], ['Balance Sheet', 'balance'], ['Stock in Hand', 'stock'], ['Group Statements', 'group']].filter(r => Companies.mayOpen(r[1]));
         if (Sub.isLite()) App.go('salesReport'); else UI.menu('Reports', all.map(r => r[0]), (i) => App.go(all[i][1]));
       }
       else if (k === 'cnotes') App.go('notes', { kind: 'CN' });

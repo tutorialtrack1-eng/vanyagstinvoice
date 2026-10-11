@@ -1,6 +1,6 @@
 {
-  "versionCode": 16,
-  "versionName": "1.15",
-  "apk": "https://blitzbook.co.in/BlitzBook-1.15.apk",
-  "notes": "Duplicate an invoice (same buyer and items under the next number). Members can be added before they have a BlitzBook account: they are invited by email with their role. The PDF footer links to blitzbook.co.in. Portal: employees upload from CSV / Excel, the Books group is now Records."
+  "versionCode": 17,
+  "versionName": "1.16",
+  "apk": "https://blitzbook.co.in/BlitzBook-1.16.apk",
+  "notes": "Purchases now flow through the books: every item bought counts in stock (untick Stock on a line for a service; Stock in Hand has a one-tap Count all purchases as stock for older bills), the supplier on a bill joins the Supplier contacts, and each credit bill shows what is still owed. New: Supplier Outstanding & Ageing (Purchases > Outstanding, Reports), + Payment to a supplier knocked off against bills, purchases and payables on the dashboard, stock in hand on the item list. Sales Report shows the buyer's name only and has a Columns button (GSTIN, state, phone, payment mode, PO no, items, CGST/SGST/IGST, received, outstanding, status) that Excel and PDF follow."
 }
