@@ -176,7 +176,7 @@
     const tot = [];
     if (inv.kind !== 'challan') {
       if (!noGst) {
-        tot.push(['', indianNumber(t.taxable)]);
+        tot.push(['Taxable Value', indianNumber(t.taxable)]);
         if (intra) { tot.push(['CGST', indianNumber(t.cgst)]); tot.push(['SGST', indianNumber(t.sgst)]); } else tot.push(['IGST', indianNumber(t.igst)]);
       }
       if (Math.abs(t.rounded - t.grand) >= 0.005) tot.push(['Round Off', indianNumber(t.rounded - t.grand)]);

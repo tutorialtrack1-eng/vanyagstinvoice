@@ -36,7 +36,22 @@
 
         <activity android:name=".RegisterActivity" android:screenOrientation="portrait" />
 
-        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true" />
+        <!-- Every entry has a link, https://blitzbook.co.in/open/#<number> (or blitzbook://open/<number>), that opens
+             it here; singleTop so a tapped link lands in the running app (onNewIntent) instead of a second copy -->
+        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true" android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="blitzbook.co.in" android:pathPrefix="/open" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="blitzbook" android:host="open" />
+            </intent-filter>
+        </activity>
 
     </application>
 </manifest>

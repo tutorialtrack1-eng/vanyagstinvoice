@@ -870,6 +870,27 @@
     }
   };
   App.routes.notes = (p) => Notes.open(p);
+  // #open?no=<number>: the link every entry carries (https://blitzbook.co.in/open/#<number>) lands here when the
+  // app is not at hand. An invoice or challan opens itself; anything else opens the list it is on.
+  App.routes.open = function (p) {
+    const no = String((p && p.no) || '').trim(), key = no.toLowerCase();
+    const same = (x) => String(x || '').trim().toLowerCase() === key;
+    if (!no) { App.go('dashboard'); return; }
+    const inv = Store.list('invoices').find(i => same(i.no));
+    if (inv) { App.go('invoice', { id: inv.id }); return; }
+    const dc = Store.list('challans').find(d => same(d.no));
+    if (dc) { App.go('invoice', { challan: dc.id }); return; }
+    const pur = Store.list('purchases').find(x => same(x.no));
+    if (pur) { App.go(pur.kind === 'STK' ? 'stock' : 'purchases'); return; }
+    const note = Store.list('notes').find(n => same(n.no));
+    if (note) { App.go('notes', { kind: note.kind }); return; }
+    const j = Store.list('journal').find(x => same(x.no));
+    if (j) { App.go(j.vtype === 'receipt' || j.vtype === 'payment' ? 'money' : 'journal', j.vtype ? { kind: j.vtype } : undefined); return; }
+    const x = Store.list('expenses').find(e => same(e.no));
+    if (x) { App.go('expenses'); return; }
+    UI.toast('No entry numbered ' + no + ' in these books', 5000);
+    App.go('dashboard');
+  };
 
   global.Invoice = Invoice; global.Notes = Notes; global.Quick = Quick;
   global.Biz = { chargesGst, isComposition, sellerStateCode, sellerStateName, isInter, activity, isTransporter, contactsOf, computeTotals, noteTotals, invoices, noteCap, creditNotesFor, outstanding, invoiceBalance,

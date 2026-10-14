@@ -3,7 +3,6 @@ package com.vanyaliving.invoice;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.InputFilter;
 import android.text.InputType;
@@ -13,7 +12,6 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -39,98 +37,72 @@ public class RegisterActivity extends Activity {
     }
 
     private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(32), dp(48), dp(32), dp(32));
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        AuthUi.colourBars(this);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER_HORIZONTAL);
+        page.setPadding(dp(22), dp(44), dp(22), dp(28));
 
-        TextView title = new TextView(this);
-        title.setText("Create Account");
-        title.setTextSize(24);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        title.setPadding(0, 0, 0, dp(8));
-        root.addView(title);
+        LinearLayout brand = AuthUi.brand(this, "Create your account - 30 days free");
+        page.addView(brand);
 
-        TextView trial = new TextView(this);
-        trial.setText("Register and use BlitzBook free for 30 days");
-        trial.setTextSize(13);
-        trial.setTextColor(0xFF607D8B);
-        trial.setPadding(0, 0, 0, dp(20));
-        root.addView(trial);
+        LinearLayout card = AuthUi.card(this);
+        card.addView(AuthUi.heading(this, "Create Account"));
+        card.addView(AuthUi.sub(this, "Your books, invoices and reports in one place"));
 
-        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        inputParams.setMargins(0, 0, 0, dp(16));
+        nameInput = AuthUi.input(this, "Full name", R.drawable.ic_person, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        card.addView(nameInput);
 
-        nameInput = new EditText(this);
-        nameInput.setHint("Full Name");
-        applyBoxBackground(nameInput);
-        root.addView(nameInput, inputParams);
-
-        phoneInput = new EditText(this);
-        phoneInput.setHint("Mobile Number (10 digits)");
-        phoneInput.setInputType(InputType.TYPE_CLASS_PHONE);
+        phoneInput = AuthUi.input(this, "Mobile number (10 digits)", R.drawable.ic_customer, InputType.TYPE_CLASS_PHONE);
         phoneInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(10)});
-        applyBoxBackground(phoneInput);
-        root.addView(phoneInput, inputParams);
+        card.addView(phoneInput, AuthUi.gap(this, 12));
 
-        emailInput = new EditText(this);
-        emailInput.setHint("Email Address (optional)");
-        emailInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        applyBoxBackground(emailInput);
-        root.addView(emailInput, inputParams);
+        emailInput = AuthUi.input(this, "Email address (optional)", R.drawable.ic_business, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        card.addView(emailInput, AuthUi.gap(this, 12));
 
-        passwordInput = new EditText(this);
-        passwordInput.setHint("Password");
-        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        applyBoxBackground(passwordInput);
-        root.addView(passwordInput, inputParams);
+        passwordInput = AuthUi.input(this, "Password", R.drawable.ic_lock, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        card.addView(AuthUi.passwordRow(this, passwordInput), AuthUi.gap(this, 12));
+        TextView pwHint = new TextView(this);
+        pwHint.setText("6+ characters with a letter, a number and a special character");
+        pwHint.setTextSize(11.5f); pwHint.setTextColor(AuthUi.MUTED); pwHint.setPadding(dp(6), dp(4), dp(6), 0);
+        card.addView(pwHint);
 
-        sendOtpBtn = new Button(this);
-        sendOtpBtn.setText("Send OTP");
+        sendOtpBtn = AuthUi.primary(this, "Send OTP");
         sendOtpBtn.setOnClickListener(v -> handleSendOtp());
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        btnParams.setMargins(0, dp(8), 0, dp(16));
-        root.addView(sendOtpBtn, btnParams);
+        card.addView(sendOtpBtn, AuthUi.gap(this, 18));
 
-        otpInput = new EditText(this);
-        otpInput.setHint("Enter 6-digit OTP");
-        otpInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        otpInput = AuthUi.input(this, "Enter the 6-digit OTP", R.drawable.ic_key, InputType.TYPE_CLASS_NUMBER);
         otpInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(6)});
         otpInput.setVisibility(View.GONE);
-        applyBoxBackground(otpInput);
-        root.addView(otpInput, inputParams);
+        card.addView(otpInput, AuthUi.gap(this, 14));
 
-        registerBtn = new Button(this);
-        registerBtn.setText("Verify & Register");
+        registerBtn = AuthUi.primary(this, "Verify & Register");
         registerBtn.setVisibility(View.GONE);
         registerBtn.setOnClickListener(v -> handleRegister());
-        root.addView(registerBtn, btnParams);
+        card.addView(registerBtn, AuthUi.gap(this, 12));
 
-        resendLink = new TextView(this);
-        resendLink.setText("Resend OTP");
-        resendLink.setTextColor(0xFF0000FF);
+        resendLink = AuthUi.link(this, "Resend OTP", Gravity.CENTER);
         resendLink.setVisibility(View.GONE);
         resendLink.setOnClickListener(v -> handleSendOtp());
-        root.addView(resendLink);
+        card.addView(resendLink);
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(root);
-        setContentView(scroll);
-    }
+        TextView terms = new TextView(this);
+        terms.setText("By registering you will be asked to accept the Terms & Conditions: the books you keep are yours; nothing in them belongs to blitzbook.co.in.");
+        terms.setTextSize(11.5f); terms.setTextColor(AuthUi.MUTED); terms.setGravity(Gravity.CENTER);
+        terms.setPadding(dp(4), dp(14), dp(4), 0);
+        card.addView(terms);
 
-    private void applyBoxBackground(EditText editText) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setStroke(dp(1), 0xFFCCCCCC);
-        drawable.setCornerRadius(dp(4));
-        editText.setBackground(drawable);
-        editText.setPadding(dp(12), dp(12), dp(12), dp(12));
+        TextView back = AuthUi.link(this, "Already registered? Login", Gravity.CENTER);
+        back.setOnClickListener(v -> finish());
+        card.addView(back, AuthUi.gap(this, 4));
+
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+        cardLp.setMargins(0, dp(24), 0, dp(22));
+        page.addView(card, cardLp);
+        page.addView(AuthUi.featureChips(this, "GST Invoices", "Accounts & Stock", "Payroll"));
+
+        setContentView(AuthUi.background(this, page));
+        AuthUi.enter(brand, card);
     }
 
     public static boolean isValidPassword(String password) {
@@ -279,8 +251,11 @@ public class RegisterActivity extends Activity {
             long newId = dbHelper.findUserId(phone);
             if (token != null && !token.isEmpty()) Sync.saveToken(this, newId, token);
             Subscription.markWelcome(this, newId);
-            Toast.makeText(this, "Registered. BlitzBook is activated for 30 days.", Toast.LENGTH_LONG).show();
-            finish();
+            // The terms are accepted before anything else; declining leaves the account made but not accepted,
+            // so the terms come up again at the first login
+            Terms.show(this, newId,
+                    () -> { Toast.makeText(this, "Registered. BlitzBook is activated for 30 days. Please log in.", Toast.LENGTH_LONG).show(); finish(); },
+                    () -> { Toast.makeText(this, "The terms have to be accepted to use BlitzBook. You can accept them when you log in.", Toast.LENGTH_LONG).show(); finish(); });
         } else {
             Toast.makeText(this, "Mobile number or email already registered", Toast.LENGTH_SHORT).show();
         }

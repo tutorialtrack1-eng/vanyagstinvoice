@@ -19,7 +19,27 @@ A native Android invoice generator for **VANYA LIVING FURNITURE**.
 - Saves PDFs under `Downloads/Vanya GST Invoices/`
 - Opens the Android share sheet after PDF creation
 - Bank details pre-filled
-- The Back button walks from the invoice screen (or an open side menu) to the dashboard; the app reopens where
+- Login and registration screens: gradient backdrop, the app mark, a white card with icon-led fields, a show / hide
+  password eye and a gradient Login button. After registering, the Terms & Conditions are read and accepted before
+  anything else (also asked once of an account that has not accepted them): the books are the user's own, nothing in
+  them belongs to blitzbook.co.in, which only supplies the software (`Terms.java`).
+- Every entry has a number and a link. Invoices, challans (DC-), purchases (PUR- / QTN- / STK-), credit and debit
+  notes (CN- / DN-), receipts (RCT-), payments (PMT-), plain journal entries (JV-), expenses (EXP-) and contacts
+  (C-<id>); the number is a link in every list: tap opens the entry, hold copies
+  `https://blitzbook.co.in/open/#<number>`, which opens the entry in the app (also `blitzbook://open/<number>`) or,
+  in a browser, through `webportal/open/` and the portal's `#open?no=` route. "Open #" on the dashboard takes a typed
+  number. The invoice screen's link button copies the open document's link.
+- Save Draft floats at the bottom right of the invoice / challan screen and stays put while the page scrolls: it keeps
+  whatever is on the form under its number without touching the books, "Draft saved successfully" fades away by
+  itself, and Drafts (top of the screen) lists them to continue or delete; saving the real document drops its draft.
+  The purchase and journal editors have a Save Draft button too (one draft each, loaded the next time the editor
+  opens, with Discard draft).
+- Journal entries list each entry as Account | Debit | Credit with the totals; Stock in Hand shows In (bought) and
+  Out (sold) with a Columns button (HSN, Unit, Rate, Value); the Customer and Supplier lists have a Columns button to
+  add one's own columns (Contact person, Area, Credit days ...), each a field on the contact, kept in the contact's
+  `extra` JSON column.
+- The invoice screen has Back (to the screen it was opened from, the Sales list say) beside Dashboard; the phone's
+  Back button does the same. The Back button walks from the invoice screen (or an open side menu) to the dashboard; the app reopens where
   it was left (dashboard, an invoice, or the list that was open)
 - Party ledger (Reports, a contact's ledger button, Purchases, Journal): every bill, note, receipt and payment
   with a supplier or customer with a running balance, for a period or all dates, exported to Excel

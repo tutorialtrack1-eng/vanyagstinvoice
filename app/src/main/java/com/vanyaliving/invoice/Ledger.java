@@ -128,8 +128,28 @@ final class Ledger {
         // Receipts and payments are journal vouchers with a few more details (entered in the web portal)
         for (String col : new String[]{"kind TEXT", "doc_no TEXT", "party TEXT", "ref_no TEXT", "mode TEXT", "bank_ref TEXT", "alloc TEXT"}) addColumn(db, "journal_vouchers", col);
         for (String col : new String[]{"tds_applicable INTEGER DEFAULT 0", "tds_section TEXT", "tds_rate REAL DEFAULT 0"}) addColumn(db, "contacts", col);
+        // Every entry has a number: expenses are EXP-0001 onwards, plain journal entries JV-0001 onwards; the
+        // custom columns of a contact (added from the contact list) live in one JSON field
+        addColumn(db, "expenses", "doc_no TEXT");
+        addColumn(db, "contacts", "extra TEXT");
         migrateJournal(db);
+        numberEntries(db);
     }
+
+    /** Numbers for the expenses and plain journal entries saved before they had one (and for rows that arrive by
+     *  sync from the portal without one), in the order they were made; a receipt or payment keeps its own number. */
+    static void numberEntries(SQLiteDatabase db) {
+        long n = maxSerial(db, "expenses", "doc_no", "EXP-");
+        Cursor c = db.query("expenses", new String[]{"id"}, "doc_no IS NULL OR TRIM(doc_no)=''", null, null, null, "id ASC");
+        while (c.moveToNext()) { ContentValues cv = new ContentValues(); cv.put("doc_no", String.format(Locale.US, "EXP-%04d", ++n)); db.update("expenses", cv, "id=?", new String[]{String.valueOf(c.getLong(0))}); }
+        c.close();
+        n = maxSerial(db, "journal_vouchers", "doc_no", "JV-");
+        c = db.query("journal_vouchers", new String[]{"id"}, "doc_no IS NULL OR TRIM(doc_no)=''", null, null, null, "id ASC");
+        while (c.moveToNext()) { ContentValues cv = new ContentValues(); cv.put("doc_no", String.format(Locale.US, "JV-%04d", ++n)); db.update("journal_vouchers", cv, "id=?", new String[]{String.valueOf(c.getLong(0))}); }
+        c.close();
+    }
+
+    static String nextExpenseNo(SQLiteDatabase db) { return String.format(Locale.US, "EXP-%04d", maxSerial(db, "expenses", "doc_no", "EXP-") + 1); }
 
     // Two-line entries from the old "journal" table become vouchers; the old rows are then dropped
     static void migrateJournal(SQLiteDatabase db) {
@@ -322,7 +342,7 @@ final class Ledger {
         ContentValues cv = new ContentValues();
         cv.put("date", v.date); cv.put("narration", v.narration);
         boolean voucher = v.isReceipt() || v.isPayment();
-        cv.put("kind", voucher ? v.kind : null); cv.put("doc_no", voucher ? v.docNo : null); cv.put("party", voucher ? v.party : null);
+        cv.put("kind", voucher ? v.kind : null); cv.put("doc_no", v.docNo == null || v.docNo.trim().isEmpty() ? null : v.docNo.trim()); cv.put("party", voucher ? v.party : null);
         cv.put("ref_no", voucher ? v.refNo : null); cv.put("mode", voucher ? v.mode : null); cv.put("bank_ref", voucher ? v.bankRef : null); cv.put("alloc", voucher && !v.alloc.isEmpty() ? v.alloc : null);
         db.beginTransaction();
         try {
@@ -368,6 +388,7 @@ final class Ledger {
      */
     static class Expense {
         long id = -1;
+        String docNo = "";
         String date = "", category = "", description = "", paymentMode = "Cash", gstRate = "0", vendorGstin = "";
         double amount, taxable, gst, cgst, sgst, igst;
         boolean rcm;
@@ -384,6 +405,7 @@ final class Ledger {
         while (c.moveToNext()) {
             Expense e = new Expense();
             e.id = c.getLong(c.getColumnIndexOrThrow("id"));
+            e.docNo = str(c, "doc_no");
             e.date = str(c, "date"); e.category = str(c, "category"); e.description = str(c, "description");
             e.paymentMode = str(c, "payment_mode"); e.amount = dbl(c, "amount");
             e.taxable = dbl(c, "taxable"); e.gst = dbl(c, "gst"); e.cgst = dbl(c, "cgst"); e.sgst = dbl(c, "sgst"); e.igst = dbl(c, "igst");
@@ -405,6 +427,7 @@ final class Ledger {
 
     static void saveExpense(SQLiteDatabase db, Expense e) {
         ContentValues cv = new ContentValues();
+        cv.put("doc_no", e.docNo.isEmpty() ? null : e.docNo);
         cv.put("date", e.date); cv.put("category", e.category); cv.put("description", e.description);
         cv.put("amount", e.amount); cv.put("payment_mode", e.paymentMode);
         cv.put("taxable", e.taxable); cv.put("gst_rate", e.gstRate); cv.put("gst", e.gst);

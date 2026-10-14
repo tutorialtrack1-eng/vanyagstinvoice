@@ -1,6 +1,6 @@
 {
-  "versionCode": 17,
-  "versionName": "1.16",
-  "apk": "https://blitzbook.co.in/BlitzBook-1.16.apk",
-  "notes": "Purchases now flow through the books: every item bought counts in stock (untick Stock on a line for a service; Stock in Hand has a one-tap Count all purchases as stock for older bills), the supplier on a bill joins the Supplier contacts, and each credit bill shows what is still owed. New: Supplier Outstanding & Ageing (Purchases > Outstanding, Reports), + Payment to a supplier knocked off against bills, purchases and payables on the dashboard, stock in hand on the item list. Sales Report shows the buyer's name only and has a Columns button (GSTIN, state, phone, payment mode, PO no, items, CGST/SGST/IGST, received, outstanding, status) that Excel and PDF follow."
+  "versionCode": 18,
+  "versionName": "1.17",
+  "apk": "https://blitzbook.co.in/BlitzBook-1.17.apk",
+  "notes": "A new look for the login and registration screens. Terms & Conditions to accept once after registering (your books are yours; nothing in them belongs to blitzbook.co.in). Every entry now has a number and a link: invoices, challans, purchases, notes, receipts, payments, journal entries (JV-), expenses (EXP-) and contacts (C-); tap a number in any list to open the entry, hold it to copy its link (https://blitzbook.co.in/open/#number), or use Open # on the dashboard. Save Draft stays at the bottom of the invoice screen (Drafts lists them); the purchase and journal editors have Save Draft too. The invoice screen has a Back button to the screen it came from, besides Dashboard. Journal entries show Debit and Credit in their own columns; Stock in Hand shows In and Out with a Columns button; Customer and Supplier lists take your own columns (Columns button). The classic print layout labels the Taxable Value row."
 }

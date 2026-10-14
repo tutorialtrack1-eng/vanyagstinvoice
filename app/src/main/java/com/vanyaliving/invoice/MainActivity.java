@@ -57,6 +57,13 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.FrameLayout;
+import android.text.SpannableString;
+import android.text.Spannable;
+import android.text.method.LinkMovementMethod;
+import android.text.style.ClickableSpan;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.StyleSpan;
 import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.core.view.GravityCompat;
 
@@ -241,37 +248,372 @@ public class MainActivity extends Activity implements Sync.Listener {
     private Sync sync;
     private boolean onDashboard, companyPromptPending;
     private DrawerLayout dashboardDrawer;
+    // The page lives in a frame so the Save Draft button and the fading notice can float over it
+    private FrameLayout pageFrame;
+    private Button draftFab, draftsBtn;
+    private TextView draftNotice;
+    // Screens visited before the current one (newest first), for the Back button on the invoice screen
+    private final java.util.ArrayDeque<String> screenHistory = new java.util.ArrayDeque<>();
+    private String currentScreen = "dashboard";
+    private boolean navigatingBack;
 
     // ------------------------------------------------------------------ where the user is: back button and relaunch
     // The screen open now is remembered per account ("dashboard", "invoice:<no>", "sales", "contacts:Supplier" ...),
     // so the app reopens where it was left, and the Back button walks from a screen back to the dashboard instead
     // of leaving the app. Dialogs close on Back by themselves.
-    private void remember(String screen) { if (prefs != null && userId >= 0) prefs.edit().putString("last_screen_" + userId, screen).apply(); }
+    private void remember(String screen) {
+        if (prefs == null || userId < 0) return;
+        if (!screen.equals(currentScreen)) {
+            // The dashboard is the floor of the history, and "invoice" -> "invoice:<no>" is the same screen
+            if (!navigatingBack && !"dashboard".equals(currentScreen) && !screenBase(screen).equals(screenBase(currentScreen))) {
+                screenHistory.push(currentScreen);
+                while (screenHistory.size() > 30) screenHistory.removeLast();
+            }
+            currentScreen = screen;
+        }
+        prefs.edit().putString("last_screen_" + userId, screen).apply();
+    }
+    private static String screenBase(String s) { int i = s.indexOf(':'); return i < 0 ? s : s.substring(0, i); }
+
+    /** Back: the screen before this one (the Sales list the invoice was opened from, say), else the dashboard. */
+    private void goBack() {
+        String target = "dashboard";
+        while (!screenHistory.isEmpty()) { String s = screenHistory.pop(); if (!screenBase(s).equals(screenBase(currentScreen))) { target = s; break; } }
+        navigatingBack = true;
+        try {
+            // A list opens as a dialog over the page, so the page under it goes back to the dashboard first
+            if (!onDashboard && !screenBase(target).equals("invoice") && !screenBase(target).equals("challan")) showDashboardView();
+            if (!openScreen(target)) showDashboardView();
+        } catch (Exception e) { showDashboardView(); }
+        finally { navigatingBack = false; }
+    }
 
     private void restoreScreen() {
         String last = prefs.getString("last_screen_" + userId, "dashboard");
-        try {
-            if (last.startsWith("invoice:")) { String no = last.substring(8); if (!no.isEmpty() && invoiceExists(no)) openInvoice(no, false); else showInvoiceView(); }
-            else if (last.equals("invoice")) showInvoiceView();
-            else if (last.startsWith("challan:")) { String no = last.substring(8); if (!no.isEmpty() && challanExists(no)) openChallan(no, false); else showChallanView(); }
-            else if (last.equals("challan")) showChallanView();
-            else if (last.equals("challans")) showChallansDialog();
-            else if (last.equals("sales")) showSalesDialog();
-            else if (last.equals("purchases") && !Subscription.isLite(this, userId)) showPurchasesDialog();
-            else if (last.equals("expenses") && !Subscription.isLite(this, userId)) showExpensesDialog();
-            else if (last.equals("journal") && !Subscription.isLite(this, userId)) showJournalDialog();
-            else if (last.equals("items") && !Subscription.isLite(this, userId)) showItemMasterDialog();
-            else if (last.equals("stock") && !Subscription.isLite(this, userId)) showStockDialog();
-            else if (last.equals("payables") && !Subscription.isLite(this, userId)) showSupplierOutstanding();
-            else if (last.startsWith("contacts:")) showContactListFiltered(last.substring(9));
-            else if (last.startsWith("notes:")) showNotesDialog(last.substring(6));
-        } catch (Exception e) { remember("dashboard"); }
+        try { openScreen(last); } catch (Exception e) { remember("dashboard"); }
+    }
+
+    /** Opens the screen a history key names; false when the key is unknown here. */
+    private boolean openScreen(String last) {
+        if (last.equals("dashboard")) { if (!onDashboard) showDashboardView(); return true; }
+        if (last.startsWith("invoice:")) { String no = last.substring(8); if (!no.isEmpty() && invoiceExists(no)) openInvoice(no, false); else showInvoiceView(); }
+        else if (last.equals("invoice")) showInvoiceView();
+        else if (last.startsWith("challan:")) { String no = last.substring(8); if (!no.isEmpty() && challanExists(no)) openChallan(no, false); else showChallanView(); }
+        else if (last.equals("challan")) showChallanView();
+        else if (last.equals("challans")) showChallansDialog();
+        else if (last.equals("sales")) showSalesDialog();
+        else if (last.equals("purchases") && !Subscription.isLite(this, userId)) showPurchasesDialog();
+        else if (last.equals("expenses") && !Subscription.isLite(this, userId)) showExpensesDialog();
+        else if (last.equals("journal") && !Subscription.isLite(this, userId)) showJournalDialog();
+        else if (last.equals("items") && !Subscription.isLite(this, userId)) showItemMasterDialog();
+        else if (last.equals("stock") && !Subscription.isLite(this, userId)) showStockDialog();
+        else if (last.equals("payables") && !Subscription.isLite(this, userId)) showSupplierOutstanding();
+        else if (last.startsWith("contacts:")) showContactListFiltered(last.substring(9));
+        else if (last.startsWith("notes:")) showNotesDialog(last.substring(6));
+        else return false;
+        return true;
     }
 
     @Override public void onBackPressed() {
         if (dashboardDrawer != null && dashboardDrawer.isDrawerOpen(GravityCompat.START)) { dashboardDrawer.closeDrawers(); return; }
-        if (!onDashboard) { showDashboardView(); return; }
+        if (!onDashboard) { goBack(); return; }
         super.onBackPressed();
+    }
+
+    // ------------------------------------------------------------------ entry numbers and links
+    // Every entry carries a number (invoice no, DC-, PUR-, QTN-, STK-, CN-, DN-, RCT-, PMT-, JV-, EXP-; a contact is
+    // C-<id>) and a link, https://blitzbook.co.in/open/#<number>, that opens it: in the app straight away, in a
+    // browser through the portal's /open page. The number is shown as a link in every list; tap opens, hold copies.
+    static String entryLink(String no) { return "https://blitzbook.co.in/open/#" + Uri.encode(no); }
+
+    private void copyEntryLink(String no) {
+        if (no == null || no.trim().isEmpty()) { Toast.makeText(this, "Save the entry first to get its link", Toast.LENGTH_SHORT).show(); return; }
+        copyText("Link to " + no.trim(), entryLink(no.trim()));
+    }
+
+    /** Makes the entry number inside a list row's text a link: tap opens the entry, a long press copies its link. */
+    private void linkNumber(TextView tv, String no) {
+        if (no == null || no.trim().isEmpty()) return;
+        String text = tv.getText().toString(); int at = text.indexOf(no);
+        if (at < 0) return;
+        SpannableString sp = new SpannableString(text);
+        sp.setSpan(new ClickableSpan() {
+            @Override public void onClick(View w) { openRef(no); }
+            @Override public void updateDrawState(android.text.TextPaint ds) { ds.setColor(0xFF1E5AA8); ds.setUnderlineText(true); }
+        }, at, at + no.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sp.setSpan(new StyleSpan(Typeface.BOLD), at, at + no.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        tv.setText(sp);
+        tv.setMovementMethod(LinkMovementMethod.getInstance());
+        tv.setOnLongClickListener(v -> { copyEntryLink(no); return true; });
+    }
+
+    /** A rounded chip with the number: tap opens the entry, a long press copies its link. */
+    private TextView refChip(String no) {
+        TextView t = chip(no, 0xFFE3F2FD, 0xFF1E5AA8);
+        t.setOnClickListener(v -> openRef(no));
+        t.setOnLongClickListener(v -> { copyEntryLink(no); return true; });
+        return t;
+    }
+
+    private void dismissLists() {
+        for (AlertDialog d : new AlertDialog[]{salesDialog, purchasesDialog, challansDialog, notesDialog, journalDialog, expensesDialog, contactListDialog, stockDialog, supplierOutDialog})
+            if (d != null && d.isShowing()) d.dismiss();
+    }
+
+    /** Opens whatever entry carries this number, whichever kind it is. */
+    private void openRef(String ref) {
+        if (ref == null) return;
+        final String no = ref.trim();
+        if (no.isEmpty()) return;
+        SQLiteDatabase db = dbHelper.getReadableDatabase();
+        if (invoiceExists(no)) { dismissLists(); openInvoice(no, false); return; }
+        if (challanExists(no)) { dismissLists(); openChallan(no, false); return; }
+        Cursor pc = db.query("purchases", new String[]{"kind"}, "LOWER(doc_no)=LOWER(?)", new String[]{no}, null, null, null);
+        String pKind = pc.moveToFirst() ? (pc.isNull(0) ? "" : pc.getString(0)) : null; pc.close();
+        if (pKind != null) {
+            if (Ledger.KIND_STOCK.equalsIgnoreCase(pKind)) { showStockDialog(); return; }
+            for (Ledger.Purchase p : Ledger.purchases(db)) if (p.docNo.equalsIgnoreCase(no)) { showPurchaseEditor(p, p.kind); return; }
+        }
+        for (String kind : new String[]{Ledger.NOTE_CREDIT, Ledger.NOTE_DEBIT}) for (Ledger.Note n : Ledger.notes(db, kind)) if (n.noteNo.equalsIgnoreCase(no)) { showNoteEditor(n, kind); return; }
+        for (Ledger.JournalVoucher j : Ledger.journal(db)) if (j.docNo.equalsIgnoreCase(no)) { showJournalEditor(j); return; }
+        for (Ledger.Expense e : Ledger.expenses(db)) if (e.docNo.equalsIgnoreCase(no)) { showExpenseEditor(e); return; }
+        if (no.toUpperCase(Locale.ROOT).startsWith("C-")) {
+            try {
+                long id = Long.parseLong(no.substring(2).trim());
+                Cursor c = db.query("contacts", new String[]{"type"}, "id=?", new String[]{String.valueOf(id)}, null, null, null);
+                if (c.moveToFirst()) { String type = c.isNull(0) || c.getString(0).isEmpty() ? "Customer" : c.getString(0); c.close(); showContactEditor(type, id); return; }
+                c.close();
+            } catch (NumberFormatException ignored) { /* not a contact id */ }
+        }
+        Toast.makeText(this, "No entry numbered " + no + " on this phone", Toast.LENGTH_LONG).show();
+    }
+
+    /** Dashboard "Open #": type a number, go to the entry. */
+    private void askOpenRef() {
+        EditText e = edit("e.g. INV-0007, PUR-0003, RCT-0002, JV-0001", false);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(field("Entry number", e));
+        TextView hint = new TextView(this);
+        hint.setText("Every invoice, challan, purchase, note, receipt, payment, journal entry and expense has a number, and a link (https://blitzbook.co.in/open/#number) that opens it. Hold a number in any list to copy its link.");
+        hint.setTextSize(11.5f); hint.setTextColor(0xFF607D8B); hint.setPadding(dp(4), dp(6), dp(4), 0);
+        box.addView(hint);
+        new AlertDialog.Builder(this).setTitle("Open by Number").setView(box)
+                .setPositiveButton("Open", (d, w) -> openRef(e.getText().toString()))
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    // A link into the app: blitzbook://open/<no> or https://blitzbook.co.in/open/#<no>
+    private static String linkRef(Intent intent) {
+        Uri u = intent == null ? null : intent.getData();
+        if (u == null) return null;
+        String ref = u.getFragment();
+        if (ref == null || ref.trim().isEmpty()) ref = u.getQueryParameter("open");
+        if (ref == null || ref.trim().isEmpty()) { ref = u.getLastPathSegment(); if (ref == null || "open".equalsIgnoreCase(ref)) ref = null; }
+        return ref == null ? null : Uri.decode(ref).trim();
+    }
+    private void rememberPendingLink(Intent intent) { String r = linkRef(intent); if (r != null && !r.isEmpty()) prefs.edit().putString("pending_ref", r).apply(); }
+    private void handleLink(Intent intent) {
+        String ref = linkRef(intent);
+        if (intent != null) intent.setData(null);
+        if (ref == null || ref.isEmpty()) ref = prefs.getString("pending_ref", "");
+        prefs.edit().remove("pending_ref").apply();
+        if (ref == null || ref.isEmpty()) return;
+        final String r = ref;
+        if (root != null) root.post(() -> openRef(r));
+    }
+    @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleLink(intent); }
+
+    // ------------------------------------------------------------------ drafts
+    // Save Draft keeps whatever is on the invoice / challan screen, half-filled or not, under its number without
+    // touching the books; Drafts lists them to pick up later. The purchase and journal editors have a Save Draft
+    // button too (one draft each, loaded the next time the editor opens). Saving the real entry drops its draft.
+    private String draftsKey() { return "drafts_" + userId; }
+    private JSONArray loadDrafts() { try { return new JSONArray(prefs.getString(draftsKey(), "[]")); } catch (Exception e) { return new JSONArray(); } }
+    private void storeDrafts(JSONArray a) { prefs.edit().putString(draftsKey(), a.toString()).apply(); refreshDraftsButton(); }
+    private void removeDraft(String kind, String no) {
+        JSONArray a = loadDrafts(), out = new JSONArray(); boolean changed = false;
+        for (int i = 0; i < a.length(); i++) { JSONObject d = a.optJSONObject(i); if (d == null) continue; if (kind.equals(d.optString("kind")) && no.equalsIgnoreCase(d.optString("no"))) { changed = true; continue; } out.put(d); }
+        if (changed) storeDrafts(out);
+    }
+    private void refreshDraftsButton() {
+        if (draftsBtn == null) return;
+        int n = loadDrafts().length();
+        draftsBtn.setText(n > 0 ? "Drafts (" + n + ")" : "Drafts");
+    }
+
+    /** A short notice over the page ("Draft saved successfully") that fades away by itself. */
+    private void showFadingNotice(String text) {
+        if (draftNotice == null) return;
+        draftNotice.animate().cancel();
+        draftNotice.setText(text);
+        draftNotice.setAlpha(0f);
+        draftNotice.setVisibility(View.VISIBLE);
+        draftNotice.animate().setStartDelay(0).alpha(1f).setDuration(250).withEndAction(() ->
+                draftNotice.animate().setStartDelay(1800).alpha(0f).setDuration(1800).withEndAction(() -> { draftNotice.setVisibility(View.GONE); draftNotice.animate().setStartDelay(0); }).start()).start();
+    }
+
+    private JSONObject formAsJson() {
+        JSONObject o = new JSONObject();
+        for (Map.Entry<String, Object> e : docFormValues().valueSet()) { try { o.put(e.getKey(), e.getValue() == null ? JSONObject.NULL : e.getValue()); } catch (Exception ignored) { /* skipped */ } }
+        return o;
+    }
+    private JSONArray itemsAsJson() {
+        JSONArray items = new JSONArray();
+        for (ItemRow r : rows) {
+            try {
+                items.put(new JSONObject().put("particulars", r.desc.getText().toString()).put("hsn", r.hsnSac.getText().toString()).put("gst_rate", r.gst.value())
+                        .put("qty", r.qty.getText().toString()).put("uqc", r.uqc.value()).put("rate", r.rate.getText().toString())
+                        .put("sub_serial_no", r.subSerialNo).put("sub_description", r.subDescription).put("sub_other_info", r.subOtherInfo));
+            } catch (Exception ignored) { /* skipped */ }
+        }
+        return items;
+    }
+
+    private void saveDraft() {
+        if (invoiceNo == null) return;
+        String no = invoiceNo.getText().toString().trim();
+        if (no.isEmpty()) { Toast.makeText(this, "Give the " + (editingChallan ? "challan" : "invoice") + " a number first", Toast.LENGTH_SHORT).show(); return; }
+        String kind = editingChallan ? "challan" : "invoice";
+        try {
+            JSONObject d = new JSONObject().put("kind", kind).put("no", no).put("saved", System.currentTimeMillis())
+                    .put("party", buyerBillTo.getText().toString().split("\n")[0].trim()).put("total", parseValue(roundedTotal))
+                    .put("form", formAsJson()).put("items", itemsAsJson());
+            JSONArray a = loadDrafts(), out = new JSONArray();
+            out.put(d);
+            for (int i = 0; i < a.length(); i++) { JSONObject x = a.optJSONObject(i); if (x != null && !(kind.equals(x.optString("kind")) && no.equalsIgnoreCase(x.optString("no")))) out.put(x); }
+            while (out.length() > 50) out.remove(out.length() - 1);
+            storeDrafts(out);
+            showFadingNotice("Draft saved successfully");
+        } catch (Exception e) { Toast.makeText(this, "Could not save the draft: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+    }
+
+    private void applyDraft(JSONObject d) {
+        boolean challan = "challan".equals(d.optString("kind"));
+        if (challan != editingChallan) showDocView(challan);
+        JSONObject f = d.optJSONObject("form"); if (f == null) f = new JSONObject();
+        loadingInvoice = true;
+        try {
+            invoiceNo.setText(d.optString("no"));
+            invoiceDate.setText(f.optString("date", today()));
+            selectSpinner(paymentSpinner, f.optString("payment_mode"));
+            buyerBillTo.setText(f.optString("buyer_name_addr")); buyerPhone.setText(f.optString("buyer_phone")); buyerEmail.setText(f.optString("buyer_email")); buyerGstin.setText(f.optString("buyer_gstin"));
+            selectSpinner(buyerState, f.optString("buyer_state"));
+            sameAsBilling.setChecked(f.optInt("same_as_billing", 1) == 1);
+            consignee.setText(f.optString("consignee_name_addr")); consigneePhone.setText(f.optString("consignee_phone")); consigneeEmail.setText(f.optString("consignee_email")); consigneeGstin.setText(f.optString("consignee_gstin"));
+            selectSpinner(consigneeState, f.optString("consignee_state"));
+            destination.setText(f.optString("destination")); vehicle.setText(f.optString("vehicle")); transporter.setText(f.optString("transporter")); vehicleNumber.setText(f.optString("vehicle_number"));
+            deliveryNote.setText(f.optString("delivery_challan")); buyerOrderNo.setText(f.optString("order_no")); buyerOrderDate.setText(f.optString("order_date")); referenceNoDate.setText(f.optString("ref_no")); otherInfo.setText(f.optString("additional_info"));
+            lrNo.setText(f.optString("lr_no")); lrDate.setText(f.optString("lr_date")); origin.setText(f.optString("origin")); goodsDesc.setText(f.optString("goods_desc"));
+            othersCb.setChecked(f.optInt("others_checked") == 1); rcmCb.setChecked(f.optInt("rcm") == 1);
+            rows.clear(); itemsContainer.removeAllViews(); addItemsHeader();
+            JSONArray items = d.optJSONArray("items"); if (items == null) items = new JSONArray();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject it = items.optJSONObject(i); if (it == null) continue;
+                ItemRow r = new ItemRow(this, rows.size() + 1);
+                r.desc.setText(it.optString("particulars")); r.hsnSac.setText(it.optString("hsn")); r.gst.select(it.optString("gst_rate"));
+                r.qty.setText(it.optString("qty")); r.uqc.select(it.optString("uqc")); r.rate.setText(it.optString("rate"));
+                r.subSerialNo = it.optString("sub_serial_no"); r.subDescription = it.optString("sub_description"); r.subOtherInfo = it.optString("sub_other_info");
+                r.updateAmounts(); rows.add(r); itemsContainer.addView(r.view);
+            }
+            if (rows.isEmpty()) addItemRow();
+            recalc();
+            if (editingChallan) refreshChallanStatus();
+        } finally { loadingInvoice = false; }
+    }
+
+    private void showDraftsDialog() {
+        JSONArray a = loadDrafts();
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(12), dp(8), dp(12), dp(8));
+        TextView hint = new TextView(this);
+        hint.setText(a.length() == 0 ? "No drafts yet. Save Draft (bottom right of the invoice screen) keeps a half-done invoice or challan here without putting it in the books; come back to it from this list."
+                : "Tap a draft to continue it. Saving the invoice or challan for real removes its draft.");
+        hint.setTextSize(11.5f); hint.setTextColor(0xFF607D8B); hint.setPadding(dp(4), dp(4), dp(4), dp(8));
+        box.addView(hint);
+        LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
+        AlertDialog[] ref = new AlertDialog[1];
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject d = a.optJSONObject(i); if (d == null) continue;
+            LinearLayout row = row(); row.setPadding(0, dp(6), 0, dp(6));
+            TextView tv = new TextView(this);
+            String when = new SimpleDateFormat("d MMM, HH:mm", Locale.US).format(new Date(d.optLong("saved")));
+            tv.setText(String.format(Locale.US, "%s %s\n%s  ·  %s  ·  saved %s", "challan".equals(d.optString("kind")) ? "Challan" : "Invoice", d.optString("no"),
+                    d.optString("party").isEmpty() ? "(no party yet)" : titleCase(d.optString("party")), money(d.optDouble("total", 0)), when));
+            tv.setTextSize(12.5f);
+            tv.setOnClickListener(v -> { if (ref[0] != null) ref[0].dismiss(); applyDraft(d); showFadingNotice("Draft loaded"); });
+            row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
+            ImageButton del = iconButton(R.drawable.ic_delete, RED, "Delete draft");
+            del.setOnClickListener(v -> { removeDraft(d.optString("kind"), d.optString("no")); if (ref[0] != null) ref[0].dismiss(); showDraftsDialog(); });
+            row.addView(del, iconLp(36, 4));
+            list.addView(row); list.addView(divider());
+        }
+        ScrollView sc = new ScrollView(this); sc.addView(list);
+        box.addView(sc, new LinearLayout.LayoutParams(-1, dp(a.length() == 0 ? 10 : 300)));
+        ref[0] = new AlertDialog.Builder(this).setTitle("Drafts").setView(box).setPositiveButton("Close", null).show();
+    }
+
+    // Drafts of the dialog editors (purchase, journal): one per editor, in the preferences as JSON
+    private String dialogDraft(String key) { return prefs.getString("ddraft_" + userId + "_" + key, ""); }
+    private void saveDialogDraft(String key, JSONObject o) { prefs.edit().putString("ddraft_" + userId + "_" + key, o.toString()).apply(); }
+    private void clearDialogDraft(String key) { prefs.edit().remove("ddraft_" + userId + "_" + key).apply(); }
+    private boolean loadDialogDraft(String key, java.util.function.Consumer<JSONObject> apply) {
+        String raw = dialogDraft(key);
+        if (raw.isEmpty()) return false;
+        try { apply.accept(new JSONObject(raw)); return true; } catch (Exception e) { clearDialogDraft(key); return false; }
+    }
+    /** "Draft loaded" band at the top of an editor with a Discard link. */
+    private View draftBanner(Runnable discard) {
+        LinearLayout band = row();
+        band.setPadding(dp(10), dp(6), dp(10), dp(6));
+        GradientDrawable gd = new GradientDrawable(); gd.setColor(0xFFFFF8E1); gd.setCornerRadius(dp(8)); gd.setStroke(dp(1), 0xFFFFE082);
+        band.setBackground(gd);
+        TextView t = new TextView(this); t.setText("Draft loaded - continue where you left off"); t.setTextSize(12); t.setTextColor(0xFF6D4C41);
+        band.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView d = new TextView(this); d.setText("Discard draft"); d.setTextSize(12); d.setTypeface(Typeface.DEFAULT, Typeface.BOLD); d.setTextColor(RED); d.setPadding(dp(8), 0, 0, 0);
+        d.setOnClickListener(v -> discard.run());
+        band.addView(d);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, dp(4), 0, dp(6)); band.setLayoutParams(lp);
+        return band;
+    }
+    private JSONObject purchaseToJson(Ledger.Purchase p) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("docNo", p.docNo).put("date", p.date).put("supplier", p.supplier).put("supplierGstin", p.supplierGstin).put("paymentMode", p.paymentMode).put("notes", p.notes)
+             .put("rcm", p.rcm).put("inclusive", p.inclusive).put("tdsRate", p.tdsRate);
+            JSONArray items = new JSONArray();
+            for (Ledger.PurchaseItem i : p.items) items.put(new JSONObject().put("name", i.name).put("hsn", i.hsn).put("qty", i.qty).put("rate", i.rate).put("gstRate", i.gstRate).put("stock", i.stock).put("uqc", i.uqc));
+            o.put("items", items);
+        } catch (Exception ignored) { /* partial draft */ }
+        return o;
+    }
+    private void purchaseFromJson(Ledger.Purchase p, JSONObject o) {
+        if (!o.optString("docNo").isEmpty()) p.docNo = o.optString("docNo");
+        p.date = o.optString("date", p.date); p.supplier = o.optString("supplier"); p.supplierGstin = o.optString("supplierGstin"); p.paymentMode = o.optString("paymentMode", "Cash"); p.notes = o.optString("notes");
+        p.rcm = o.optBoolean("rcm"); p.inclusive = o.optBoolean("inclusive"); p.tdsRate = o.optDouble("tdsRate", 0);
+        p.items.clear();
+        JSONArray items = o.optJSONArray("items"); if (items == null) return;
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject x = items.optJSONObject(i); if (x == null) continue;
+            Ledger.PurchaseItem it = new Ledger.PurchaseItem();
+            it.name = x.optString("name"); it.hsn = x.optString("hsn"); it.qty = x.optDouble("qty", 0); it.rate = x.optDouble("rate", 0); it.gstRate = x.optString("gstRate", "18"); it.stock = x.optBoolean("stock", true); it.uqc = x.optString("uqc", "NOS");
+            p.items.add(it);
+        }
+    }
+    private JSONObject journalToJson(Ledger.JournalVoucher j) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("date", j.date).put("narration", j.narration);
+            JSONArray lines = new JSONArray();
+            for (Ledger.JournalLine l : j.lines) lines.put(new JSONObject().put("account", l.account).put("debit", l.debit).put("amount", l.amount));
+            o.put("lines", lines);
+        } catch (Exception ignored) { /* partial draft */ }
+        return o;
+    }
+    private void journalFromJson(Ledger.JournalVoucher j, JSONObject o) {
+        j.date = o.optString("date", j.date); j.narration = o.optString("narration");
+        j.lines.clear();
+        JSONArray lines = o.optJSONArray("lines"); if (lines == null) return;
+        for (int i = 0; i < lines.length(); i++) { JSONObject x = lines.optJSONObject(i); if (x != null) j.lines.add(new Ledger.JournalLine(x.optString("account"), x.optBoolean("debit", true), x.optDouble("amount", 0))); }
     }
 
     private String sellerNameStr = "";
@@ -424,6 +766,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
         if (!prefs.getBoolean("is_logged_in", false) || userId < 0) {
             prefs.edit().putBoolean("is_logged_in", false).apply();
+            rememberPendingLink(getIntent()); // a link tapped while signed out opens after the login
             startActivity(new Intent(this, LoginActivity.class)); finish(); return;
         }
         Subscription.markRegistered(this, userId); // trial clock starts the first time this account opens the app
@@ -449,6 +792,9 @@ public class MainActivity extends Activity implements Sync.Listener {
             showDashboardView();
             restoreScreen();
         }
+        handleLink(getIntent());
+        // The Terms & Conditions are accepted once per account before anything else is done here
+        if (!Terms.accepted(this, userId)) Terms.show(this, userId, null, this::logout);
     }
 
     // ------------------------------------------------------------------ subscription / validity
@@ -1765,6 +2111,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         onDashboard = true;
         remember("dashboard");
         root.removeAllViews();
+        if (draftFab != null) draftFab.setVisibility(View.GONE);
 
         // Hero banner: theme-coloured gradient, company name, GSTIN and subscription chips
         LinearLayout banner = new LinearLayout(this);
@@ -1794,6 +2141,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         chips.setOrientation(LinearLayout.HORIZONTAL);
         chips.addView(chip(sellerGstinStr.isEmpty() ? "No GSTIN" : "GSTIN " + sellerGstinStr, 0x33FFFFFF, Color.WHITE));
         chips.addView(chip(lineOfActivityStr.isEmpty() || lineOfActivityStr.startsWith("Select") ? "General" : lineOfActivityStr, 0x33FFFFFF, Color.WHITE));
+        TextView openChip = chip("Open #", 0xFFFFFFFF, NAVY);
+        openChip.setOnClickListener(v -> askOpenRef());
+        chips.addView(openChip);
         banner.addView(chips);
         // Which company of the account is open, its group and the role here; the last chip switches companies
         if ((inCompany() || cachedCompanies().length() > 1) && !Subscription.isLite(this, userId)) {
@@ -2245,13 +2595,38 @@ public class MainActivity extends Activity implements Sync.Listener {
         topNav.setGravity(Gravity.CENTER_VERTICAL);
         topNav.setPadding(0, 0, 0, dp(8));
 
+        // Back returns to the screen this one was opened from (the Sales list, say); Dashboard goes home
         Button backBtn = new Button(this);
-        backBtn.setText("← Back to Dashboard");
+        backBtn.setText("\u2190 Back");
         styleButton(backBtn, NAVY);
         backBtn.setAllCaps(false);
-        backBtn.setTextSize(13);
-        backBtn.setOnClickListener(v -> showDashboardView());
+        backBtn.setTextSize(12.5f);
+        backBtn.setPadding(dp(10), 0, dp(10), 0);
+        backBtn.setOnClickListener(v -> goBack());
         topNav.addView(backBtn, new LinearLayout.LayoutParams(-2, dp(38)));
+        Button homeBtn = new Button(this);
+        homeBtn.setText("Dashboard");
+        styleButton(homeBtn, SLATE);
+        homeBtn.setAllCaps(false);
+        homeBtn.setTextSize(12.5f);
+        homeBtn.setPadding(dp(10), 0, dp(10), 0);
+        homeBtn.setOnClickListener(v -> showDashboardView());
+        LinearLayout.LayoutParams homeLp = new LinearLayout.LayoutParams(-2, dp(38)); homeLp.setMargins(dp(6), 0, 0, 0);
+        topNav.addView(homeBtn, homeLp);
+        View navSpacer = new View(this);
+        topNav.addView(navSpacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        draftsBtn = new Button(this);
+        styleButton(draftsBtn, BLUE);
+        draftsBtn.setAllCaps(false);
+        draftsBtn.setTextSize(12.5f);
+        draftsBtn.setPadding(dp(10), 0, dp(10), 0);
+        draftsBtn.setOnClickListener(v -> showDraftsDialog());
+        topNav.addView(draftsBtn, new LinearLayout.LayoutParams(-2, dp(38)));
+        ImageButton linkBtn = iconButton(R.drawable.ic_link, SLATE, "Copy the link to this document");
+        linkBtn.setOnClickListener(v -> copyEntryLink(invoiceNo == null ? "" : invoiceNo.getText().toString()));
+        topNav.addView(linkBtn, iconLp(38, 6));
+        refreshDraftsButton();
+        if (draftFab != null) draftFab.setVisibility(View.VISIBLE);
 
         root.addView(topNav);
 
@@ -2720,12 +3095,41 @@ public class MainActivity extends Activity implements Sync.Listener {
         main.addView(toolbar);
 
         ScrollView scroll = pageScroll();
-        scroll.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1));
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(8), dp(12), dp(32));
+        root.setPadding(dp(12), dp(8), dp(12), dp(72));
         scroll.addView(root);
-        main.addView(scroll);
+        pageFrame = new FrameLayout(this);
+        pageFrame.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        // Save Draft floats at the bottom right of the invoice screen and stays put while the page scrolls
+        draftFab = new Button(this);
+        draftFab.setText("Save Draft");
+        draftFab.setAllCaps(false); draftFab.setTextSize(13.5f); draftFab.setTypeface(Typeface.DEFAULT, Typeface.BOLD); draftFab.setTextColor(Color.WHITE);
+        GradientDrawable fabN = new GradientDrawable(); fabN.setColor(GREEN); fabN.setCornerRadius(dp(24)); fabN.setStroke(dp(1.5f), darkenColor(GREEN));
+        GradientDrawable fabP = new GradientDrawable(); fabP.setColor(darkenColor(GREEN)); fabP.setCornerRadius(dp(24));
+        StateListDrawable fabS = new StateListDrawable(); fabS.addState(new int[]{android.R.attr.state_pressed}, fabP); fabS.addState(new int[]{}, fabN);
+        draftFab.setBackground(fabS);
+        draftFab.setPadding(dp(20), 0, dp(20), 0);
+        draftFab.setElevation(dp(8));
+        draftFab.setStateListAnimator(null);
+        draftFab.setVisibility(View.GONE);
+        draftFab.setOnClickListener(v -> saveDraft());
+        FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(-2, dp(46), Gravity.BOTTOM | Gravity.END);
+        fabLp.setMargins(0, 0, dp(16), dp(18));
+        pageFrame.addView(draftFab, fabLp);
+        // "Draft saved successfully" and the like: a band at the top that fades away on its own
+        draftNotice = new TextView(this);
+        draftNotice.setTextSize(13.5f); draftNotice.setTypeface(Typeface.DEFAULT, Typeface.BOLD); draftNotice.setTextColor(Color.WHITE);
+        draftNotice.setGravity(Gravity.CENTER);
+        draftNotice.setPadding(dp(18), dp(10), dp(18), dp(10));
+        GradientDrawable nbg = new GradientDrawable(); nbg.setColor(0xF2263238); nbg.setCornerRadius(dp(22));
+        draftNotice.setBackground(nbg);
+        draftNotice.setElevation(dp(10));
+        draftNotice.setVisibility(View.GONE);
+        FrameLayout.LayoutParams nLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        nLp.setMargins(dp(16), dp(14), dp(16), 0);
+        pageFrame.addView(draftNotice, nLp);
+        main.addView(pageFrame, new LinearLayout.LayoutParams(-1, 0, 1));
 
         LinearLayout side = new LinearLayout(this);
         side.setOrientation(LinearLayout.VERTICAL);
@@ -4206,6 +4610,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         Subscription.useInvoice(this, userId);
         if (Subscription.isLite(this, userId) || Subscription.invoiceQuota(this, userId) > 0) prefs.edit().putBoolean("pack_inv_" + userId + "_" + no, true).apply();
         insertDocItems(db, "invoice_items", "invoice_id", id);
+        removeDraft("invoice", no);
         // An invoice made from a delivery challan closes that challan
         if (!fromChallanNo.isEmpty()) { db.execSQL("UPDATE challans SET invoice_no=? WHERE challan_no=?", new String[]{no, fromChallanNo}); fromChallanNo = ""; }
         return true;
@@ -4275,6 +4680,7 @@ public class MainActivity extends Activity implements Sync.Listener {
         ContentValues cv = docFormValues(); cv.put("challan_no", no); cv.put("invoice_no", linked);
         long id = db.insert("challans", null, cv);
         insertDocItems(db, "challan_items", "challan_id", id);
+        removeDraft("challan", no);
         challanInvoiceNo = linked;
         remember("challan:" + no);
         return true;
@@ -4890,7 +5296,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             double taxable = parseValue(taxableValue), grand = parseValue(grandTotal), rounded = parseValue(roundedTotal);
             List<String[]> tot = new ArrayList<>();
             if (!noGst) {
-                tot.add(new String[]{"", indianNumber(taxable)});
+                tot.add(new String[]{"Taxable Value", indianNumber(taxable)});
                 if (intra) { tot.add(new String[]{"CGST", indianNumber(parseValue(cgstAmount))}); tot.add(new String[]{"SGST", indianNumber(parseValue(sgstAmount))}); }
                 else tot.add(new String[]{"IGST", indianNumber(parseValue(igstAmount))});
             }
@@ -5155,6 +5561,11 @@ public class MainActivity extends Activity implements Sync.Listener {
         box.addView(field("Address", eAddr));
         box.addView(tdsCb);
         box.addView(tdsBox);
+        // The columns added to this list (Columns button): one field each, kept in the contact's "extra" JSON
+        List<String> customCols = contactColumns("Supplier".equalsIgnoreCase(defaultType) ? "Supplier" : "Customer");
+        Map<String, EditText> customInputs = new HashMap<>();
+        JSONObject extraNow = editId >= 0 ? contactExtra(editId) : new JSONObject();
+        for (String col : customCols) { EditText ce = edit(col, false); ce.setText(extraNow.optString(col, "")); customInputs.put(col, ce); box.addView(field(col, ce)); }
 
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
@@ -5199,6 +5610,8 @@ public class MainActivity extends Activity implements Sync.Listener {
                 cv.put("tds_applicable", tdsCb.isChecked() ? 1 : 0);
                 cv.put("tds_section", tdsCb.isChecked() ? (String) sTds.getSelectedItem() : "");
                 cv.put("tds_rate", tdsRate);
+                try { for (String col : customCols) extraNow.put(col, customInputs.get(col).getText().toString().trim()); } catch (Exception ignored) { /* kept as before */ }
+                cv.put("extra", extraNow.toString());
 
                 if (!requireWrite("contacts")) return;
                 if (editId < 0 || db.update("contacts", cv, "id=?", new String[]{String.valueOf(editId)}) == 0) db.insert("contacts", null, cv);
@@ -5272,11 +5685,24 @@ public class MainActivity extends Activity implements Sync.Listener {
         selectBtn.setTextSize(12);
         selectBtn.setOnClickListener(v -> { contactSelectMode = !contactSelectMode; selectedContactIds.clear(); showContactListFiltered(filterType); });
 
+        Button colsBtn = new Button(this);
+        colsBtn.setText("Columns");
+        styleButton(colsBtn, SLATE);
+        colsBtn.setTextSize(12);
+        colsBtn.setOnClickListener(v -> showContactColumnsDialog(filterType));
+
         topBtns.addView(addContactBtn, weightLp());
         topBtns.addView(uploadBtn, weightLp());
         topBtns.addView(templateBtn, weightLp());
-        topBtns.addView(selectBtn, weightLp());
         rootBox.addView(topBtns);
+        LinearLayout topBtns2 = new LinearLayout(this);
+        topBtns2.setOrientation(LinearLayout.HORIZONTAL);
+        topBtns2.setPadding(0, 0, 0, dp(10));
+        topBtns2.addView(selectBtn, weightLp());
+        topBtns2.addView(colsBtn, weightLp());
+        rootBox.addView(topBtns2);
+        List<String> customCols = contactColumns(filterType);
+        int extraIdx = c.getColumnIndex("extra");
 
         LinearLayout listContainer = new LinearLayout(this);
         listContainer.setOrientation(LinearLayout.VERTICAL);
@@ -5330,8 +5756,14 @@ public class MainActivity extends Activity implements Sync.Listener {
                 TextView tv = new TextView(this);
                 Double bal = name == null ? null : balances.get(name.trim());
                 String owed = bal == null || Math.abs(bal) < 0.005 ? "" : "\n" + (bal > 0 ? "Owes you " : "You owe ") + money(Math.abs(bal));
-                tv.setText(String.format(Locale.US, "%s (%s)\nPh: %s | GST: %s\nState: %s%s%s", name, type, phone, gstin, state, tds ? " | TDS " + formatQty(tdsRate) + "%" : "", owed));
+                JSONObject extra = new JSONObject();
+                try { if (extraIdx >= 0 && !c.isNull(extraIdx)) extra = new JSONObject(c.getString(extraIdx)); } catch (Exception ignored) { /* no custom values */ }
+                StringBuilder more = new StringBuilder();
+                for (String col : customCols) { String v = extra.optString(col, "").trim(); if (!v.isEmpty()) more.append('\n').append(col).append(": ").append(v); }
+                String ref = "C-" + contactId;
+                tv.setText(String.format(Locale.US, "%s (%s)  ·  %s\nPh: %s | GST: %s\nState: %s%s%s%s", name, type, ref, phone, gstin, state, tds ? " | TDS " + formatQty(tdsRate) + "%" : "", more, owed));
                 tv.setTextSize(13);
+                linkNumber(tv, ref);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
 
                 final long targetId = contactId;
@@ -5388,6 +5820,70 @@ public class MainActivity extends Activity implements Sync.Listener {
                 .setTitle(filterType + " Contacts List")
                 .setView(rootBox)
                 .setPositiveButton("Close", null)
+                .show();
+    }
+
+    // Columns the user adds to the Customer / Supplier lists ("Contact person", "Area", "Credit days" ...): the names
+    // are kept per list and account, the values of each contact in its "extra" JSON field, which syncs with the row
+    private List<String> contactColumns(String type) {
+        List<String> out = new ArrayList<>();
+        try { JSONArray a = new JSONArray(prefs.getString("contact_cols_" + userId + "_" + ("Supplier".equalsIgnoreCase(type) ? "Supplier" : "Customer"), "[]")); for (int i = 0; i < a.length(); i++) out.add(a.getString(i)); } catch (Exception ignored) { /* none */ }
+        return out;
+    }
+    private void saveContactColumns(String type, List<String> cols) {
+        JSONArray a = new JSONArray(); for (String c : cols) a.put(c);
+        prefs.edit().putString("contact_cols_" + userId + "_" + ("Supplier".equalsIgnoreCase(type) ? "Supplier" : "Customer"), a.toString()).apply();
+    }
+    private JSONObject contactExtra(long id) {
+        Cursor c = dbHelper.getReadableDatabase().query("contacts", new String[]{"extra"}, "id=?", new String[]{String.valueOf(id)}, null, null, null);
+        JSONObject o = new JSONObject();
+        try { if (c.moveToFirst() && !c.isNull(0)) o = new JSONObject(c.getString(0)); } catch (Exception ignored) { /* none */ }
+        c.close();
+        return o;
+    }
+    private void showContactColumnsDialog(String type) {
+        List<String> cols = contactColumns(type);
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        TextView hint = new TextView(this);
+        hint.setText("Add your own columns to the " + type + " list - Contact person, Area, Credit days, Bank details, anything. Each one becomes a field on the contact and shows on the list.");
+        hint.setTextSize(11.5f); hint.setTextColor(0xFF607D8B); hint.setPadding(dp(2), 0, dp(2), dp(8));
+        box.addView(hint);
+        LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
+        AlertDialog[] ref = new AlertDialog[1];
+        if (cols.isEmpty()) { TextView none = new TextView(this); none.setText("No custom columns yet."); none.setTextSize(12.5f); none.setTextColor(0xFF90A4AE); none.setPadding(dp(4), dp(4), dp(4), dp(8)); list.addView(none); }
+        for (String col : cols) {
+            LinearLayout r = row();
+            TextView t = new TextView(this); t.setText(col); t.setTextSize(13.5f); t.setTextColor(0xFF263238);
+            r.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+            ImageButton del = iconButton(R.drawable.ic_delete, RED, "Remove column " + col);
+            del.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Remove Column")
+                    .setMessage("Remove the column \"" + col + "\" from the " + type + " list? Values already typed stay on the contacts and come back if the column is added again.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Remove", (d, w) -> { List<String> n = contactColumns(type); n.remove(col); saveContactColumns(type, n); if (ref[0] != null) ref[0].dismiss(); showContactColumnsDialog(type); }).show());
+            r.addView(del, iconLp(34, 4));
+            list.addView(r);
+        }
+        box.addView(list);
+        EditText newCol = edit("New column name", false);
+        newCol.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        LinearLayout addRow = row();
+        addRow.addView(newCol, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button addBtn = smallButton("+ Add column", GREEN, 12); addBtn.setPadding(dp(10), 0, dp(10), 0);
+        addBtn.setOnClickListener(v -> {
+            String name = newCol.getText().toString().trim();
+            if (name.isEmpty()) { newCol.setError("Type the column name"); return; }
+            List<String> n = contactColumns(type);
+            for (String x : n) if (x.equalsIgnoreCase(name)) { newCol.setError("That column exists already"); return; }
+            n.add(name); saveContactColumns(type, n);
+            if (ref[0] != null) ref[0].dismiss();
+            showContactColumnsDialog(type);
+        });
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-2, dp(40)); alp.setMargins(dp(6), 0, 0, 0);
+        addRow.addView(addBtn, alp);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2); rlp.setMargins(0, dp(10), 0, 0);
+        box.addView(addRow, rlp);
+        ref[0] = new AlertDialog.Builder(this).setTitle(type + " Columns").setView(box)
+                .setPositiveButton("Done", (d, w) -> { if (contactListDialog != null && contactListDialog.isShowing()) showContactListFiltered(type); })
                 .show();
     }
 
@@ -6638,8 +7134,9 @@ public class MainActivity extends Activity implements Sync.Listener {
             row.setPadding(0, dp(6), 0, dp(6));
             TextView tv = new TextView(this);
             String gstInfo = e.gst > 0 ? String.format(Locale.US, "\nTaxable %s + GST %s%s", money(e.taxable), money(e.gst), e.rcm ? " (RCM, paid by us)" : "") : "";
-            tv.setText(String.format(Locale.US, "%s  ·  %s\n%s%s%s", e.date, e.category, e.description.isEmpty() ? "" : e.description + "  ·  ", e.paymentMode, gstInfo));
+            tv.setText(String.format(Locale.US, "%s%s  ·  %s\n%s%s%s", e.docNo.isEmpty() ? "" : e.docNo + "  ·  ", e.date, e.category, e.description.isEmpty() ? "" : e.description + "  ·  ", e.paymentMode, gstInfo));
             tv.setTextSize(12.5f);
+            linkNumber(tv, e.docNo);
             row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
             TextView amt = new TextView(this);
             amt.setText(money(e.amount)); amt.setTextSize(13); amt.setTypeface(Typeface.DEFAULT, Typeface.BOLD); amt.setGravity(Gravity.END);
@@ -6801,8 +7298,9 @@ public class MainActivity extends Activity implements Sync.Listener {
             e.date = eDate.getText().toString().trim(); e.category = cat;
             e.paymentMode = (String) sMode.getSelectedItem(); e.description = eDesc.getText().toString().trim();
             if (!requireWrite("expenses")) return;
+            if (e.docNo.isEmpty()) e.docNo = Ledger.nextExpenseNo(dbHelper.getReadableDatabase());
             Ledger.saveExpense(dbHelper.getWritableDatabase(), e);
-            Toast.makeText(this, "Expense saved", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Expense " + e.docNo + " saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
             showExpensesDialog();
         }));
@@ -6873,6 +7371,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             }
             TextView tv = new TextView(this);
             tv.setText(sb.toString()); tv.setTextSize(12.5f);
+            linkNumber(tv, p.docNo);
             row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
             if (p.isQuotation()) {
                 Button convert = smallButton("To Purchase", GREEN, 10.5f);
@@ -7240,6 +7739,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         Ledger.Purchase p = existing == null ? new Ledger.Purchase() : existing;
         if (existing == null) { p.kind = kind; p.docNo = Ledger.nextDocNo(dbHelper.getReadableDatabase(), kind); }
         boolean quotation = Ledger.KIND_QUOTATION.equalsIgnoreCase(kind);
+        // A draft saved from this editor earlier comes back as the starting point of the new entry
+        final boolean fromDraft = existing == null && loadDialogDraft("purchase:" + kind, o -> purchaseFromJson(p, o));
+        final AlertDialog[] dialogRef = new AlertDialog[1];
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -7341,14 +7843,17 @@ public class MainActivity extends Activity implements Sync.Listener {
         EditText eNotes = edit("Notes", false); eNotes.setText(p.notes);
         box.addView(field("Notes", eNotes));
 
+        if (fromDraft) box.addView(draftBanner(() -> { clearDialogDraft("purchase:" + kind); if (dialogRef[0] != null) dialogRef[0].dismiss(); showPurchaseEditor(null, kind); }), 0);
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
                 .setTitle((existing == null ? "New " : "Edit ") + (quotation ? "Quotation" : "Purchase"))
                 .setView(sc)
                 .setPositiveButton("Save", null)
-                .setNegativeButton("Cancel", null)
-                .create();
+                .setNegativeButton("Cancel", null);
+        if (existing == null) builder.setNeutralButton("Save Draft", null);
+        AlertDialog dialog = builder.create();
+        dialogRef[0] = dialog;
         dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (eDate.getText().toString().trim().isEmpty()) { eDate.setError("Date is required"); return; }
             List<Ledger.PurchaseItem> items = new ArrayList<>();
@@ -7373,11 +7878,23 @@ public class MainActivity extends Activity implements Sync.Listener {
             if (!requireWrite("purchases")) return;
             Ledger.savePurchase(dbHelper.getWritableDatabase(), p);
             addStockItemsToMaster(p); addSupplierToContacts(p);
+            clearDialogDraft("purchase:" + kind);
             Toast.makeText(this, (quotation ? "Quotation " : "Purchase ") + p.docNo + " saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
             showPurchasesDialog();
         }));
         dialog.show();
+        // Save Draft: whatever is typed, checked or not, kept for the next time this editor opens
+        Button draftBtn = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        if (draftBtn != null) draftBtn.setOnClickListener(v -> {
+            Ledger.Purchase d = new Ledger.Purchase(); d.kind = kind;
+            d.docNo = eNo.getText().toString().trim(); d.date = eDate.getText().toString().trim(); d.supplier = eSupplier.getText().toString().trim(); d.supplierGstin = eGstin.getText().toString().trim();
+            d.paymentMode = (String) sMode.getSelectedItem(); d.notes = eNotes.getText().toString().trim(); d.rcm = rcmBox.isChecked(); d.inclusive = inclBox.isChecked(); d.tdsRate = tdsBox.isChecked() ? tdsRate[0] : 0;
+            for (PurchaseItemRow r : itemRows) { Ledger.PurchaseItem i = r.read(); if (!i.name.isEmpty() || i.qty > 0 || i.rate > 0) d.items.add(i); }
+            saveDialogDraft("purchase:" + kind, purchaseToJson(d));
+            dialog.dismiss();
+            showFadingNotice("Draft saved successfully");
+        });
     }
 
     private class PurchaseItemRow {
@@ -7456,7 +7973,9 @@ public class MainActivity extends Activity implements Sync.Listener {
         });
         Button templateBtn = new Button(this); templateBtn.setText("Template"); styleButton(templateBtn, NAVY); templateBtn.setTextSize(12);
         templateBtn.setOnClickListener(v -> downloadStockTemplate());
-        topBtns.addView(uploadBtn, weightLp()); topBtns.addView(templateBtn, weightLp());
+        Button colsBtn = new Button(this); colsBtn.setText("Columns"); styleButton(colsBtn, SLATE); colsBtn.setTextSize(12);
+        colsBtn.setOnClickListener(v -> chooseStockColumns());
+        topBtns.addView(uploadBtn, weightLp()); topBtns.addView(templateBtn, weightLp()); topBtns.addView(colsBtn, weightLp());
         box.addView(topBtns);
         // Purchase lines that were not ticked as stock: one tap counts everything bought as stock
         int untagged = Ledger.purchaseLinesNotInStock(dbHelper.getReadableDatabase());
@@ -7487,23 +8006,36 @@ public class MainActivity extends Activity implements Sync.Listener {
             double totalValue = 0;
             TableLayout table = new TableLayout(this);
             TableRow head = new TableRow(this);
-            for (String h : new String[]{"Item", "Bought", "Sold", "In Hand", "Rate", "Value"}) head.addView(reportCell(h, true));
+            // Item and In Hand always; In (bought), Out (sold), HSN, Unit, Rate and Value as chosen under Columns
+            Set<String> cols = stockColumns();
+            head.addView(reportCell("Item", true));
+            if (cols.contains("HSN")) head.addView(reportCell("HSN", true));
+            if (cols.contains("Unit")) head.addView(reportCell("Unit", true));
+            if (cols.contains("In")) head.addView(reportCell("In (bought)", true));
+            if (cols.contains("Out")) head.addView(reportCell("Out (sold)", true));
+            head.addView(reportCell("In Hand", true));
+            if (cols.contains("Rate")) head.addView(reportCell("Rate", true));
+            if (cols.contains("Value")) head.addView(reportCell("Value", true));
             table.addView(head);
+            double totalIn = 0, totalOut = 0;
             for (Ledger.StockLine l : lines) {
                 TableRow tr = new TableRow(this);
-                tr.addView(reportCell(l.name + (l.uqc.isEmpty() ? "" : " (" + l.uqc + ")"), false));
-                tr.addView(reportCell(formatQty(l.purchased), false));
-                tr.addView(reportCell(formatQty(l.sold), false));
+                tr.addView(reportCell(l.name + (cols.contains("Unit") || l.uqc.isEmpty() ? "" : " (" + l.uqc + ")"), false));
+                if (cols.contains("HSN")) tr.addView(reportCell(l.hsn, false));
+                if (cols.contains("Unit")) tr.addView(reportCell(l.uqc, false));
+                if (cols.contains("In")) { TextView in = reportCell(formatQty(l.purchased), false); in.setTextColor(GREEN); tr.addView(in); }
+                if (cols.contains("Out")) { TextView out = reportCell(formatQty(l.sold), false); out.setTextColor(RED); tr.addView(out); }
                 TextView onHand = reportCell(formatQty(l.onHand()), false);
+                onHand.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
                 if (l.onHand() <= 0) onHand.setTextColor(RED);
                 tr.addView(onHand);
-                tr.addView(reportCell(indianNumber(l.lastRate), false));
-                tr.addView(reportCell(money(l.value()), false));
+                if (cols.contains("Rate")) tr.addView(reportCell(indianNumber(l.lastRate), false));
+                if (cols.contains("Value")) tr.addView(reportCell(money(l.value()), false));
                 table.addView(tr);
-                totalValue += l.value();
+                totalValue += l.value(); totalIn += l.purchased; totalOut += l.sold;
             }
             TextView totalTv = new TextView(this);
-            totalTv.setText("Stock value (at last purchase rate): " + money(totalValue));
+            totalTv.setText(String.format(Locale.US, "In %s  ·  Out %s  ·  Stock value (at last purchase rate): %s", formatQty(totalIn), formatQty(totalOut), money(totalValue)));
             totalTv.setTextSize(13); totalTv.setTypeface(Typeface.DEFAULT, Typeface.BOLD); totalTv.setTextColor(NAVY);
             totalTv.setPadding(dp(4), dp(4), dp(4), dp(10));
             box.addView(totalTv);
@@ -7515,6 +8047,28 @@ public class MainActivity extends Activity implements Sync.Listener {
         }
         if (stockDialog != null && stockDialog.isShowing()) stockDialog.dismiss();
         stockDialog = new AlertDialog.Builder(this).setTitle("Stock in Hand").setView(box).setPositiveButton("Close", null).show();
+    }
+
+    // Optional columns of Stock in Hand, kept per account
+    private static final String[] STOCK_COLS = {"In", "Out", "HSN", "Unit", "Rate", "Value"};
+    private static final String[] STOCK_COL_LABELS = {"In (quantity bought)", "Out (quantity sold)", "HSN", "Unit", "Rate (last purchase)", "Value"};
+    private Set<String> stockColumns() {
+        Set<String> saved = prefs.getStringSet("stock_cols_" + userId, null);
+        return saved == null ? new LinkedHashSet<>(Arrays.asList("In", "Out", "Rate", "Value")) : new LinkedHashSet<>(saved);
+    }
+    private void chooseStockColumns() {
+        Set<String> cur = stockColumns();
+        boolean[] on = new boolean[STOCK_COLS.length];
+        for (int i = 0; i < STOCK_COLS.length; i++) on[i] = cur.contains(STOCK_COLS[i]);
+        new AlertDialog.Builder(this).setTitle("Stock Columns")
+                .setMultiChoiceItems(STOCK_COL_LABELS, on, (d, w, checked) -> on[w] = checked)
+                .setPositiveButton("Apply", (d, w) -> {
+                    Set<String> out = new HashSet<>();
+                    for (int i = 0; i < STOCK_COLS.length; i++) if (on[i]) out.add(STOCK_COLS[i]);
+                    prefs.edit().putStringSet("stock_cols_" + userId, out).apply();
+                    showStockDialog();
+                })
+                .setNegativeButton("Cancel", null).show();
     }
 
     private void downloadStockTemplate() {
@@ -7659,6 +8213,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 double dueNow = dues.containsKey(no.toLowerCase(Locale.ROOT)) ? dues.get(no.toLowerCase(Locale.ROOT)) : -1;
                 tv.setText(String.format(Locale.US, "%s  ·  %s\n%s\n%s  ·  %s%s%s", no, inv[1], inv[2].isEmpty() ? "(cash sale)" : titleCase(inv[2]), money(total), inv[4], inv[5].isEmpty() ? "" : "  ·  RCM", dueNow < 0 ? "" : dueNow > 0.005 ? "  ·  due " + money(dueNow) : "  ·  settled"));
                 tv.setTextSize(12.5f);
+                linkNumber(tv, no);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
                 ImageButton openBtn = iconButton(R.drawable.ic_edit, BLUE, "Open " + no);
                 openBtn.setOnClickListener(v -> { salesDialog.dismiss(); openInvoice(no, false); });
@@ -7769,6 +8324,7 @@ public class MainActivity extends Activity implements Sync.Listener {
                 TextView tv = new TextView(this);
                 tv.setText(String.format(Locale.US, "%s  ·  %s\n%s\nQty %s  ·  %s", no, d[1], d[2].isEmpty() ? "-" : titleCase(d[2]), d[3], inv.isEmpty() ? "Open" : "Invoice " + inv));
                 tv.setTextSize(12.5f);
+                linkNumber(tv, no);
                 row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
                 ImageButton openBtn = iconButton(R.drawable.ic_edit, BLUE, "Open " + no);
                 openBtn.setOnClickListener(v -> { challansDialog.dismiss(); openChallan(no, false); });
@@ -8104,6 +8660,7 @@ public class MainActivity extends Activity implements Sync.Listener {
             tv.setText(String.format(Locale.US, "%s  ·  %s\n%s  ·  against %s\n%s (taxable %s + GST %s)  ·  %s%s", n.noteNo, n.date, n.party.isEmpty() ? "-" : n.party,
                     n.refNo.isEmpty() ? "-" : n.refNo, money(n.total), money(n.taxable), money(n.gst()), n.settlement, n.reason.isEmpty() ? "" : "\n" + n.reason));
             tv.setTextSize(12.5f);
+            linkNumber(tv, n.noteNo);
             row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
             ImageButton printBtn = iconButton(R.drawable.ic_print, NAVY, "Print " + n.noteNo);
             printBtn.setOnClickListener(v -> renderNotePdf(n));
@@ -8617,15 +9174,20 @@ public class MainActivity extends Activity implements Sync.Listener {
         LinearLayout listContainer = new LinearLayout(this);
         listContainer.setOrientation(LinearLayout.VERTICAL);
         for (Ledger.JournalVoucher j : list) {
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(0, dp(6), 0, dp(6));
             LinearLayout row = row();
-            row.setPadding(0, dp(6), 0, dp(6));
-            StringBuilder sb = new StringBuilder(j.date);
-            if (j.isReceipt() || j.isPayment()) sb.append("   ").append(j.kind).append(' ').append(j.docNo).append(j.party.isEmpty() ? "" : (j.isReceipt() ? " from " : " to ") + j.party).append(j.refNo.isEmpty() ? "" : " against " + j.refNo);
-            for (Ledger.JournalLine l : j.lines) sb.append('\n').append(l.debit ? "Dr " : "    Cr ").append(l.account).append("  ").append(money(l.amount));
+            StringBuilder sb = new StringBuilder();
+            if (!j.docNo.isEmpty()) sb.append(j.docNo).append("  ·  ");
+            sb.append(j.date);
+            if (j.isReceipt() || j.isPayment()) sb.append("  ·  ").append(j.kind).append(j.party.isEmpty() ? "" : (j.isReceipt() ? " from " : " to ") + j.party).append(j.refNo.isEmpty() ? "" : " against " + j.refNo);
+            else sb.append("  ·  Journal entry");
             if (!j.narration.isEmpty()) sb.append('\n').append(j.narration);
             TextView tv = new TextView(this);
             tv.setText(sb.toString());
             tv.setTextSize(12.5f);
+            linkNumber(tv, j.docNo);
             row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
             if (j.isReceipt() || j.isPayment()) {
                 ImageButton pdfBtn = iconButton(R.drawable.ic_print, NAVY, (j.isReceipt() ? "Receipt " : "Voucher ") + j.docNo + " as PDF");
@@ -8641,7 +9203,9 @@ public class MainActivity extends Activity implements Sync.Listener {
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Delete", (d, w) -> { if (!requireWrite("Receipt".equals(j.kind) ? "receipts" : "journal")) return; Ledger.deleteJournal(dbHelper.getWritableDatabase(), j.id); showJournalDialog(); }).show());
             row.addView(delBtn, iconLp(36, 4));
-            listContainer.addView(row);
+            card.addView(row);
+            card.addView(journalGrid(j));
+            listContainer.addView(card);
             listContainer.addView(divider());
         }
         ScrollView sc = new ScrollView(this);
@@ -8650,6 +9214,32 @@ public class MainActivity extends Activity implements Sync.Listener {
 
         if (journalDialog != null && journalDialog.isShowing()) journalDialog.dismiss();
         journalDialog = new AlertDialog.Builder(this).setTitle("Journal Entries").setView(rootBox).setPositiveButton("Close", null).show();
+    }
+
+    // The lines of an entry as Account | Debit | Credit with the totals, so both sides are read at a glance
+    private View journalGrid(Ledger.JournalVoucher j) {
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(dp(8), dp(4), dp(8), dp(4));
+        GradientDrawable gd = new GradientDrawable(); gd.setColor(0xFFF8FAFB); gd.setCornerRadius(dp(6)); gd.setStroke(dp(1), 0xFFE0E6EB);
+        grid.setBackground(gd);
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(-1, -2); glp.setMargins(0, dp(4), 0, 0); grid.setLayoutParams(glp);
+        grid.addView(journalLine("Account", "Debit", "Credit", true, 0xFF607D8B));
+        for (Ledger.JournalLine l : j.lines) grid.addView(journalLine(l.account, l.debit ? money(l.amount) : "", l.debit ? "" : money(l.amount), false, 0xFF263238));
+        grid.addView(journalLine("Total", money(j.debitTotal()), money(j.creditTotal()), true, NAVY));
+        return grid;
+    }
+    private LinearLayout journalLine(String account, String dr, String cr, boolean bold, int color) {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setPadding(0, dp(2), 0, dp(2));
+        TextView a = new TextView(this); a.setText(account); a.setTextSize(12); a.setTextColor(color); if (bold) a.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView d = new TextView(this); d.setText(dr); d.setTextSize(12); d.setTextColor(color); d.setGravity(Gravity.END); if (bold) d.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView c = new TextView(this); c.setText(cr); c.setTextSize(12); c.setTextColor(color); c.setGravity(Gravity.END); if (bold) c.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        r.addView(a, new LinearLayout.LayoutParams(0, -2, 1f));
+        r.addView(d, new LinearLayout.LayoutParams(dp(92), -2));
+        r.addView(c, new LinearLayout.LayoutParams(dp(92), -2));
+        return r;
     }
 
     // One Dr / Cr line of a journal voucher: side, account, amount, remove
@@ -8701,9 +9291,12 @@ public class MainActivity extends Activity implements Sync.Listener {
     // A voucher with any number of debit and credit lines; it can only be saved when the two sides agree
     private void showJournalEditor(Ledger.JournalVoucher existing) {
         Ledger.JournalVoucher j = existing == null ? new Ledger.JournalVoucher() : existing;
+        final boolean fromDraft = existing == null && loadDialogDraft("journal", o -> journalFromJson(j, o));
+        final AlertDialog[] dialogRef = new AlertDialog[1];
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(14), dp(8), dp(14), dp(8));
+        if (fromDraft) box.addView(draftBanner(() -> { clearDialogDraft("journal"); if (dialogRef[0] != null) dialogRef[0].dismiss(); showJournalEditor(null); }));
 
         EditText eDate = dateEdit(j.date);
         EditText eNarration = edit("e.g. Capital introduced by owner", false);
@@ -8768,12 +9361,14 @@ public class MainActivity extends Activity implements Sync.Listener {
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
                 .setTitle(existing == null ? "Add Journal Entry" : "Edit Journal Entry")
                 .setView(sc)
                 .setPositiveButton("Save", null)
-                .setNegativeButton("Cancel", null)
-                .create();
+                .setNegativeButton("Cancel", null);
+        if (existing == null) builder.setNeutralButton("Save Draft", null);
+        AlertDialog dialog = builder.create();
+        dialogRef[0] = dialog;
         dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (eDate.getText().toString().trim().isEmpty()) { eDate.setError("Date is required"); return; }
             Ledger.JournalVoucher draft = new Ledger.JournalVoucher();
@@ -8787,12 +9382,24 @@ public class MainActivity extends Activity implements Sync.Listener {
             j.date = eDate.getText().toString().trim(); j.narration = eNarration.getText().toString().trim();
             j.lines.clear(); j.lines.addAll(draft.lines);
             if (!requireWrite("journal")) return;
+            // Every entry gets a number: receipts and payments have theirs, a plain entry is JV-0001 onwards
+            if (j.docNo.isEmpty()) j.docNo = nextVoucherNo("JV");
             Ledger.saveJournal(dbHelper.getWritableDatabase(), j);
-            Toast.makeText(this, "Journal entry saved", Toast.LENGTH_SHORT).show();
+            clearDialogDraft("journal");
+            Toast.makeText(this, "Journal entry " + j.docNo + " saved", Toast.LENGTH_SHORT).show();
             dialog.dismiss();
             showJournalDialog();
         }));
         dialog.show();
+        Button draftBtn = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        if (draftBtn != null) draftBtn.setOnClickListener(v -> {
+            Ledger.JournalVoucher d = new Ledger.JournalVoucher();
+            d.date = eDate.getText().toString().trim(); d.narration = eNarration.getText().toString().trim();
+            for (JournalLineRow r : lineRows) { Ledger.JournalLine l = r.read(); if (!l.account.isEmpty() || l.amount > 0) d.lines.add(l); }
+            saveDialogDraft("journal", journalToJson(d));
+            dialog.dismiss();
+            showFadingNotice("Draft saved successfully");
+        });
     }
 
     // Tap-to-choose account field. The list is grouped (ledgers, then parties, then own accounts) and the

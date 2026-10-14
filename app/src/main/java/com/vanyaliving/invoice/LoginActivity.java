@@ -5,9 +5,9 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.InputType;
+import android.view.inputmethod.EditorInfo;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -46,75 +46,72 @@ public class LoginActivity extends Activity {
     }
 
     private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(32), dp(64), dp(32), dp(32));
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        AuthUi.colourBars(this);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER_HORIZONTAL);
+        page.setPadding(dp(22), dp(56), dp(22), dp(28));
 
-        TextView title = new TextView(this);
-        title.setText("BlitzBook");
-        title.setTextSize(24);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        title.setPadding(0, 0, 0, dp(32));
-        root.addView(title);
+        LinearLayout brand = AuthUi.brand(this, "GST invoices, accounts, stock & payroll - in a blitz");
+        page.addView(brand);
 
-        TextView loginHeader = new TextView(this);
-        loginHeader.setText("Login");
-        loginHeader.setTextSize(20);
-        loginHeader.setPadding(0, 0, 0, dp(16));
-        root.addView(loginHeader);
+        LinearLayout card = AuthUi.card(this);
+        card.addView(AuthUi.heading(this, "Welcome back"));
+        card.addView(AuthUi.sub(this, "Sign in to open your books"));
 
-        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        inputParams.setMargins(0, 0, 0, dp(16));
+        emailInput = AuthUi.input(this, "Mobile number or email", R.drawable.ic_person, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        card.addView(emailInput);
 
-        emailInput = new EditText(this);
-        emailInput.setHint("Mobile Number / Email");
-        emailInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        applyBoxBackground(emailInput);
-        root.addView(emailInput, inputParams);
+        passwordInput = AuthUi.input(this, "Password", R.drawable.ic_lock, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passwordInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        passwordInput.setOnEditorActionListener((v, id, ev) -> { if (id == EditorInfo.IME_ACTION_DONE) { handleLogin(); return true; } return false; });
+        card.addView(AuthUi.passwordRow(this, passwordInput), AuthUi.gap(this, 12));
 
-        passwordInput = new EditText(this);
-        passwordInput.setHint("Password");
-        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        applyBoxBackground(passwordInput);
-        root.addView(passwordInput, inputParams);
-
-        loginBtn = new Button(this);
-        loginBtn.setText("Login");
-        loginBtn.setOnClickListener(v -> handleLogin());
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(-1, -2);
-        btnParams.setMargins(0, dp(16), 0, 0);
-        root.addView(loginBtn, btnParams);
-
-        TextView forgotPasswordLink = new TextView(this);
-        forgotPasswordLink.setText("Forgot / Reset Password?");
-        forgotPasswordLink.setTextColor(0xFF0000FF);
-        forgotPasswordLink.setPadding(0, dp(12), 0, 0);
+        TextView forgotPasswordLink = AuthUi.link(this, "Forgot password?", Gravity.END);
         forgotPasswordLink.setOnClickListener(v -> showResetPasswordDialog());
-        root.addView(forgotPasswordLink);
+        card.addView(forgotPasswordLink, AuthUi.gap(this, 2));
 
-        TextView registerLink = new TextView(this);
-        registerLink.setText("New User? Register Now");
-        registerLink.setTextColor(0xFF0000FF);
-        registerLink.setPadding(0, dp(12), 0, 0);
-        registerLink.setOnClickListener(v -> {
-            startActivity(new Intent(this, RegisterActivity.class));
-        });
-        root.addView(registerLink);
+        loginBtn = AuthUi.primary(this, "Login");
+        loginBtn.setOnClickListener(v -> handleLogin());
+        card.addView(loginBtn, AuthUi.gap(this, 6));
 
-        setContentView(root);
+        LinearLayout orRow = new LinearLayout(this);
+        orRow.setOrientation(LinearLayout.HORIZONTAL); orRow.setGravity(Gravity.CENTER_VERTICAL);
+        View l1 = new View(this); l1.setBackgroundColor(AuthUi.LINE);
+        View l2 = new View(this); l2.setBackgroundColor(AuthUi.LINE);
+        TextView or = new TextView(this); or.setText("new here?"); or.setTextSize(12); or.setTextColor(AuthUi.MUTED); or.setPadding(dp(10), 0, dp(10), 0);
+        orRow.addView(l1, new LinearLayout.LayoutParams(0, dp(1), 1f)); orRow.addView(or); orRow.addView(l2, new LinearLayout.LayoutParams(0, dp(1), 1f));
+        card.addView(orRow, AuthUi.gap(this, 18));
+
+        Button registerBtn = AuthUi.secondary(this, "Create a free account");
+        registerBtn.setOnClickListener(v -> startActivity(new Intent(this, RegisterActivity.class)));
+        card.addView(registerBtn, AuthUi.gap(this, 14));
+
+        TextView trial = new TextView(this);
+        trial.setText("30 days free  ·  no card needed");
+        trial.setTextSize(12); trial.setTextColor(AuthUi.MUTED); trial.setGravity(Gravity.CENTER);
+        trial.setPadding(0, dp(10), 0, 0);
+        card.addView(trial);
+
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+        cardLp.setMargins(0, dp(28), 0, dp(22));
+        page.addView(card, cardLp);
+
+        page.addView(AuthUi.featureChips(this, "GST Invoices", "Accounts & Stock", "Payroll"));
+        TextView foot = new TextView(this);
+        foot.setText("blitzbook.co.in");
+        foot.setTextSize(12); foot.setTextColor(0xB3FFFFFF); foot.setGravity(Gravity.CENTER);
+        foot.setPadding(0, dp(18), 0, 0);
+        page.addView(foot);
+
+        setContentView(AuthUi.background(this, page));
+        AuthUi.enter(brand, card);
     }
 
     private void applyBoxBackground(EditText editText) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setShape(GradientDrawable.RECTANGLE);
-        drawable.setStroke(dp(1), 0xFFCCCCCC);
-        drawable.setCornerRadius(dp(4));
-        editText.setBackground(drawable);
-        editText.setPadding(dp(12), dp(12), dp(12), dp(12));
+        editText.setBackground(AuthUi.fieldBackground(this, false));
+        editText.setPadding(dp(14), dp(12), dp(14), dp(12));
+        editText.setMinHeight(dp(50));
     }
 
     private void handleLogin() {
@@ -135,7 +132,7 @@ public class LoginActivity extends Activity {
         // Not known on this phone, or the password was changed on another device: the account may be on the
         // sync server (registered in the web portal or on another phone)
         loginBtn.setEnabled(false);
-        loginBtn.setText("Signing in...");
+        loginBtn.setText("Signing in\u2026");
         new Thread(() -> {
             JSONObject reply = null; Sync.SyncException error = null;
             try { reply = Sync.login(this, email, password); } catch (Sync.SyncException e) { error = e; }
