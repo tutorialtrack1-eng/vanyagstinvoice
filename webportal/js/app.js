@@ -133,6 +133,11 @@
     rupee: '<path d="M6 4h12M6 9h12M6 4h3.5a4.5 4.5 0 0 1 0 9H6l8 7"/>',
     grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
+    eyeoff: '<path d="M17.9 17.9A10.9 10.9 0 0 1 12 19c-7 0-11-7-11-7a18 18 0 0 1 5.1-5.9M9.9 4.2A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7a18 18 0 0 1-2.2 3.2"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M1 1l22 22"/>',
+    phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.9 2.1z"/>',
+    mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 7L2 7"/>',
     truck: '<path d="M2 6h11v10H2zM13 9h4l4 4v3h-8z"/><circle cx="6.5" cy="17.5" r="2"/><circle cx="17" cy="17.5" r="2"/>',
     cart: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.6 12.2a1 1 0 0 0 1 .8h9.3a1 1 0 0 0 1-.8L20.5 7H6"/>',
     wallet: '<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H5a2 2 0 0 1-2-2z"/><path d="M16.5 14.5h.01"/>',
@@ -291,6 +296,11 @@
       Auth.login();
     },
     login(u, token) {
+      if (!Terms.accepted(u.id)) {
+        if (!$('.auth')) Auth.login();
+        Terms.show(u.id, () => this.login(u, token), () => { Store.setSession(null); UI.toast('The terms have to be accepted to use BlitzBook.', 5000); });
+        return;
+      }
       this.user = u; Store.open(u.id, ''); Store.setSession({ uid: u.id });
       if (token) Sync.setToken(token);
       Sub.markRegistered();
@@ -524,16 +534,56 @@
   // The password never leaves this browser as typed: this hash is what is kept here and what the sync server receives
   function hash(s) { return U.sha256Hex('bb|' + s); }
   function otp() { return String(Math.floor(100000 + Math.random() * 900000)); }
+
+  // Terms & Conditions: read and accepted once after registering, and by any account that has not accepted them
+  // yet (also one made in the app). The gist: the books are the user's own, nothing in them belongs to blitzbook.co.in.
+  const TERMS_VERSION = '2026-10';
+  const TERMS = [
+    ['1. What BlitzBook is', 'BlitzBook (blitzbook.co.in, the Android app and the web portal) is a software tool for GST invoicing, accounts, stock, payroll and reports. It is provided by its developer "as is" for you to run your own business records.'],
+    ['2. Your data belongs to you', 'Everything you enter or create - company profile, customers, suppliers, items, invoices, challans, purchases, receipts, payments, journal entries, employees, payslips and reports - is your property. blitzbook.co.in claims no ownership of it, and nothing in these books belongs to blitzbook.co.in or its developer.'],
+    ['3. Documents are issued by you, not by blitzbook.co.in', 'Every invoice, bill, voucher, note, payslip or report produced here is issued by you, in your business\'s name, under your GSTIN and your signature. blitzbook.co.in is not a party to any sale, purchase, payment or employment recorded here and does not stand behind, guarantee or endorse any of them.'],
+    ['4. You are responsible for what you record', 'You alone are responsible for the accuracy of the figures, GST numbers, HSN codes, tax rates, amounts, due dates and returns prepared with BlitzBook, and for filing them with the authorities on time. BlitzBook does not provide tax, legal or accounting advice; check anything you are unsure of with your chartered accountant.'],
+    ['5. Keep your own backups', 'Your books live in this browser and, with sync, on the account\'s server space. Use Export / Import regularly. blitzbook.co.in is not liable for any loss of data, lost profit, penalty, interest or other loss arising from the use of, or inability to use, the software.'],
+    ['6. Your account', 'Keep your password safe. You are responsible for everything done under your login and for the people you give a role in your company. One person, one account; do not share accounts.'],
+    ['7. Subscription', 'The trial and paid plans give access to the software for their term. Fees are not refundable once a plan has started, except where the law says otherwise. Features may be added, changed or withdrawn as the software develops.'],
+    ['8. Privacy', 'Your books are not sold or passed to anyone. Account details (name, mobile, email) are used only to run your account, send OTPs and activation codes, and to tell you about BlitzBook itself.'],
+    ['9. Acceptable use', 'Do not use BlitzBook to issue false invoices, evade tax, or record transactions that are not real. Such use is entirely your own responsibility and may lead to the account being closed.'],
+    ['10. Changes and law', 'These terms may be updated; you will be asked to accept a new version when that happens. They are governed by the laws of India.']
+  ];
+  const Terms = {
+    accepted(uid) { return Store.peek(uid, 'terms', '') === TERMS_VERSION; },
+    show(uid, onAccept, onDecline) {
+      const bg = UI.modal({ title: 'Terms & Conditions', cancelable: false, focus: false,
+        body: '<p class="terms-intro">Please read and accept these terms before you start. In short: the books you keep here are yours; nothing in them belongs to blitzbook.co.in, which only supplies the software.</p>' +
+          '<div class="terms-body">' + TERMS.map(t => '<h4>' + esc(t[0]) + '</h4><p>' + esc(t[1]) + '</p>').join('') + '<div class="terms-ver">Version ' + TERMS_VERSION + ' &middot; blitzbook.co.in</div></div>' +
+          '<div class="terms-agree">' + UI.check('tAgree', 'I have read and accept the Terms & Conditions', false) + '</div>',
+        buttons: [{ label: 'Decline', cls: 'outline', onClick: () => { if (onDecline) onDecline(); } },
+                  { label: 'Accept & Continue', onClick: (bg) => { if (!UI.val('tAgree', bg)) return false; Store.poke(uid, 'terms', TERMS_VERSION); if (onAccept) onAccept(); } }] });
+      const ok = $$('.mf .btn', bg)[1]; ok.disabled = true;
+      $('#tAgree', bg).addEventListener('change', e => { ok.disabled = !e.target.checked; });
+      return bg;
+    }
+  };
   const FEATURES = [['receipt', 'GST invoices with CGST, SGST and IGST worked out for you'], ['box', 'Sales, purchases, expenses, journal and stock in one place'], ['pie', 'Profit & Loss and Balance Sheet whenever you need them'], ['sync', 'The same books in the BlitzBook app and here, kept in step']];
   const Auth = {
     // Login / register page: brand showcase on the left (wide screens), the form box on the right
-    frame(inner) {
+    frame(inner, tagline) {
       $('#root').innerHTML = '<div class="auth"><section class="auth-art"><span class="orb o1"></span><span class="orb o2"></span><div class="brandline">' + BRAND + '</div>' +
         '<h1>Billing is<br><em>beautifully simple.</em></h1><p>Raise invoices in seconds, keep every purchase and expense in order, and see where your business stands.</p>' +
         '<ul class="feats">' + FEATURES.map(f => '<li><span class="fi">' + icon(f[0]) + '</span>' + esc(f[1]) + '</li>').join('') + '</ul></section>' +
-        '<section class="auth-pane"><div class="box">' + inner + '</div></section><button class="theme-fab" id="themeFab" title="Dark / light mode"></button></div>';
+        '<section class="auth-pane"><span class="orb o3"></span><span class="orb o4"></span><div class="auth-brand"><span class="logo big">' + icon('bolt') + '</span><div class="name">Blitz<b>Book</b></div><div class="line">' + esc(tagline || 'GST invoices, accounts, stock & payroll - in a blitz') + '</div></div>' +
+        '<div class="box">' + inner + '</div><div class="chips"><span>GST Invoices</span><span>Accounts &amp; Stock</span><span>Payroll</span></div><div class="foot">blitzbook.co.in</div></section>' +
+        '<button class="theme-fab" id="themeFab" title="Dark / light mode"></button></div>';
       $('#themeFab').onclick = () => Theme.toggle();
+      // The eye beside a password field shows or hides what is typed
+      $$('.ifield .eye').forEach(b => b.onclick = () => { const i = $('#' + b.dataset.eye); const shown = i.type === 'text'; i.type = shown ? 'password' : 'text'; b.innerHTML = icon(shown ? 'eye' : 'eyeoff'); b.title = shown ? 'Show password' : 'Hide password'; i.focus(); });
       Theme.apply();
+    },
+    // A pill input with a leading icon (and an eye for a password)
+    ifield(id, ic, placeholder, opts) {
+      opts = opts || {};
+      return '<div class="ifield' + (opts.type === 'password' ? ' pw' : '') + '"><span class="ii">' + icon(ic) + '</span>' + UI.input(id, '', Object.assign({ placeholder }, opts)) +
+        (opts.type === 'password' ? '<button type="button" class="eye" data-eye="' + id + '" title="Show password">' + icon('eye') + '</button>' : '') + '</div>';
     },
     // The account as this browser knows it, created or brought up to date from the server's answer
     keep(su, pwHash, u) {
@@ -545,9 +595,11 @@
       return rec;
     },
     login() {
-      Auth.frame('<div class="brand">' + BRAND + '</div><div class="tag">Billing &amp; Accounts, made simple</div>' +
-        UI.field('Mobile Number / Email', UI.input('lId', '', { attrs: ' autocomplete="username"' })) + UI.field('Password', UI.input('lPw', '', { type: 'password', attrs: ' autocomplete="current-password"' })) +
-        '<button class="btn block" id="lGo">Login</button><div class="links"><button class="link" id="lReset">Forgot / Reset Password?</button><button class="link" id="lReg">New User? Register Now</button></div>');
+      Auth.frame('<div class="ghead">Welcome back</div><div class="tag">Sign in to open your books</div>' +
+        Auth.ifield('lId', 'user', 'Mobile number or email', { attrs: ' autocomplete="username"' }) + Auth.ifield('lPw', 'lock', 'Password', { type: 'password', attrs: ' autocomplete="current-password"' }) +
+        '<div class="links right"><button class="link" id="lReset">Forgot password?</button></div>' +
+        '<button class="btn block" id="lGo">Login</button>' +
+        '<div class="divider"><span>new here?</span></div><button class="btn block outline" id="lReg">Create a free account</button><div class="note">30 days free &middot; no card needed</div>');
       let busy = false;
       const go = async () => {
         if (busy) return;
@@ -583,11 +635,14 @@
       return 'A 6-digit OTP was sent to ' + to + '. It is valid for 10 minutes.' + (r.to && r.to.email ? '\n\nNot in the inbox? Check the spam folder.' : '');
     },
     register() {
-      Auth.frame('<div class="brand">Create Account</div><div class="tag">Register and use BlitzBook free for 30 days</div>' +
-        UI.field('Full Name', UI.input('rName', ''), { req: true }) + UI.field('Mobile Number', UI.input('rPhone', '', { type: 'tel', placeholder: '10 digits', attrs: ' maxlength="10"' }), { req: true }) +
-        UI.field('Email (optional)', UI.input('rEmail', '', { type: 'email' }), { hint: 'The OTP and your activation codes are sent to the mobile number and this email' }) + UI.field('Password', UI.input('rPw', '', { type: 'password' }), { req: true, hint: 'At least 6 characters with a letter, a digit and a special character' }) +
-        '<div id="otpBox" class="hidden">' + UI.field('OTP', UI.input('rOtp', '', { placeholder: '6-digit OTP', attrs: ' maxlength="6" inputmode="numeric"' }), { hint: 'Enter the OTP you received' }) + '</div>' +
-        '<button class="btn block" id="rSend">Send OTP</button><div class="links"><button class="link hidden" id="rResend">Resend OTP</button><button class="link" id="rBack">Already registered? Login</button></div>');
+      Auth.frame('<div class="ghead">Create Account</div><div class="tag">Register and use BlitzBook free for 30 days</div>' +
+        Auth.ifield('rName', 'user', 'Full name', { attrs: ' autocomplete="name"' }) + Auth.ifield('rPhone', 'phone', 'Mobile number (10 digits)', { type: 'tel', attrs: ' maxlength="10" inputmode="numeric" autocomplete="tel"' }) +
+        Auth.ifield('rEmail', 'mail', 'Email address (optional)', { type: 'email', attrs: ' autocomplete="email"' }) + Auth.ifield('rPw', 'lock', 'Password', { type: 'password', attrs: ' autocomplete="new-password"' }) +
+        '<div class="hint">6+ characters with a letter, a number and a special character. The OTP and your activation codes go to the mobile number and the email.</div>' +
+        '<div id="otpBox" class="hidden">' + Auth.ifield('rOtp', 'key', 'Enter the 6-digit OTP', { attrs: ' maxlength="6" inputmode="numeric"' }) + '</div>' +
+        '<button class="btn block" id="rSend">Send OTP</button><div class="links"><button class="link hidden" id="rResend">Resend OTP</button></div>' +
+        '<div class="note">By registering you will be asked to accept the Terms &amp; Conditions: the books you keep are yours; nothing in them belongs to blitzbook.co.in.</div>' +
+        '<div class="links"><button class="link" id="rBack">Already registered? Login</button></div>', 'Create your account - 30 days free');
       // viaServer: the OTP was issued by the sync server, which also checks it. Otherwise (no server, or the
       // server could not be reached) the browser makes a test OTP and the account is created here.
       let code = '', otpPhone = '', otpEmail = '', busy = false, viaServer = false;
@@ -638,8 +693,8 @@
           const users = Store.users();
           const u = { id: (users.reduce((m, x) => Math.max(m, x.id), 0) + 1), name, phone, email, password: h, createdAt };
           users.push(u); Store.saveUsers(users);
-          UI.toast('Welcome, ' + u.name + '! BlitzBook is activated for 30 days.', 6000, 'ok');
-          App.login(u, token);
+          Terms.show(u.id, () => { UI.toast('Welcome, ' + u.name + '! BlitzBook is activated for 30 days.', 6000, 'ok'); App.login(u, token); },
+            () => UI.toast('The terms have to be accepted to use BlitzBook. You can accept them when you log in.', 6000));
         } finally { busy = false; const b = $('#rSend'); if (b) b.disabled = false; }
       };
       $('#rSend').onclick = send; $('#rResend').onclick = send; $('#rBack').onclick = () => Auth.login();

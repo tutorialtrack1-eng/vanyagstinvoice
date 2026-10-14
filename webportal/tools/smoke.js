@@ -31,6 +31,9 @@ async function register(page, name, phone, pw) {
   const otp = /OTP is: (\d{6})/.exec(await page.textContent('.modal .mb'))[1];
   await page.click('.modal .mf .btn');
   await page.fill('#rOtp', otp); await page.click('#rSend');
+  // Terms & Conditions: Accept stays disabled until the box is ticked
+  await page.waitForSelector('#tAgree');
+  await page.check('#tAgree'); await page.click('.modal .mf .btn:nth-child(2)');
   await page.waitForSelector('#cName');
 }
 const toast = async (page) => (await page.textContent('.toast').catch(() => '')) || '';
@@ -434,6 +437,8 @@ const row = (i) => `#rows tr[data-i="${i}"] `;
   await B.waitForSelector('.toast');
   check('wrong password is refused', (await toast(B)).includes('Invalid login'));
   await B.fill('#lPw', 'Test@123'); await B.click('#lGo');
+  // A browser that has not accepted the terms for this account is asked once
+  await B.waitForSelector('#tAgree'); await B.check('#tAgree'); await B.click('.modal .mf .btn:nth-child(2)');
   await B.waitForSelector('.hero');
   await B.waitForFunction(() => Store.list('invoices').length > 0, null, { timeout: 15000 });
   await B.waitForTimeout(300);
